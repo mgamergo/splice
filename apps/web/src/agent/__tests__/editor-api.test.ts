@@ -170,6 +170,11 @@ describe("EditorApi undo and redo", () => {
 		});
 
 		expect(editor.selection.getSnapshot().selectedClips).toEqual([{ trackId, clipId: "b" }]);
+
+		editor.command.undo();
+		expect(editor.selection.getSnapshot().selectedClips).toHaveLength(2);
+		editor.command.redo();
+		expect(editor.selection.getSnapshot().selectedClips).toEqual([{ trackId, clipId: "b" }]);
 	});
 });
 

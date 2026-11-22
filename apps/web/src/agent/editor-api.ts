@@ -1,7 +1,7 @@
 import { buildSequenceDigest } from "@/agent/digest";
 import { type ApplyRequest, applyRequestSchema, type EditOp } from "@/agent/ops";
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
-import { Command } from "@/commands/base-command";
+import { Command, type CommandResult } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";
 import { AddMarkerCommand } from "@/commands/sequence/add-marker";
 import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
@@ -208,6 +208,7 @@ class AgentBatchCommand extends BatchCommand {
 	readonly ignoresRippleToggle = true;
 	private readonly editor: EditorCore;
 	private sequencesAfter: TSequence[] | null = null;
+	private executeResult: CommandResult | undefined;
 
 	constructor({ editor, commands }: { editor: EditorCore; commands: Command[] }) {
 		super(commands);
@@ -215,15 +216,15 @@ class AgentBatchCommand extends BatchCommand {
 	}
 
 	execute() {
-		const result = super.execute();
+		this.executeResult = super.execute();
 		this.sequencesAfter = this.editor.sequences.getSequences();
-		return result;
+		return this.executeResult;
 	}
 
 	redo() {
 		if (!this.sequencesAfter) return this.execute();
 		this.editor.sequences.setSequences({ sequences: this.sequencesAfter });
-		return undefined;
+		return this.executeResult;
 	}
 }
 
