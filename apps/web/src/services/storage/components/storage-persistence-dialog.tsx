@@ -18,7 +18,7 @@ export function StoragePersistenceDialog() {
 		<Dialog open={showDialog} onOpenChange={(open) => !open && onDismiss()}>
 			<DialogContent className="sm:max-w-md">
 				<DialogHeader>
-					<DialogTitle>Don't lose your projects</DialogTitle>
+					<DialogTitle>Don&apos;t lose your projects</DialogTitle>
 				</DialogHeader>
 				<DialogBody>
 					<p className="text-base text-muted-foreground">
@@ -26,7 +26,7 @@ export function StoragePersistenceDialog() {
 						runs low.
 					</p>
 					<p className="text-base text-muted-foreground">
-						Allow OpenCut to protect them?
+						Allow Splice to protect them?
 					</p>
 				</DialogBody>
 				<DialogFooter>

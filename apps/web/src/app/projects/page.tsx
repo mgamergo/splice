@@ -66,7 +66,6 @@ import { DeleteProjectDialog } from "@/project/components/delete-project-dialog"
 import { ProjectInfoDialog } from "@/project/components/project-info-dialog";
 import { RenameProjectDialog } from "@/project/components/rename-project-dialog";
 import { cn } from "@/utils/ui";
-import { ChangelogNotification } from "@/changelog/components/changelog-notification";
 const formatProjectDuration = ({
 	duration,
 }: {
@@ -107,7 +106,6 @@ export default function ProjectsPage() {
 		<div className="bg-background min-h-screen">
 			<MigrationDialog />
 			<StoragePersistenceDialog />
-			<ChangelogNotification />
 			<ProjectsHeader />
 			<ProjectsToolbar projectIds={projectsToDisplay.map((p) => p.id)} />
 			<main className="mx-auto px-4 pt-2 pb-6 flex flex-col gap-4">
@@ -978,7 +976,7 @@ function EmptyState() {
 					<div className="flex flex-col items-center gap-3">
 						<h3 className="text-lg font-medium">No results found</h3>
 						<p className="text-muted-foreground max-w-md">
-							Your search for "{searchQuery}" did not return any results.
+							Your search for &ldquo;{searchQuery}&rdquo; did not return any results.
 						</p>
 					</div>
 				</div>
