@@ -17,7 +17,7 @@ import type {
 	SerializedScene,
 } from "./types";
 import type { SavedSoundsData, SavedSound, SoundEffect } from "@/sounds/types";
-import { PROJECT_FORMAT_VERSION } from "./format";
+import { isSupportedProjectFormat } from "./format";
 import type { Bookmark, SceneTracks, TScene } from "@/timeline";
 import { roundMediaTime } from "@/wasm";
 
@@ -160,7 +160,7 @@ class StorageService {
 
 		if (!serializedProject) return null;
 
-		if (serializedProject.version !== PROJECT_FORMAT_VERSION) {
+		if (!isSupportedProjectFormat({ version: serializedProject.version })) {
 			console.warn("[storage] Skipping project with unsupported format:", {
 				id,
 				version: serializedProject.version,
@@ -246,6 +246,11 @@ class StorageService {
 					"[storage] Skipping malformed project entry (missing metadata):",
 					serializedProject,
 				);
+				continue;
+			}
+
+			// Listing a project that loadProject would reject leaves it unopenable.
+			if (!isSupportedProjectFormat({ version: serializedProject.version })) {
 				continue;
 			}
 
