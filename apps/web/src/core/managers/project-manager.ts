@@ -18,24 +18,12 @@ import { DEFAULT_FPS } from "@/fps/defaults";
 import { buildDefaultScene, getProjectDurationFromScenes } from "@/timeline/scenes";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
-import {
-	CURRENT_PROJECT_VERSION,
-	migrations,
-	runStorageMigrations,
-	type MigrationProgress,
-} from "@/services/storage/migrations";
+import { PROJECT_FORMAT_VERSION } from "@/services/storage/format";
 import { loadFonts } from "@/fonts/google-fonts";
 import { DEFAULTS } from "@/timeline/defaults";
 import { getElementFontFamilies } from "@/timeline/element-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
 import type { MediaAsset } from "@/media/types";
-
-export interface MigrationState {
-	isMigrating: boolean;
-	fromVersion: number | null;
-	toVersion: number | null;
-	projectName: string | null;
-}
 
 export class ProjectManager {
 	private active: TProject | null = null;
@@ -43,14 +31,7 @@ export class ProjectManager {
 	private isLoading = true;
 	private isInitialized = false;
 	private invalidProjectIds = new Set<string>();
-	private storageMigrationPromise: Promise<void> | null = null;
 	private listeners = new Set<() => void>();
-	private migrationState: MigrationState = {
-		isMigrating: false,
-		fromVersion: null,
-		toVersion: null,
-		projectName: null,
-	};
 	private exportState: ExportState = {
 		isExporting: false,
 		progress: 0,
@@ -59,25 +40,6 @@ export class ProjectManager {
 	private exportCancelRequested = false;
 
 	constructor(private editor: EditorCore) {}
-
-	private async ensureStorageMigrations(): Promise<void> {
-		if (this.storageMigrationPromise) {
-			await this.storageMigrationPromise;
-			return;
-		}
-
-		this.storageMigrationPromise = (async () => {
-			await runStorageMigrations({
-				migrations,
-				onProgress: (progress: MigrationProgress) => {
-					this.migrationState = progress;
-					this.notify();
-				},
-			});
-		})();
-
-		await this.storageMigrationPromise;
-	}
 
 	async createNewProject({ name }: { name: string }): Promise<string> {
 		const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
@@ -102,7 +64,7 @@ export class ProjectManager {
 					color: DEFAULT_BACKGROUND_COLOR,
 				},
 			},
-			version: CURRENT_PROJECT_VERSION,
+			version: PROJECT_FORMAT_VERSION,
 		};
 
 		this.active = newProject;
@@ -132,7 +94,6 @@ export class ProjectManager {
 		}
 
 		this.editor.save.pause();
-		await this.ensureStorageMigrations();
 		this.editor.media.clearAllAssets();
 		this.editor.scenes.clearScenes();
 
@@ -253,7 +214,6 @@ export class ProjectManager {
 		}
 
 		try {
-			await this.ensureStorageMigrations();
 			try {
 				const metadata = await storageService.loadAllProjectsMetadata();
 				this.savedProjects = metadata;
@@ -631,10 +591,6 @@ export class ProjectManager {
 
 	getIsInitialized(): boolean {
 		return this.isInitialized;
-	}
-
-	getMigrationState(): MigrationState {
-		return this.migrationState;
 	}
 
 	setActiveProject({ project }: { project: TProject }): void {
