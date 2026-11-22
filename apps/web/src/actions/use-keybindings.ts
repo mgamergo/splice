@@ -32,7 +32,7 @@ export function useKeybindingsListener() {
 			const activeElement = document.activeElement;
 			const isTextInput =
 				activeElement instanceof HTMLElement &&
-				isTypableDOMElement({ element: activeElement });
+				isTypableDOMElement({ clip: activeElement });
 			const boundAction = binding ? keybindings.get(binding) : undefined;
 
 			if (normalizedKey === "escape" && isTextInput) {

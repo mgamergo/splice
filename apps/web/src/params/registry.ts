@@ -6,8 +6,8 @@ import type {
 import { MIN_TRANSFORM_SCALE } from "@/animation/transform";
 import type { BlendMode } from "@/rendering";
 import type {
-	ElementType,
-	TimelineElement,
+	ClipType,
+	TimelineClip,
 } from "@/timeline";
 import { DEFAULTS } from "@/timeline/defaults";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/timeline/audio-constants";
@@ -16,16 +16,16 @@ import {
 	CORNER_RADIUS_MIN,
 } from "@/text/background";
 
-export type ElementParamDefinition<TKey extends string = string> =
+export type ClipParamDefinition<TKey extends string = string> =
 	ParamDefinition<TKey> & {
-		read?: ({ element }: { element: TimelineElement }) => ParamValue | null;
+		read?: ({ clip }: { clip: TimelineClip }) => ParamValue | null;
 		write?: ({
-			element,
+			clip,
 			value,
 		}: {
-			element: TimelineElement;
+			clip: TimelineClip;
 			value: ParamValue;
-		}) => TimelineElement;
+		}) => TimelineClip;
 	};
 
 export function buildDefaultParamValues(
@@ -93,12 +93,12 @@ const BLEND_MODE_OPTIONS: Array<{ value: BlendMode; label: string }> = [
 	{ value: "luminosity", label: "Luminosity" },
 ];
 
-const visualElementParams: ElementParamDefinition[] = [
+const visualClipParams: ClipParamDefinition[] = [
 	{
 		key: "transform.positionX",
 		label: "Position X",
 		type: "number",
-		default: DEFAULTS.element.transform.position.x,
+		default: DEFAULTS.clip.transform.position.x,
 		min: -100_000,
 		step: 1,
 	},
@@ -106,7 +106,7 @@ const visualElementParams: ElementParamDefinition[] = [
 		key: "transform.positionY",
 		label: "Position Y",
 		type: "number",
-		default: DEFAULTS.element.transform.position.y,
+		default: DEFAULTS.clip.transform.position.y,
 		min: -100_000,
 		step: 1,
 	},
@@ -114,7 +114,7 @@ const visualElementParams: ElementParamDefinition[] = [
 		key: "transform.scaleX",
 		label: "Scale X",
 		type: "number",
-		default: DEFAULTS.element.transform.scaleX,
+		default: DEFAULTS.clip.transform.scaleX,
 		min: MIN_TRANSFORM_SCALE,
 		step: 0.01,
 	},
@@ -122,7 +122,7 @@ const visualElementParams: ElementParamDefinition[] = [
 		key: "transform.scaleY",
 		label: "Scale Y",
 		type: "number",
-		default: DEFAULTS.element.transform.scaleY,
+		default: DEFAULTS.clip.transform.scaleY,
 		min: MIN_TRANSFORM_SCALE,
 		step: 0.01,
 	},
@@ -130,7 +130,7 @@ const visualElementParams: ElementParamDefinition[] = [
 		key: "transform.rotate",
 		label: "Rotate",
 		type: "number",
-		default: DEFAULTS.element.transform.rotate,
+		default: DEFAULTS.clip.transform.rotate,
 		min: -360,
 		max: 360,
 		step: 1,
@@ -139,7 +139,7 @@ const visualElementParams: ElementParamDefinition[] = [
 		key: "opacity",
 		label: "Opacity",
 		type: "number",
-		default: DEFAULTS.element.opacity,
+		default: DEFAULTS.clip.opacity,
 		min: 0,
 		max: 1,
 		step: 0.01,
@@ -148,18 +148,18 @@ const visualElementParams: ElementParamDefinition[] = [
 		key: "blendMode",
 		label: "Blend Mode",
 		type: "select",
-		default: DEFAULTS.element.blendMode,
+		default: DEFAULTS.clip.blendMode,
 		keyframable: false,
 		options: BLEND_MODE_OPTIONS,
 	},
 ];
 
-const audioElementParams: ElementParamDefinition[] = [
+const audioClipParams: ClipParamDefinition[] = [
 	{
 		key: "volume",
 		label: "Volume",
 		type: "number",
-		default: DEFAULTS.element.volume,
+		default: DEFAULTS.clip.volume,
 		min: VOLUME_DB_MIN,
 		max: VOLUME_DB_MAX,
 		step: 0.01,
@@ -173,7 +173,7 @@ const audioElementParams: ElementParamDefinition[] = [
 	},
 ];
 
-const textElementParams: ElementParamDefinition[] = [
+const textClipParams: ClipParamDefinition[] = [
 	{
 		key: "content",
 		label: "Content",
@@ -326,109 +326,109 @@ const textElementParams: ElementParamDefinition[] = [
 	},
 ];
 
-export const elementParamRegistry = new DefinitionRegistry<
-	ElementType,
-	readonly ElementParamDefinition[]
->("element params");
+export const clipParamRegistry = new DefinitionRegistry<
+	ClipType,
+	readonly ClipParamDefinition[]
+>("clip params");
 
-elementParamRegistry.register({
+clipParamRegistry.register({
 	key: "video",
-	definition: [...visualElementParams, ...audioElementParams],
+	definition: [...visualClipParams, ...audioClipParams],
 });
-elementParamRegistry.register({ key: "image", definition: visualElementParams });
-elementParamRegistry.register({
+clipParamRegistry.register({ key: "image", definition: visualClipParams });
+clipParamRegistry.register({
 	key: "text",
-	definition: [...textElementParams, ...visualElementParams],
+	definition: [...textClipParams, ...visualClipParams],
 });
-elementParamRegistry.register({
+clipParamRegistry.register({
 	key: "sticker",
-	definition: visualElementParams,
+	definition: visualClipParams,
 });
-elementParamRegistry.register({
+clipParamRegistry.register({
 	key: "graphic",
-	definition: visualElementParams,
+	definition: visualClipParams,
 });
-elementParamRegistry.register({ key: "audio", definition: audioElementParams });
-elementParamRegistry.register({ key: "effect", definition: [] });
+clipParamRegistry.register({ key: "audio", definition: audioClipParams });
+clipParamRegistry.register({ key: "effect", definition: [] });
 
-export function getElementParams({
-	element,
+export function getClipParams({
+	clip,
 }: {
-	element: TimelineElement;
-}): readonly ElementParamDefinition[] {
-	return elementParamRegistry.has(element.type)
-		? elementParamRegistry.get(element.type)
+	clip: TimelineClip;
+}): readonly ClipParamDefinition[] {
+	return clipParamRegistry.has(clip.type)
+		? clipParamRegistry.get(clip.type)
 		: [];
 }
 
-export function getBuiltInElementParams({
+export function getBuiltInClipParams({
 	type,
 }: {
-	type: ElementType;
-}): readonly ElementParamDefinition[] {
-	return elementParamRegistry.has(type) ? elementParamRegistry.get(type) : [];
+	type: ClipType;
+}): readonly ClipParamDefinition[] {
+	return clipParamRegistry.has(type) ? clipParamRegistry.get(type) : [];
 }
 
-export function getElementParam({
-	element,
+export function getClipParam({
+	clip,
 	key,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	key: string;
-}): ElementParamDefinition | null {
+}): ClipParamDefinition | null {
 	return (
-		getElementParams({ element }).find((param) => param.key === key) ?? null
+		getClipParams({ clip }).find((param) => param.key === key) ?? null
 	);
 }
 
-export function readElementParamValue({
-	element,
+export function readClipParamValue({
+	clip,
 	param,
 }: {
-	element: TimelineElement;
-	param: ElementParamDefinition;
+	clip: TimelineClip;
+	param: ClipParamDefinition;
 }): ParamValue | null {
 	if (param.read) {
-		return param.read({ element });
+		return param.read({ clip });
 	}
-	if ("params" in element) {
-		return element.params[param.key] ?? param.default;
+	if ("params" in clip) {
+		return clip.params[param.key] ?? param.default;
 	}
 	return null;
 }
 
-export function writeElementParamValue({
-	element,
+export function writeClipParamValue({
+	clip,
 	param,
 	value,
 }: {
-	element: TimelineElement;
-	param: ElementParamDefinition;
+	clip: TimelineClip;
+	param: ClipParamDefinition;
 	value: ParamValue;
-}): TimelineElement {
+}): TimelineClip {
 	if (param.write) {
-		return param.write({ element, value });
+		return param.write({ clip, value });
 	}
-	if ("params" in element) {
+	if ("params" in clip) {
 		return {
-			...element,
+			...clip,
 			params: {
-				...element.params,
+				...clip.params,
 				[param.key]: value,
 			},
 		};
 	}
-	return element;
+	return clip;
 }
 
-export function buildElementParamValues({
-	element,
+export function buildClipParamValues({
+	clip,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 }): ParamValues {
 	const values: ParamValues = {};
-	for (const param of getElementParams({ element })) {
-		const value = readElementParamValue({ element, param });
+	for (const param of getClipParams({ clip })) {
+		const value = readClipParamValue({ clip, param });
 		if (value !== null) {
 			values[param.key] = value;
 		}

@@ -1,2 +1,2 @@
-export { AddMediaAssetCommand } from "./add-media-asset";
-export { RemoveMediaAssetCommand } from "./remove-media-asset";
+export { AddProjectItemCommand } from "./add-project-item";
+export { RemoveProjectItemCommand } from "./remove-project-item";

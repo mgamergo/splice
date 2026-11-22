@@ -9,7 +9,7 @@ export type TActionCategory =
 	| "history"
 	| "timeline"
 	| "controls"
-	| "assets";
+	| "projectItems";
 
 export interface TActionBaseDefinition {
 	description: string;
@@ -66,16 +66,16 @@ export const ACTIONS = {
 		description: "Go to timeline end",
 		category: "navigation",
 	},
-	split: {
-		description: "Split elements at playhead",
+	razor: {
+		description: "Razor clips at playhead",
 		category: "editing",
 	},
-	"split-left": {
-		description: "Split and remove left",
+	"razor-left": {
+		description: "Razor and remove left",
 		category: "editing",
 	},
-	"split-right": {
-		description: "Split and remove right",
+	"razor-right": {
+		description: "Razor and remove right",
 		category: "editing",
 	},
 	"delete-selected": {
@@ -83,11 +83,11 @@ export const ACTIONS = {
 		category: "editing",
 	},
 	"copy-selected": {
-		description: "Copy selected elements",
+		description: "Copy selected clips",
 		category: "editing",
 	},
 	"paste-copied": {
-		description: "Paste elements at playhead",
+		description: "Paste clips at playhead",
 		category: "editing",
 	},
 	"toggle-snapping": {
@@ -103,7 +103,7 @@ export const ACTIONS = {
 		category: "editing",
 	},
 	"select-all": {
-		description: "Select all elements",
+		description: "Select all clips",
 		category: "selection",
 	},
 	"cancel-interaction": {
@@ -111,23 +111,23 @@ export const ACTIONS = {
 		category: "controls",
 	},
 	"deselect-all": {
-		description: "Deselect all elements",
+		description: "Deselect all clips",
 		category: "selection",
 	},
 	"duplicate-selected": {
-		description: "Duplicate selected element",
+		description: "Duplicate selected clip",
 		category: "selection",
 	},
-	"toggle-elements-muted-selected": {
-		description: "Mute/unmute selected elements",
+	"toggle-clips-muted-selected": {
+		description: "Mute/unmute selected clips",
 		category: "selection",
 	},
-	"toggle-elements-visibility-selected": {
-		description: "Show/hide selected elements",
+	"toggle-clips-visibility-selected": {
+		description: "Show/hide selected clips",
 		category: "selection",
 	},
-	"toggle-bookmark": {
-		description: "Toggle bookmark at playhead",
+	"toggle-marker": {
+		description: "Toggle marker at playhead",
 		category: "timeline",
 	},
 	undo: {
@@ -138,15 +138,15 @@ export const ACTIONS = {
 		description: "Redo",
 		category: "history",
 	},
-	"remove-media-asset": {
-		description: "Remove media asset",
-		category: "assets",
-		args: { projectId: "string", assetId: "string" },
+	"remove-project-item": {
+		description: "Remove project item",
+		category: "projectItems",
+		args: { projectId: "string", projectItemId: "string" },
 	},
-	"remove-media-assets": {
-		description: "Remove media assets",
-		category: "assets",
-		args: { projectId: "string", assetIds: "string[]" },
+	"remove-project-items": {
+		description: "Remove project items",
+		category: "projectItems",
+		args: { projectId: "string", projectItemIds: "string[]" },
 	},
 } as const satisfies Record<string, TActionBaseDefinition>;
 
@@ -154,7 +154,7 @@ export type TAction = keyof typeof ACTIONS;
 
 const ACTIONS_WITH_REQUIRED_ARGS: ReadonlySet<string> = new Set<
 	Exclude<TActionWithArgs, TActionWithOptionalArgs>
->(["remove-media-asset", "remove-media-assets"]);
+>(["remove-project-item", "remove-project-items"]);
 
 export function isActionWithOptionalArgs(
 	value: string,
@@ -172,9 +172,9 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["jump-backward", ["shift+left"]],
 	["goto-start", ["home", "enter"]],
 	["goto-end", ["end"]],
-	["split", ["s"]],
-	["split-left", ["q"]],
-	["split-right", ["w"]],
+	["razor", ["s"]],
+	["razor-left", ["q"]],
+	["razor-right", ["w"]],
 	["delete-selected", ["backspace", "delete"]],
 	["copy-selected", ["ctrl+c"]],
 	["paste-copied", ["ctrl+v"]],

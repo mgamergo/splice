@@ -1,10 +1,10 @@
 import type { FrameRate } from "opencut-wasm";
-import type { ElementRef, RetimeConfig } from "@/timeline/types";
+import type { ClipRef, RetimeConfig } from "@/timeline/types";
 import type { MediaTime } from "@/wasm";
 
 export type ResizeSide = "left" | "right";
 
-export interface GroupResizeMember extends ElementRef {
+export interface GroupResizeMember extends ClipRef {
 	startTime: MediaTime;
 	duration: MediaTime;
 	trimStart: MediaTime;
@@ -15,7 +15,7 @@ export interface GroupResizeMember extends ElementRef {
 	rightNeighborBound: MediaTime | null;
 }
 
-export interface GroupResizeUpdate extends ElementRef {
+export interface GroupResizeUpdate extends ClipRef {
 	patch: {
 		trimStart: MediaTime;
 		trimEnd: MediaTime;

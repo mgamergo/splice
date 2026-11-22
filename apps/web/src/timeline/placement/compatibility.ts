@@ -1,6 +1,6 @@
-import type { ElementType, TrackType } from "@/timeline";
+import type { ClipType, TrackType } from "@/timeline";
 
-const ELEMENT_TRACK_MAP: Record<ElementType, TrackType> = {
+const CLIP_TRACK_MAP: Record<ClipType, TrackType> = {
 	audio: "audio",
 	text: "text",
 	sticker: "graphic",
@@ -10,40 +10,40 @@ const ELEMENT_TRACK_MAP: Record<ElementType, TrackType> = {
 	image: "video",
 };
 
-export function getTrackTypeForElementType({
-	elementType,
+export function getTrackTypeForClipType({
+	clipType,
 }: {
-	elementType: ElementType;
+	clipType: ClipType;
 }): TrackType {
-	return ELEMENT_TRACK_MAP[elementType];
+	return CLIP_TRACK_MAP[clipType];
 }
 
-export function canElementGoOnTrack({
-	elementType,
+export function canClipGoOnTrack({
+	clipType,
 	trackType,
 }: {
-	elementType: ElementType;
+	clipType: ClipType;
 	trackType: TrackType;
 }): boolean {
-	return getTrackTypeForElementType({ elementType }) === trackType;
+	return getTrackTypeForClipType({ clipType }) === trackType;
 }
 
-export function validateElementTrackCompatibility({
-	element,
+export function validateClipTrackCompatibility({
+	clip,
 	track,
 }: {
-	element: { type: ElementType };
+	clip: { type: ClipType };
 	track: { type: TrackType };
 }): { isValid: boolean; errorMessage?: string } {
-	const isValid = canElementGoOnTrack({
-		elementType: element.type,
+	const isValid = canClipGoOnTrack({
+		clipType: clip.type,
 		trackType: track.type,
 	});
 
 	if (!isValid) {
 		return {
 			isValid: false,
-			errorMessage: `${element.type} elements cannot be placed on ${track.type} tracks`,
+			errorMessage: `${clip.type} clips cannot be placed on ${track.type} tracks`,
 		};
 	}
 

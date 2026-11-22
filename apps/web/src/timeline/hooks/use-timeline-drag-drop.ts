@@ -29,13 +29,13 @@ export function useTimelineDragDrop({
 		getActiveProjectFps: () => editor.project.getActive()?.settings.fps ?? null,
 		getActiveProjectId: () =>
 			editor.project.getActiveOrNull()?.metadata.id ?? null,
-		getSceneTracks: () => editor.scenes.getActiveScene().tracks,
+		getSequenceTracks: () => editor.sequences.getActiveSequence().tracks,
 		getCurrentPlayheadTime: () => editor.playback.getCurrentTime(),
-		getMediaAssets: () => editor.media.getAssets(),
+		getProjectItems: () => editor.media.getProjectItems(),
 		dragSource: editor.timeline.dragSource,
-		addMediaAsset: (args) => editor.media.addMediaAsset(args),
+		addProjectItem: (args) => editor.media.addProjectItem(args),
 		executeCommand: (command) => editor.command.execute({ command }),
-		insertElement: (args) => editor.timeline.insertElement(args),
+		insertClip: (args) => editor.timeline.insertClip(args),
 		addClipEffect: (args) => editor.timeline.addClipEffect(args),
 	};
 	const configRef = useCommittedRef(config);
@@ -48,7 +48,7 @@ export function useTimelineDragDrop({
 	return {
 		isDragOver: controller.isDragOver,
 		dropTarget: controller.dropTarget,
-		dragElementType: controller.dragElementType,
+		dragClipType: controller.dragClipType,
 		dragProps: {
 			onDragEnter: controller.onDragEnter,
 			onDragOver: controller.onDragOver,

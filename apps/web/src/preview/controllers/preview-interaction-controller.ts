@@ -2,13 +2,13 @@ import type {
 	MouseEvent as ReactMouseEvent,
 	PointerEvent as ReactPointerEvent,
 } from "react";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 import {
-	getVisibleElementsWithBounds,
-	type ElementWithBounds,
-} from "@/preview/element-bounds";
+	getVisibleClipsWithBounds,
+	type ClipWithBounds,
+} from "@/preview/clip-bounds";
 import {
-	getHitElements,
+	getHitClips,
 	hitTest,
 	resolvePreferredHit,
 } from "@/preview/hit-test";
@@ -20,14 +20,14 @@ import {
 import type { TCanvasSize } from "@/project/types";
 import type { ParamValues } from "@/params";
 import { buildTransformFromParams, type Transform } from "@/rendering";
-import { isVisualElement } from "@/timeline/element-utils";
+import { isVisualClip } from "@/timeline/clip-utils";
 import type {
-	ElementRef,
-	SceneTracks,
-	TextElement,
-	TimelineElement,
+	ClipRef,
+	SequenceTracks,
+	TextClip,
+	TimelineClip,
 	TimelineTrack,
-	VisualElement,
+	VisualClip,
 } from "@/timeline";
 
 const MIN_DRAG_DISTANCE = 0.5;
@@ -43,14 +43,14 @@ interface CapturedPointerState {
 interface PendingGesture extends CapturedPointerState {
 	readonly kind: "pending";
 	readonly origin: Point;
-	readonly topmostHit: ElementWithBounds | null;
-	readonly selectedHit: ElementWithBounds | null;
-	readonly selectedElements: readonly ElementRef[];
+	readonly topmostHit: ClipWithBounds | null;
+	readonly selectedHit: ClipWithBounds | null;
+	readonly selectedClips: readonly ClipRef[];
 }
 
-interface DragElementSnapshot {
+interface DragClipSnapshot {
 	readonly trackId: string;
-	readonly elementId: string;
+	readonly clipId: string;
 	readonly initialTransform: Transform;
 	readonly initialParams: ParamValues;
 }
@@ -63,7 +63,7 @@ interface DraggingGesture extends CapturedPointerState {
 		readonly height: number;
 		readonly rotation: number;
 	};
-	readonly elements: readonly DragElementSnapshot[];
+	readonly clips: readonly DragClipSnapshot[];
 }
 
 type GestureSession =
@@ -75,8 +75,8 @@ const IDLE_GESTURE: GestureSession = { kind: "idle" };
 
 export interface EditingTextState {
 	readonly trackId: string;
-	readonly elementId: string;
-	readonly element: TextElement;
+	readonly clipId: string;
+	readonly clip: TextClip;
 }
 
 export interface PreviewViewportAdapter {
@@ -98,32 +98,32 @@ export interface InputAdapter {
 	isShiftHeld: () => boolean;
 }
 
-export interface SceneReader {
-	getTracks: () => SceneTracks;
+export interface SequenceReader {
+	getTracks: () => SequenceTracks;
 	getCurrentTime: () => number;
-	getMediaAssets: () => MediaAsset[];
+	getProjectItems: () => ProjectItem[];
 	getCanvasSize: () => TCanvasSize;
 }
 
 export interface SelectionApi {
-	getSelected: () => readonly ElementRef[];
-	setSelected: (elements: readonly ElementRef[]) => void;
+	getSelected: () => readonly ClipRef[];
+	setSelected: (clips: readonly ClipRef[]) => void;
 	clearSelection: () => void;
 }
 
 export interface TimelinePreviewUpdate {
 	readonly trackId: string;
-	readonly elementId: string;
-	readonly updates: Partial<TimelineElement>;
+	readonly clipId: string;
+	readonly updates: Partial<TimelineClip>;
 }
 
 export interface TimelineOps {
-	getElementsWithTracks: ({
-		elements,
+	getClipsWithTracks: ({
+		clips,
 	}: {
-		elements: readonly ElementRef[];
-	}) => Array<{ track: TimelineTrack; element: TimelineElement }>;
-	previewElements: (updates: readonly TimelinePreviewUpdate[]) => void;
+		clips: readonly ClipRef[];
+	}) => Array<{ track: TimelineTrack; clip: TimelineClip }>;
+	previewClips: (updates: readonly TimelinePreviewUpdate[]) => void;
 	commitPreview: () => void;
 	discardPreview: () => void;
 }
@@ -141,7 +141,7 @@ export interface PreviewOptions {
 export interface PreviewInteractionDeps {
 	viewport: PreviewViewportAdapter;
 	input: InputAdapter;
-	scene: SceneReader;
+	sequence: SequenceReader;
 	selection: SelectionApi;
 	timeline: TimelineOps;
 	playback: PlaybackApi;
@@ -152,31 +152,31 @@ export interface PreviewInteractionDepsRef {
 	readonly current: PreviewInteractionDeps;
 }
 
-function isSameElementRef({
+function isSameClipRef({
 	left,
 	right,
 }: {
-	left: ElementRef;
-	right: ElementRef;
+	left: ClipRef;
+	right: ClipRef;
 }): boolean {
-	return left.trackId === right.trackId && left.elementId === right.elementId;
+	return left.trackId === right.trackId && left.clipId === right.clipId;
 }
 
 function buildDragSelection({
-	selectedElements,
+	selectedClips,
 	dragTarget,
 }: {
-	selectedElements: readonly ElementRef[];
-	dragTarget: ElementWithBounds;
-}): ElementRef[] {
+	selectedClips: readonly ClipRef[];
+	dragTarget: ClipWithBounds;
+}): ClipRef[] {
 	const dragTargetRef = {
 		trackId: dragTarget.trackId,
-		elementId: dragTarget.elementId,
+		clipId: dragTarget.clipId,
 	};
 
 	if (
-		!selectedElements.some((selectedElement) =>
-			isSameElementRef({ left: selectedElement, right: dragTargetRef }),
+		!selectedClips.some((selectedClip) =>
+			isSameClipRef({ left: selectedClip, right: dragTargetRef }),
 		)
 	) {
 		return [dragTargetRef];
@@ -184,9 +184,9 @@ function buildDragSelection({
 
 	return [
 		dragTargetRef,
-		...selectedElements.filter(
-			(selectedElement) =>
-				!isSameElementRef({ left: selectedElement, right: dragTargetRef }),
+		...selectedClips.filter(
+			(selectedClip) =>
+				!isSameClipRef({ left: selectedClip, right: dragTargetRef }),
 		),
 	];
 }
@@ -204,24 +204,24 @@ function movedPastDragThreshold({
 	);
 }
 
-function toDragElementSnapshots({
-	elementsWithTracks,
+function toDragClipSnapshots({
+	clipsWithTracks,
 }: {
-	elementsWithTracks: Array<{ track: TimelineTrack; element: TimelineElement }>;
-}): DragElementSnapshot[] {
-	const isVisualTrackedElement = (value: {
+	clipsWithTracks: Array<{ track: TimelineTrack; clip: TimelineClip }>;
+}): DragClipSnapshot[] {
+	const isVisualTrackedClip = (value: {
 		track: TimelineTrack;
-		element: TimelineElement;
-	}): value is { track: TimelineTrack; element: VisualElement } =>
-		isVisualElement(value.element);
+		clip: TimelineClip;
+	}): value is { track: TimelineTrack; clip: VisualClip } =>
+		isVisualClip(value.clip);
 
-	return elementsWithTracks
-		.filter(isVisualTrackedElement)
-		.map(({ track, element }) => ({
+	return clipsWithTracks
+		.filter(isVisualTrackedClip)
+		.map(({ track, clip }) => ({
 			trackId: track.id,
-			elementId: element.id,
-			initialTransform: buildTransformFromParams({ params: element.params }),
-			initialParams: element.params,
+			clipId: clip.id,
+			initialTransform: buildTransformFromParams({ params: clip.params }),
+			initialParams: clip.params,
 		}));
 }
 
@@ -313,15 +313,15 @@ export class PreviewInteractionController {
 		const hit = hitTest({
 			canvasX: startPos.x,
 			canvasY: startPos.y,
-			elementsWithBounds: this.getVisibleElementsWithBounds(),
+			clipsWithBounds: this.getVisibleClipsWithBounds(),
 		});
 
-		if (!hit || hit.element.type !== "text") return;
+		if (!hit || hit.clip.type !== "text") return;
 
 		this.editingTextState = {
 			trackId: hit.trackId,
-			elementId: hit.elementId,
-			element: hit.element,
+			clipId: hit.clipId,
+			clip: hit.clip,
 		};
 		this.notify();
 	}
@@ -343,12 +343,12 @@ export class PreviewInteractionController {
 		});
 		if (!startPos) return;
 
-		const hits = getHitElements({
+		const hits = getHitClips({
 			canvasX: startPos.x,
 			canvasY: startPos.y,
-			elementsWithBounds: this.getVisibleElementsWithBounds(),
+			clipsWithBounds: this.getVisibleClipsWithBounds(),
 		});
-		const selectedElements = this.deps.selection.getSelected();
+		const selectedClips = this.deps.selection.getSelected();
 
 		this.gesture = {
 			kind: "pending",
@@ -358,9 +358,9 @@ export class PreviewInteractionController {
 			topmostHit: hits[0] ?? null,
 			selectedHit: resolvePreferredHit({
 				hits,
-				preferredElements: [...selectedElements],
+				preferredClips: [...selectedClips],
 			}),
-			selectedElements,
+			selectedClips,
 		};
 
 		currentTarget.setPointerCapture(pointerId);
@@ -425,7 +425,7 @@ export class PreviewInteractionController {
 				this.deps.selection.setSelected([
 					{
 						trackId: clickTarget.trackId,
-						elementId: clickTarget.elementId,
+						clipId: clickTarget.clipId,
 					},
 				]);
 			}
@@ -458,12 +458,12 @@ export class PreviewInteractionController {
 		pointerState.captureTarget.releasePointerCapture(pointerState.pointerId);
 	}
 
-	private getVisibleElementsWithBounds(): ElementWithBounds[] {
-		return getVisibleElementsWithBounds({
-			tracks: this.deps.scene.getTracks(),
-			currentTime: this.deps.scene.getCurrentTime(),
-			canvasSize: this.deps.scene.getCanvasSize(),
-			mediaAssets: this.deps.scene.getMediaAssets(),
+	private getVisibleClipsWithBounds(): ClipWithBounds[] {
+		return getVisibleClipsWithBounds({
+			tracks: this.deps.sequence.getTracks(),
+			currentTime: this.deps.sequence.getCurrentTime(),
+			canvasSize: this.deps.sequence.getCanvasSize(),
+			projectItems: this.deps.sequence.getProjectItems(),
 		});
 	}
 
@@ -485,16 +485,16 @@ export class PreviewInteractionController {
 		}
 
 		const dragSelection = buildDragSelection({
-			selectedElements: pending.selectedElements,
+			selectedClips: pending.selectedClips,
 			dragTarget,
 		});
-		const draggableElements = toDragElementSnapshots({
-			elementsWithTracks: this.deps.timeline.getElementsWithTracks({
-				elements: dragSelection,
+		const draggableClips = toDragClipSnapshots({
+			clipsWithTracks: this.deps.timeline.getClipsWithTracks({
+				clips: dragSelection,
 			}),
 		});
 
-		if (draggableElements.length === 0) {
+		if (draggableClips.length === 0) {
 			this.gesture = IDLE_GESTURE;
 			this.clearSnapLines();
 			this.releaseCapturedPointer({ pointerState: pending });
@@ -505,7 +505,7 @@ export class PreviewInteractionController {
 			this.deps.selection.setSelected([
 				{
 					trackId: dragTarget.trackId,
-					elementId: dragTarget.elementId,
+					clipId: dragTarget.clipId,
 				},
 			]);
 		}
@@ -520,7 +520,7 @@ export class PreviewInteractionController {
 				height: dragTarget.bounds.height,
 				rotation: dragTarget.bounds.rotation,
 			},
-			elements: draggableElements,
+			clips: draggableClips,
 		};
 		this.notify();
 	}
@@ -532,15 +532,15 @@ export class PreviewInteractionController {
 		drag: DraggingGesture;
 		currentPos: Point;
 	}): void {
-		const firstElement = drag.elements[0];
-		if (!firstElement) return;
+		const firstClip = drag.clips[0];
+		if (!firstClip) return;
 
 		const deltaX = currentPos.x - drag.origin.x;
 		const deltaY = currentPos.y - drag.origin.y;
 
 		const proposedPosition = {
-			x: firstElement.initialTransform.position.x + deltaX,
-			y: firstElement.initialTransform.position.y + deltaY,
+			x: firstClip.initialTransform.position.x + deltaX,
+			y: firstClip.initialTransform.position.y + deltaY,
 		};
 
 		const shouldSnap = !this.deps.input.isShiftHeld();
@@ -550,8 +550,8 @@ export class PreviewInteractionController {
 		const { snappedPosition, activeLines } = shouldSnap
 			? snapPosition({
 					proposedPosition,
-					canvasSize: this.deps.scene.getCanvasSize(),
-					elementSize: drag.bounds,
+					canvasSize: this.deps.sequence.getCanvasSize(),
+					clipSize: drag.bounds,
 					rotation: drag.bounds.rotation,
 					snapThreshold,
 				})
@@ -563,14 +563,14 @@ export class PreviewInteractionController {
 		this.deps.preview.onSnapLinesChange?.(activeLines);
 
 		const deltaSnappedX =
-			snappedPosition.x - firstElement.initialTransform.position.x;
+			snappedPosition.x - firstClip.initialTransform.position.x;
 		const deltaSnappedY =
-			snappedPosition.y - firstElement.initialTransform.position.y;
+			snappedPosition.y - firstClip.initialTransform.position.y;
 
-		this.deps.timeline.previewElements(
-			drag.elements.map(({ trackId, elementId, initialTransform, initialParams }) => ({
+		this.deps.timeline.previewClips(
+			drag.clips.map(({ trackId, clipId, initialTransform, initialParams }) => ({
 				trackId,
-				elementId,
+				clipId,
 				updates: {
 					params: {
 						...initialParams,

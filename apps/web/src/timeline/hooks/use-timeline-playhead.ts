@@ -41,8 +41,8 @@ export function useTimelinePlayhead({
 		getRulerScrollEl: () => rulerScrollRef.current,
 		getTracksScrollEl: () => tracksScrollRef.current,
 		getPlayheadEl: () => playheadRef?.current ?? null,
-		getSceneTracks: () => editor.scenes.getActiveScene().tracks,
-		getSceneBookmarks: () => editor.scenes.getActiveScene()?.bookmarks ?? [],
+		getSequenceTracks: () => editor.sequences.getActiveSequence().tracks,
+		getSequenceMarkers: () => editor.sequences.getActiveSequence()?.markers ?? [],
 		seek: (time) => editor.playback.seek({ time }),
 		setScrubbing: (scrubbing) =>
 			editor.playback.setScrubbing({ isScrubbing: scrubbing }),

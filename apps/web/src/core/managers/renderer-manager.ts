@@ -2,7 +2,7 @@ import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
-import { SceneExporter } from "@/services/renderer/scene-exporter";
+import { SequenceExporter } from "@/services/renderer/sequence-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { createTimelineAudioBuffer } from "@/media/audio";
 import { formatTimecode } from "opencut-wasm";
@@ -84,7 +84,7 @@ export class RendererManager {
 			const activeProject = this.editor.project.getActive();
 
 			if (!renderTree || !activeProject) {
-				return { success: false, error: "No project or scene to capture" };
+				return { success: false, error: "No project or sequence to capture" };
 			}
 
 			const duration = this.editor.timeline.getTotalDuration();
@@ -150,8 +150,8 @@ export class RendererManager {
 		const { format, quality, fps, includeAudio } = options;
 
 		try {
-			const tracks = this.editor.scenes.getActiveScene().tracks;
-			const mediaAssets = this.editor.media.getAssets();
+			const tracks = this.editor.sequences.getActiveSequence().tracks;
+			const projectItems = this.editor.media.getProjectItems();
 			const activeProject = this.editor.project.getActive();
 
 			if (!activeProject) {
@@ -171,20 +171,20 @@ export class RendererManager {
 				onProgress?.({ progress: 0.05 });
 				audioBuffer = await createTimelineAudioBuffer({
 					tracks,
-					mediaAssets,
+					projectItems,
 					duration,
 				});
 			}
 
-			const scene = buildScene({
+			const sequence = buildScene({
 				tracks,
-				mediaAssets,
+				projectItems,
 				duration,
 				canvasSize,
 				background: activeProject.settings.background,
 			});
 
-			const exporter = new SceneExporter({
+			const exporter = new SequenceExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
 				fps: exportFps,
@@ -212,7 +212,7 @@ export class RendererManager {
 			const cancelInterval = setInterval(checkCancel, 100);
 
 			try {
-				const buffer = await exporter.export({ rootNode: scene });
+				const buffer = await exporter.export({ rootNode: sequence });
 				clearInterval(cancelInterval);
 
 				if (cancelled) {

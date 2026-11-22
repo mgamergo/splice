@@ -13,17 +13,17 @@ export function PreviewInteractionOverlay() {
 	const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
 	const editor = useEditor();
 	const viewport = usePreviewViewport();
-	const selectedElements = useEditor((e) => e.selection.getSelectedElements());
+	const selectedClips = useEditor((e) => e.selection.getSelectedClips());
 	const activeTabPerType = usePropertiesStore((s) => s.activeTabPerType);
 
 	const selectedRef =
-		selectedElements.length === 1 ? selectedElements[0] : null;
+		selectedClips.length === 1 ? selectedClips[0] : null;
 	const activeTrack = selectedRef
 		? editor.timeline.getTrackById({ trackId: selectedRef.trackId })
 		: null;
 	const activeElement =
-		activeTrack?.elements.find(
-			(element) => element.id === selectedRef?.elementId,
+		activeTrack?.clips.find(
+			(clip) => clip.id === selectedRef?.clipId,
 		) ?? null;
 	const isMaskMode = activeElement
 		? activeTabPerType[activeElement.type] === "masks"
@@ -88,8 +88,8 @@ export function PreviewInteractionOverlay() {
 			{editingText ? (
 				<TextEditOverlay
 					trackId={editingText.trackId}
-					elementId={editingText.elementId}
-					element={editingText.element}
+					clipId={editingText.clipId}
+					clip={editingText.clip}
 					onCommit={commitTextEdit}
 				/>
 			) : isMaskMode ? (

@@ -15,15 +15,15 @@ import { UpdateProjectSettingsCommand } from "@/commands/project";
 import { DEFAULT_BACKGROUND_COLOR } from "@/background/color";
 import { DEFAULT_CANVAS_SIZE } from "@/canvas/sizes";
 import { DEFAULT_FPS } from "@/fps/defaults";
-import { buildDefaultScene, getProjectDurationFromScenes } from "@/timeline/scenes";
+import { buildDefaultSequence, getProjectDurationFromSequences } from "@/timeline/sequences";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { PROJECT_FORMAT_VERSION } from "@/services/storage/format";
 import { loadFonts } from "@/fonts/google-fonts";
 import { DEFAULTS } from "@/timeline/defaults";
-import { getElementFontFamilies } from "@/timeline/element-utils";
+import { getClipFontFamilies } from "@/timeline/clip-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 
 export class ProjectManager {
 	private active: TProject | null = null;
@@ -42,17 +42,17 @@ export class ProjectManager {
 	constructor(private editor: EditorCore) {}
 
 	async createNewProject({ name }: { name: string }): Promise<string> {
-		const mainScene = buildDefaultScene({ name: "Main scene", isMain: true });
+		const mainSequence = buildDefaultSequence({ name: "Main sequence", isMain: true });
 		const newProject: TProject = {
 			metadata: {
 				id: generateUUID(),
 				name,
-				duration: getProjectDurationFromScenes({ scenes: [mainScene] }),
+				duration: getProjectDurationFromSequences({ sequences: [mainSequence] }),
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			},
-			scenes: [mainScene],
-			currentSceneId: mainScene.id,
+			sequences: [mainSequence],
+			currentSequenceId: mainSequence.id,
 			settings: {
 				fps: DEFAULT_FPS,
 				canvasSize: DEFAULT_CANVAS_SIZE,
@@ -70,10 +70,10 @@ export class ProjectManager {
 		this.active = newProject;
 		this.notify();
 
-		this.editor.media.clearAllAssets();
-		this.editor.scenes.initializeScenes({
-			scenes: newProject.scenes,
-			currentSceneId: newProject.currentSceneId,
+		this.editor.media.clearAllProjectItems();
+		this.editor.sequences.initializeSequences({
+			sequences: newProject.sequences,
+			currentSequenceId: newProject.currentSequenceId,
 		});
 
 		try {
@@ -94,8 +94,8 @@ export class ProjectManager {
 		}
 
 		this.editor.save.pause();
-		this.editor.media.clearAllAssets();
-		this.editor.scenes.clearScenes();
+		this.editor.media.clearAllProjectItems();
+		this.editor.sequences.clearSequences();
 
 		try {
 			const result = await storageService.loadProject({ id });
@@ -108,10 +108,10 @@ export class ProjectManager {
 			this.active = project;
 			this.notify();
 
-			if (project.scenes && project.scenes.length > 0) {
-				this.editor.scenes.initializeScenes({
-					scenes: project.scenes,
-					currentSceneId: project.currentSceneId,
+			if (project.sequences && project.sequences.length > 0) {
+				this.editor.sequences.initializeSequences({
+					sequences: project.sequences,
+					currentSequenceId: project.currentSequenceId,
 				});
 			}
 
@@ -120,8 +120,8 @@ export class ProjectManager {
 			await loadFonts({
 				families: [
 					...new Set(
-						(project.scenes ?? []).flatMap((scene) =>
-							getElementFontFamilies({ tracks: scene.tracks }),
+						(project.sequences ?? []).flatMap((sequence) =>
+							getClipFontFamilies({ tracks: sequence.tracks }),
 						),
 					),
 				],
@@ -151,13 +151,13 @@ export class ProjectManager {
 		if (!this.active) return;
 
 		try {
-			const scenes = this.editor.scenes.getScenes();
+			const sequences = this.editor.sequences.getSequences();
 			const updatedProject = {
 				...this.active,
-				scenes,
+				sequences,
 				metadata: {
 					...this.active.metadata,
-					duration: getProjectDurationFromScenes({ scenes }),
+					duration: getProjectDurationFromSequences({ sequences }),
 					updatedAt: new Date(),
 				},
 			};
@@ -257,8 +257,8 @@ export class ProjectManager {
 
 			if (shouldClearActive) {
 				this.active = null;
-				this.editor.media.clearAllAssets();
-				this.editor.scenes.clearScenes();
+				this.editor.media.clearAllProjectItems();
+				this.editor.sequences.clearSequences();
 			}
 
 			this.notify();
@@ -271,8 +271,8 @@ export class ProjectManager {
 		this.active = null;
 		this.notify();
 
-		this.editor.media.clearAllAssets();
-		this.editor.scenes.clearScenes();
+		this.editor.media.clearAllProjectItems();
+		this.editor.sequences.clearSequences();
 	}
 
 	async renameProject({
@@ -413,15 +413,15 @@ export class ProjectManager {
 
 			await Promise.all(
 				duplicationPlans.map(async ({ sourceProjectId, newProjectId }) => {
-					const sourceMediaAssets = await storageService.loadAllMediaAssets({
+					const sourceProjectItems = await storageService.loadAllProjectItems({
 						projectId: sourceProjectId,
 					});
 
 					await Promise.all(
-						sourceMediaAssets.map((mediaAsset) =>
-							storageService.saveMediaAsset({
+						sourceProjectItems.map((projectItem) =>
+							storageService.saveProjectItem({
 								projectId: newProjectId,
-								mediaAsset,
+								projectItem,
 							}),
 						),
 					);
@@ -462,15 +462,15 @@ export class ProjectManager {
 	}
 
 	ratchetFpsForImportedMedia({
-		importedAssets,
+		importedProjectItems,
 	}: {
-		importedAssets: Array<Pick<MediaAsset, "type" | "fps">>;
+		importedProjectItems: Array<Pick<ProjectItem, "type" | "fps">>;
 	}): import("opencut-wasm").FrameRate | null {
 		if (!this.active) return null;
 
 		const nextFps = getRaisedProjectFpsForImportedMedia({
 			currentFps: this.active.settings.fps,
-			importedAssets,
+			importedProjectItems,
 		});
 		if (nextFps === null) return null;
 
@@ -606,14 +606,14 @@ export class ProjectManager {
 	private async updateThumbnailFromTimeline(): Promise<boolean> {
 		if (!this.active) return false;
 
-		const tracks = this.editor.scenes.getActiveScene().tracks;
-		const mediaAssets = this.editor.media.getAssets();
+		const tracks = this.editor.sequences.getActiveSequence().tracks;
+		const projectItems = this.editor.media.getProjectItems();
 		const duration = this.editor.timeline.getTotalDuration();
 		const { canvasSize, background } = this.active.settings;
 
-		const scene = buildScene({
+		const sequence = buildScene({
 			tracks,
-			mediaAssets,
+			projectItems,
 			duration: duration || 1,
 			canvasSize,
 			background,
@@ -630,7 +630,7 @@ export class ProjectManager {
 		tempCanvas.height = canvasSize.height;
 
 		await renderer.renderToCanvas({
-			node: scene,
+			node: sequence,
 			time: 0,
 			targetCanvas: tempCanvas,
 		});

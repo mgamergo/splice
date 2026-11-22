@@ -2,11 +2,11 @@ import { toast } from "sonner";
 
 export interface MediaUploadToastResult {
 	uploadedCount: number;
-	assetNames?: string[];
+	projectItemNames?: string[];
 }
 
-function getAssetLabel({ count }: { count: number }): string {
-	return count === 1 ? "media asset" : "media assets";
+function getProjectItemLabel({ count }: { count: number }): string {
+	return count === 1 ? "project item" : "project items";
 }
 
 function waitForNextPaint(): Promise<void> {
@@ -29,22 +29,22 @@ export async function showMediaUploadToast<T extends MediaUploadToastResult>({
 		await waitForNextPaint();
 		return run();
 	}, {
-		loading: `Uploading ${getAssetLabel({ count: filesCount })}...`,
-		success: ({ uploadedCount, assetNames }) => {
+		loading: `Uploading ${getProjectItemLabel({ count: filesCount })}...`,
+		success: ({ uploadedCount, projectItemNames }) => {
 			if (uploadedCount === 1) {
-				const assetName = assetNames?.[0];
-				return assetName
-					? `${assetName} has been uploaded`
-					: "1 media asset has been uploaded";
+				const projectItemName = projectItemNames?.[0];
+				return projectItemName
+					? `${projectItemName} has been uploaded`
+					: "1 project item has been uploaded";
 			}
 
 			if (uploadedCount > 1) {
-				return `${uploadedCount} media assets have been uploaded`;
+				return `${uploadedCount} project items have been uploaded`;
 			}
 
-			return "No media assets were uploaded";
+			return "No project items were uploaded";
 		},
-		error: `Failed to upload ${getAssetLabel({ count: filesCount })}`,
+		error: `Failed to upload ${getProjectItemLabel({ count: filesCount })}`,
 	});
 
 	return toastPromise.unwrap();

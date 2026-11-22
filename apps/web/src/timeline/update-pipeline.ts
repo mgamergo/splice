@@ -4,40 +4,40 @@ import {
 	getSourceSpanAtClipTime,
 	getTimelineDurationForSourceSpan,
 } from "@/retime";
-import type { RetimeConfig, SceneTracks, TimelineElement } from "@/timeline";
-import { isRetimableElement } from "@/timeline";
+import type { RetimeConfig, SequenceTracks, TimelineClip } from "@/timeline";
+import { isRetimableClip } from "@/timeline";
 import { ZERO_MEDIA_TIME, roundMediaTime } from "@/wasm";
 
-type ElementUpdateField = keyof TimelineElement | string;
+type ClipUpdateField = keyof TimelineClip | string;
 
-export interface ElementUpdateContext {
-	tracks: SceneTracks;
+export interface ClipUpdateContext {
+	tracks: SequenceTracks;
 	trackId: string;
 }
 
-interface ElementUpdateRuleResult {
-	element: TimelineElement;
-	changedFields?: ElementUpdateField[];
+interface ClipUpdateRuleResult {
+	clip: TimelineClip;
+	changedFields?: ClipUpdateField[];
 }
 
-interface ElementUpdateRuleParams {
-	element: TimelineElement;
-	originalElement: TimelineElement;
-	patch: Partial<TimelineElement>;
-	context: ElementUpdateContext;
+interface ClipUpdateRuleParams {
+	clip: TimelineClip;
+	originalClip: TimelineClip;
+	patch: Partial<TimelineClip>;
+	context: ClipUpdateContext;
 }
 
-interface ElementUpdateRule {
-	triggers: ElementUpdateField[];
-	apply: (params: ElementUpdateRuleParams) => ElementUpdateRuleResult;
+interface ClipUpdateRule {
+	triggers: ClipUpdateField[];
+	apply: (params: ClipUpdateRuleParams) => ClipUpdateRuleResult;
 }
 
-const deriveRules: ElementUpdateRule[] = [
+const deriveRules: ClipUpdateRule[] = [
 	{
 		triggers: ["retime"],
-		apply: ({ element, originalElement, patch }) => {
-			if (!("retime" in patch) || !isRetimableElement(element)) {
-				return { element };
+		apply: ({ clip, originalClip, patch }) => {
+			if (!("retime" in patch) || !isRetimableClip(clip)) {
+				return { clip };
 			}
 
 			const nextRetime = patch.retime
@@ -48,19 +48,19 @@ const deriveRules: ElementUpdateRule[] = [
 				: undefined;
 
 			const sourceDuration = getSourceDuration({
-				trimStart: originalElement.trimStart,
-				trimEnd: originalElement.trimEnd,
-				duration: originalElement.duration,
-				sourceDuration: isRetimableElement(originalElement)
-					? originalElement.sourceDuration
+				trimStart: originalClip.trimStart,
+				trimEnd: originalClip.trimEnd,
+				duration: originalClip.duration,
+				sourceDuration: isRetimableClip(originalClip)
+					? originalClip.sourceDuration
 					: undefined,
-				retime: isRetimableElement(originalElement)
-					? originalElement.retime
+				retime: isRetimableClip(originalClip)
+					? originalClip.retime
 					: undefined,
 			});
 			const visibleSourceSpan = Math.max(
 				0,
-				sourceDuration - element.trimStart - element.trimEnd,
+				sourceDuration - clip.trimStart - clip.trimEnd,
 			);
 			const nextDuration = roundMediaTime({
 				time: getTimelineDurationForSourceSpan({
@@ -70,8 +70,8 @@ const deriveRules: ElementUpdateRule[] = [
 			});
 
 			return {
-				element: {
-					...element,
+				clip: {
+					...clip,
 					retime: nextRetime,
 					duration: nextDuration,
 				},
@@ -81,38 +81,38 @@ const deriveRules: ElementUpdateRule[] = [
 	},
 ];
 
-const enforceRules: ElementUpdateRule[] = [
+const enforceRules: ClipUpdateRule[] = [
 	{
 		triggers: ["duration"],
-		apply: ({ element }) => ({
-			element: {
-				...element,
+		apply: ({ clip }) => ({
+			clip: {
+				...clip,
 				animations: clampAnimationsToDuration({
-					animations: element.animations,
-					duration: element.duration,
+					animations: clip.animations,
+					duration: clip.duration,
 				}),
 			},
 		}),
 	},
 	{
 		triggers: ["startTime"],
-		apply: ({ element, context }) => {
+		apply: ({ clip, context }) => {
 			const requestedStartTime =
-				element.startTime < ZERO_MEDIA_TIME
+				clip.startTime < ZERO_MEDIA_TIME
 					? ZERO_MEDIA_TIME
-					: element.startTime;
+					: clip.startTime;
 			if (context.trackId !== context.tracks.main.id) {
 				return {
-					element: {
-						...element,
+					clip: {
+						...clip,
 						startTime: requestedStartTime,
 					},
 				};
 			}
 
-			const earliestElement = context.tracks.main.elements
-				.filter((candidate) => candidate.id !== element.id)
-				.reduce<TimelineElement | null>((earliest, candidate) => {
+			const earliestClip = context.tracks.main.clips
+				.filter((candidate) => candidate.id !== clip.id)
+				.reduce<TimelineClip | null>((earliest, candidate) => {
 					if (!earliest || candidate.startTime < earliest.startTime) {
 						return candidate;
 					}
@@ -120,10 +120,10 @@ const enforceRules: ElementUpdateRule[] = [
 				}, null);
 
 			return {
-				element: {
-					...element,
+				clip: {
+					...clip,
 					startTime:
-						!earliestElement || requestedStartTime <= earliestElement.startTime
+						!earliestClip || requestedStartTime <= earliestClip.startTime
 							? ZERO_MEDIA_TIME
 							: requestedStartTime,
 				},
@@ -132,25 +132,25 @@ const enforceRules: ElementUpdateRule[] = [
 	},
 ];
 
-export function applyElementUpdate({
-	element,
+export function applyClipUpdate({
+	clip,
 	patch,
 	context,
 }: {
-	element: TimelineElement;
-	patch: Partial<TimelineElement>;
-	context: ElementUpdateContext;
-}): TimelineElement {
-	let nextElement = {
-		...element,
+	clip: TimelineClip;
+	patch: Partial<TimelineClip>;
+	context: ClipUpdateContext;
+}): TimelineClip {
+	let nextClip = {
+		...clip,
 		...patch,
 		params: {
-			...element.params,
+			...clip.params,
 			...(patch.params ?? {}),
 		},
-	} as TimelineElement;
+	} as TimelineClip;
 	const changedFields = new Set(
-		Object.keys(patch) as ElementUpdateField[],
+		Object.keys(patch) as ClipUpdateField[],
 	);
 
 	for (const rule of deriveRules) {
@@ -159,12 +159,12 @@ export function applyElementUpdate({
 		}
 
 		const result = rule.apply({
-			element: nextElement,
-			originalElement: element,
+			clip: nextClip,
+			originalClip: clip,
 			patch,
 			context,
 		});
-		nextElement = result.element;
+		nextClip = result.clip;
 		for (const field of result.changedFields ?? []) {
 			changedFields.add(field);
 		}
@@ -175,23 +175,23 @@ export function applyElementUpdate({
 			continue;
 		}
 
-		nextElement = rule.apply({
-			element: nextElement,
-			originalElement: element,
+		nextClip = rule.apply({
+			clip: nextClip,
+			originalClip: clip,
 			patch,
 			context,
-		}).element;
+		}).clip;
 	}
 
-	return nextElement;
+	return nextClip;
 }
 
 function shouldApplyRule({
 	rule,
 	changedFields,
 }: {
-	rule: ElementUpdateRule;
-	changedFields: Set<ElementUpdateField>;
+	rule: ClipUpdateRule;
+	changedFields: Set<ClipUpdateField>;
 }): boolean {
 	return rule.triggers.some((trigger) => changedFields.has(trigger));
 }

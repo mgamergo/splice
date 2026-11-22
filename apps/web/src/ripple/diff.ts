@@ -1,4 +1,4 @@
-import type { SceneTracks, TimelineElement, TimelineTrack } from "@/timeline/types";
+import type { SequenceTracks, TimelineClip, TimelineTrack } from "@/timeline/types";
 import type { RippleAdjustment } from "./apply";
 
 interface Interval {
@@ -6,7 +6,7 @@ interface Interval {
 	endTime: number;
 }
 
-interface ElementSpan extends Interval {
+interface ClipSpan extends Interval {
 	id: string;
 }
 
@@ -14,8 +14,8 @@ export function computeRippleAdjustments({
 	beforeTracks,
 	afterTracks,
 }: {
-	beforeTracks: SceneTracks;
-	afterTracks: SceneTracks;
+	beforeTracks: SequenceTracks;
+	afterTracks: SequenceTracks;
 }): RippleAdjustment[] {
 	const beforeTrackList = [
 		...beforeTracks.overlay,
@@ -28,37 +28,37 @@ export function computeRippleAdjustments({
 		...afterTracks.audio,
 	];
 	const afterTracksById = new Map(afterTrackList.map((track) => [track.id, track]));
-	const allAfterElementIds = new Set(
-		afterTrackList.flatMap((track) => track.elements.map((element) => element.id)),
+	const allAfterClipIds = new Set(
+		afterTrackList.flatMap((track) => track.clips.map((clip) => clip.id)),
 	);
 
 	return beforeTrackList.flatMap((beforeTrack): RippleAdjustment[] =>
 		computeTrackRippleAdjustments({
 			trackId: beforeTrack.id,
-			beforeElements: beforeTrack.elements,
-			afterElements: afterTracksById.get(beforeTrack.id)?.elements ?? [],
-			allAfterElementIds,
+			beforeClips: beforeTrack.clips,
+			afterClips: afterTracksById.get(beforeTrack.id)?.clips ?? [],
+			allAfterClipIds,
 		}),
 	);
 }
 
 function computeTrackRippleAdjustments({
 	trackId,
-	beforeElements,
-	afterElements,
-	allAfterElementIds,
+	beforeClips,
+	afterClips,
+	allAfterClipIds,
 }: {
 	trackId: string;
-	beforeElements: TimelineElement[];
-	afterElements: TimelineElement[];
-	allAfterElementIds: Set<string>;
+	beforeClips: TimelineClip[];
+	afterClips: TimelineClip[];
+	allAfterClipIds: Set<string>;
 }): RippleAdjustment[] {
-	const beforeElementsById = buildElementSpanMap({ elements: beforeElements });
-	const afterElementsById = buildElementSpanMap({ elements: afterElements });
+	const beforeClipsById = buildClipSpanMap({ clips: beforeClips });
+	const afterClipsById = buildClipSpanMap({ clips: afterClips });
 	const { vacatedIntervals, joinedIntervals } = collectTrackIntervals({
-		beforeElementsById,
-		afterElementsById,
-		allAfterElementIds,
+		beforeClipsById,
+		afterClipsById,
+		allAfterClipIds,
 	});
 	const freedIntervals = subtractIntervalSets({
 		sourceIntervals: vacatedIntervals,
@@ -68,31 +68,31 @@ function computeTrackRippleAdjustments({
 	return buildAdjustments({ trackId, intervals: freedIntervals });
 }
 
-function buildElementSpanMap({
-	elements,
+function buildClipSpanMap({
+	clips,
 }: {
-	elements: TimelineElement[];
-}): Map<string, ElementSpan> {
+	clips: TimelineClip[];
+}): Map<string, ClipSpan> {
 	return new Map(
-		elements.map((element) => [
-			element.id,
+		clips.map((clip) => [
+			clip.id,
 			{
-				id: element.id,
-				startTime: element.startTime,
-				endTime: element.startTime + element.duration,
+				id: clip.id,
+				startTime: clip.startTime,
+				endTime: clip.startTime + clip.duration,
 			},
 		]),
 	);
 }
 
 function collectTrackIntervals({
-	beforeElementsById,
-	afterElementsById,
-	allAfterElementIds,
+	beforeClipsById,
+	afterClipsById,
+	allAfterClipIds,
 }: {
-	beforeElementsById: Map<string, ElementSpan>;
-	afterElementsById: Map<string, ElementSpan>;
-	allAfterElementIds: Set<string>;
+	beforeClipsById: Map<string, ClipSpan>;
+	afterClipsById: Map<string, ClipSpan>;
+	allAfterClipIds: Set<string>;
 }): {
 	vacatedIntervals: Interval[];
 	joinedIntervals: Interval[];
@@ -100,38 +100,38 @@ function collectTrackIntervals({
 	const vacatedIntervals: Interval[] = [];
 	const joinedIntervals: Interval[] = [];
 
-	for (const beforeElement of beforeElementsById.values()) {
-		const afterElement = afterElementsById.get(beforeElement.id);
-		if (!afterElement) {
-			const wasMovedToAnotherTrack = allAfterElementIds.has(beforeElement.id);
+	for (const beforeClip of beforeClipsById.values()) {
+		const afterClip = afterClipsById.get(beforeClip.id);
+		if (!afterClip) {
+			const wasMovedToAnotherTrack = allAfterClipIds.has(beforeClip.id);
 			if (!wasMovedToAnotherTrack) {
 				pushInterval({
 					intervals: vacatedIntervals,
-					startTime: beforeElement.startTime,
-					endTime: beforeElement.endTime,
+					startTime: beforeClip.startTime,
+					endTime: beforeClip.endTime,
 				});
 			}
 			continue;
 		}
 
-		if (beforeElement.endTime > afterElement.endTime) {
+		if (beforeClip.endTime > afterClip.endTime) {
 			pushInterval({
 				intervals: vacatedIntervals,
-				startTime: afterElement.endTime,
-				endTime: beforeElement.endTime,
+				startTime: afterClip.endTime,
+				endTime: beforeClip.endTime,
 			});
 		}
 	}
 
-	for (const afterElement of afterElementsById.values()) {
-		if (beforeElementsById.has(afterElement.id)) {
+	for (const afterClip of afterClipsById.values()) {
+		if (beforeClipsById.has(afterClip.id)) {
 			continue;
 		}
 
 		pushInterval({
 			intervals: joinedIntervals,
-			startTime: afterElement.startTime,
-			endTime: afterElement.endTime,
+			startTime: afterClip.startTime,
+			endTime: afterClip.endTime,
 		});
 	}
 

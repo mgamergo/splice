@@ -59,7 +59,7 @@ export type ExternalTextureDescriptor = {
 };
 
 /**
- * A layer texture that the renderer rasterizes from scene state (color fill,
+ * A layer texture that the renderer rasterizes from sequence state (color fill,
  * text layout, mask shape, blur backdrop). Cached by `contentHash`: when it
  * matches the previous frame's hash for this id, the upload is skipped
  * entirely and the persistent canvas is not even cleared.

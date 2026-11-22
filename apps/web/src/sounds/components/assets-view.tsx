@@ -95,7 +95,7 @@ function SoundEffectsView() {
 	});
 
 	const [playingId, setPlayingId] = useState<number | null>(null);
-	const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(
+	const [audioClip, setAudioClip] = useState<HTMLAudioElement | null>(
 		null,
 	);
 
@@ -198,12 +198,12 @@ function SoundEffectsView() {
 
 	const playSound = ({ sound }: { sound: SoundEffect }) => {
 		if (playingId === sound.id) {
-			audioElement?.pause();
+			audioClip?.pause();
 			setPlayingId(null);
 			return;
 		}
 
-		audioElement?.pause();
+		audioClip?.pause();
 
 		if (sound.previewUrl) {
 			const audio = new Audio(sound.previewUrl);
@@ -218,7 +218,7 @@ function SoundEffectsView() {
 				setPlayingId(null);
 			});
 
-			setAudioElement(audio);
+			setAudioClip(audio);
 			setPlayingId(sound.id);
 		}
 	};
@@ -313,7 +313,7 @@ function SavedSoundsView() {
 	} = useSoundsStore();
 
 	const [playingId, setPlayingId] = useState<number | null>(null);
-	const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(
+	const [audioClip, setAudioClip] = useState<HTMLAudioElement | null>(
 		null,
 	);
 
@@ -325,12 +325,12 @@ function SavedSoundsView() {
 
 	const playSound = ({ sound }: { sound: SoundEffect }) => {
 		if (playingId === sound.id) {
-			audioElement?.pause();
+			audioClip?.pause();
 			setPlayingId(null);
 			return;
 		}
 
-		audioElement?.pause();
+		audioClip?.pause();
 
 		if (sound.previewUrl) {
 			const audio = new Audio(sound.previewUrl);
@@ -345,7 +345,7 @@ function SavedSoundsView() {
 				setPlayingId(null);
 			});
 
-			setAudioElement(audio);
+			setAudioClip(audio);
 			setPlayingId(sound.id);
 		}
 	};

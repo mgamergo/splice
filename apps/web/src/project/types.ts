@@ -1,5 +1,5 @@
 import type { FrameRate } from "opencut-wasm";
-import type { TScene } from "@/timeline/types";
+import type { TSequence } from "@/timeline/types";
 import type { MediaTime } from "@/wasm";
 
 export type TBackground =
@@ -43,8 +43,8 @@ export interface TTimelineViewState {
 
 export interface TProject {
 	metadata: TProjectMetadata;
-	scenes: TScene[];
-	currentSceneId: string;
+	sequences: TSequence[];
+	currentSequenceId: string;
 	settings: TProjectSettings;
 	version: number;
 	timelineViewState?: TTimelineViewState;

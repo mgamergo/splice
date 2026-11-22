@@ -114,7 +114,7 @@ export const useAssetsPanelStore = create<AssetsPanelStore>()(
 				set({ mediaSortBy: key, mediaSortOrder: order }),
 		}),
 		{
-			name: "assets-panel",
+			name: "projectItems-panel",
 			partialize: (state) => ({
 				mediaViewMode: state.mediaViewMode,
 				mediaSortBy: state.mediaSortBy,

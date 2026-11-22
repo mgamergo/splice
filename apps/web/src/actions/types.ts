@@ -8,8 +8,8 @@ export type TActionArgsMap = {
 	"seek-backward": { seconds: number } | undefined;
 	"jump-forward": { seconds: number } | undefined;
 	"jump-backward": { seconds: number } | undefined;
-	"remove-media-asset": { projectId: string; assetId: string };
-	"remove-media-assets": { projectId: string; assetIds: string[] };
+	"remove-project-item": { projectId: string; projectItemId: string };
+	"remove-project-items": { projectId: string; projectItemIds: string[] };
 };
 
 type TKeysWithValueUndefined<T> = {

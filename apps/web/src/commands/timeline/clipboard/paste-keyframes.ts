@@ -6,8 +6,8 @@ import {
 } from "@/animation";
 import { Command, type CommandResult } from "@/commands/base-command";
 import type { KeyframeClipboardItem } from "@/clipboard";
-import type { SceneTracks, TimelineElement } from "@/timeline";
-import { updateElementInSceneTracks } from "@/timeline";
+import type { SequenceTracks, TimelineClip } from "@/timeline";
+import { updateClipInSequenceTracks } from "@/timeline";
 import { resolveAnimationTarget } from "@/timeline/animation-targets";
 import { generateUUID } from "@/utils/id";
 import {
@@ -18,20 +18,20 @@ import {
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
 
-function pasteKeyframesIntoElement({
-	element,
+function pasteKeyframesIntoClip({
+	clip,
 	time,
 	clipboardItems,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	time: MediaTime;
 	clipboardItems: KeyframeClipboardItem[];
-}): TimelineElement {
-	let nextElement = element;
+}): TimelineClip {
+	let nextClip = clip;
 
 	for (const item of clipboardItems) {
 		const target = resolveAnimationTarget({
-			element: nextElement,
+			clip: nextClip,
 			path: item.propertyPath,
 		});
 		if (!target) {
@@ -42,11 +42,11 @@ function pasteKeyframesIntoElement({
 			a: ZERO_MEDIA_TIME,
 			b: minMediaTime({
 				a: addMediaTime({ a: time, b: item.timeOffset }),
-				b: nextElement.duration,
+				b: nextClip.duration,
 			}),
 		});
 		const nextAnimations = upsertPathKeyframe({
-			animations: nextElement.animations,
+			animations: nextClip.animations,
 			propertyPath: item.propertyPath,
 			time: keyframeTime,
 			value: item.value,
@@ -75,36 +75,36 @@ function pasteKeyframesIntoElement({
 			}
 		}
 
-		nextElement = {
-			...nextElement,
+		nextClip = {
+			...nextClip,
 			animations: patchedAnimations,
 		};
 	}
 
-	return nextElement;
+	return nextClip;
 }
 
 export class PasteKeyframesCommand extends Command {
-	private savedState: SceneTracks | null = null;
+	private savedState: SequenceTracks | null = null;
 	private readonly trackId: string;
-	private readonly elementId: string;
+	private readonly clipId: string;
 	private readonly time: MediaTime;
 	private readonly clipboardItems: KeyframeClipboardItem[];
 
 	constructor({
 		trackId,
-		elementId,
+		clipId,
 		time,
 		clipboardItems,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		time: MediaTime;
 		clipboardItems: KeyframeClipboardItem[];
 	}) {
 		super();
 		this.trackId = trackId;
-		this.elementId = elementId;
+		this.clipId = clipId;
 		this.time = time;
 		this.clipboardItems = clipboardItems;
 	}
@@ -115,15 +115,15 @@ export class PasteKeyframesCommand extends Command {
 		}
 
 		const editor = EditorCore.getInstance();
-		this.savedState = editor.scenes.getActiveScene().tracks;
+		this.savedState = editor.sequences.getActiveSequence().tracks;
 
-		const updatedTracks = updateElementInSceneTracks({
+		const updatedTracks = updateClipInSequenceTracks({
 			tracks: this.savedState,
 			trackId: this.trackId,
-			elementId: this.elementId,
-			update: (element) =>
-				pasteKeyframesIntoElement({
-					element,
+			clipId: this.clipId,
+			update: (clip) =>
+				pasteKeyframesIntoClip({
+					clip,
 					time: this.time,
 					clipboardItems: this.clipboardItems,
 				}),

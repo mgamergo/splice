@@ -1,5 +1,5 @@
 import { useEditor } from "@/editor/use-editor";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
 import {
 	TooltipProvider,
 	Tooltip,
@@ -17,7 +17,7 @@ import { Slider } from "@/components/ui/slider";
 import { TIMELINE_ZOOM_BUTTON_FACTOR } from "./interaction";
 import { TIMELINE_ZOOM_MAX } from "@/timeline/scale";
 import { sliderToZoom, zoomToSlider } from "@/timeline/zoom-utils";
-import { ScenesView } from "@/components/editor/scenes-view";
+import { SequencesView } from "@/components/editor/sequences-view";
 import { type TActionWithOptionalArgs, invokeAction } from "@/actions";
 import {
 	canToggleSourceAudio,
@@ -72,7 +72,7 @@ export function TimelineToolbar({
 			<div className="flex h-10 items-center justify-between border-b px-2 py-1">
 				<ToolbarLeftSection />
 
-				<SceneSelector />
+				<SequenceSelector />
 
 				<ToolbarRightSection
 					zoomLevel={zoomLevel}
@@ -87,45 +87,45 @@ export function TimelineToolbar({
 
 function ToolbarLeftSection() {
 	const editor = useEditor();
-	const mediaAssets = useEditor((currentEditor) =>
-		currentEditor.media.getAssets(),
+	const projectItems = useEditor((currentEditor) =>
+		currentEditor.media.getProjectItems(),
 	);
-	const { selectedElements } = useElementSelection();
+	const { selectedClips } = useClipSelection();
 	const graphEditor = useGraphEditorController();
-	const isCurrentlyBookmarked = useEditor((e) =>
-		e.scenes.isBookmarked({ time: e.playback.getCurrentTime() }),
+	const isCurrentlyMarkered = useEditor((e) =>
+		e.sequences.isMarkered({ time: e.playback.getCurrentTime() }),
 	);
-	const selectedElement =
-		selectedElements.length === 1
-			? (editor.timeline.getElementsWithTracks({
-					elements: selectedElements,
+	const selectedClip =
+		selectedClips.length === 1
+			? (editor.timeline.getClipsWithTracks({
+					clips: selectedClips,
 				})[0] ?? null)
 			: null;
-	const selectedMediaAsset = (() => {
-		if (!selectedElement) {
+	const selectedProjectItem = (() => {
+		if (!selectedClip) {
 			return null;
 		}
 
-		const { element } = selectedElement;
-		if (!hasMediaId(element)) {
+		const { clip } = selectedClip;
+		if (!hasMediaId(clip)) {
 			return null;
 		}
 
-		return mediaAssets.find((asset) => asset.id === element.mediaId) ?? null;
+		return projectItems.find((projectItem) => projectItem.id === clip.mediaId) ?? null;
 	})();
 	const canToggleSelectedSourceAudio =
-		!!selectedElement &&
-		canToggleSourceAudio(selectedElement.element, selectedMediaAsset);
+		!!selectedClip &&
+		canToggleSourceAudio(selectedClip.clip, selectedProjectItem);
 	const sourceAudioLabel =
-		selectedElement?.element.type === "video"
+		selectedClip?.clip.type === "video"
 			? getSourceAudioActionLabel({
-					element: selectedElement.element,
+					clip: selectedClip.clip,
 				})
 			: "Extract audio";
 	const isSelectedSourceAudioSeparated =
-		selectedElement?.element.type === "video" &&
+		selectedClip?.clip.type === "video" &&
 		isSourceAudioSeparated({
-			element: selectedElement.element,
+			clip: selectedClip.clip,
 		});
 
 	const handleAction = ({
@@ -144,21 +144,21 @@ function ToolbarLeftSection() {
 			<TooltipProvider delayDuration={500}>
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={ScissorIcon} />}
-					tooltip="Split element"
-					onClick={({ event }) => handleAction({ action: "split", event })}
+					tooltip="Razor"
+					onClick={({ event }) => handleAction({ action: "razor", event })}
 				/>
 
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={AlignLeftIcon} />}
-					tooltip="Split left"
-					onClick={({ event }) => handleAction({ action: "split-left", event })}
+					tooltip="Razor left"
+					onClick={({ event }) => handleAction({ action: "razor-left", event })}
 				/>
 
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={AlignRightIcon} />}
-					tooltip="Split right"
+					tooltip="Razor right"
 					onClick={({ event }) =>
-						handleAction({ action: "split-right", event })
+						handleAction({ action: "razor-right", event })
 					}
 				/>
 
@@ -177,7 +177,7 @@ function ToolbarLeftSection() {
 
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={Copy01Icon} />}
-					tooltip="Duplicate element"
+					tooltip="Duplicate clip"
 					onClick={({ event }) =>
 						handleAction({ action: "duplicate-selected", event })
 					}
@@ -192,7 +192,7 @@ function ToolbarLeftSection() {
 
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={Delete02Icon} />}
-					tooltip="Delete element"
+					tooltip="Delete clip"
 					onClick={({ event }) =>
 						handleAction({ action: "delete-selected", event })
 					}
@@ -203,10 +203,10 @@ function ToolbarLeftSection() {
 				<Tooltip>
 					<ToolbarButton
 						icon={<HugeiconsIcon icon={Bookmark02Icon} />}
-						isActive={isCurrentlyBookmarked}
-						tooltip={isCurrentlyBookmarked ? "Remove bookmark" : "Add bookmark"}
+						isActive={isCurrentlyMarkered}
+						tooltip={isCurrentlyMarkered ? "Remove marker" : "Add marker"}
 						onClick={({ event }) =>
-							handleAction({ action: "toggle-bookmark", event })
+							handleAction({ action: "toggle-marker", event })
 						}
 					/>
 				</Tooltip>
@@ -245,20 +245,20 @@ function ToolbarLeftSection() {
 	);
 }
 
-function SceneSelector() {
+function SequenceSelector() {
 	const editor = useEditor();
-	const currentScene = editor.scenes.getActiveScene();
+	const currentSequence = editor.sequences.getActiveSequence();
 
 	return (
 		<div>
 			<SplitButton className="border-foreground/10 border">
-				<SplitButtonLeft>{currentScene?.name || "No Scene"}</SplitButtonLeft>
+				<SplitButtonLeft>{currentSequence?.name || "No Sequence"}</SplitButtonLeft>
 				<SplitButtonSeparator />
-				<ScenesView>
+				<SequencesView>
 					<SplitButtonRight onClick={() => {}}>
 						<HugeiconsIcon icon={Layers01Icon} className="size-4" />
 					</SplitButtonRight>
-				</ScenesView>
+				</SequencesView>
 			</SplitButton>
 		</div>
 	);

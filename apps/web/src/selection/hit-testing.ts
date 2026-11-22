@@ -28,22 +28,22 @@ function createSelectionRect({
 	);
 }
 
-export function resolveElementIntersections({
+export function resolveClipIntersections({
 	startPos,
 	currentPos,
-	elements,
+	clips,
 }: {
 	startPos: { x: number; y: number };
 	currentPos: { x: number; y: number };
-	elements: Map<string, HTMLElement>;
+	clips: Map<string, HTMLElement>;
 }) {
 	const selectionRect = createSelectionRect({ startPos, currentPos });
 
-	return [...elements.entries()]
-		.filter(([, element]) =>
+	return [...clips.entries()]
+		.filter(([, clip]) =>
 			isIntersecting({
 				selectionRect,
-				itemRect: element.getBoundingClientRect(),
+				itemRect: clip.getBoundingClientRect(),
 			}),
 		)
 		.map(([id]) => id);

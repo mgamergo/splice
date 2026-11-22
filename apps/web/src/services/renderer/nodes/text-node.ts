@@ -1,11 +1,11 @@
 import { BaseNode } from "./base-node";
-import type { TextElement } from "@/timeline";
+import type { TextClip } from "@/timeline";
 import type { EffectPass } from "@/effects/types";
 import type { BlendMode, Transform } from "@/rendering";
 import { drawMeasuredTextLayout } from "@/text/primitives";
-import type { MeasuredTextElement } from "@/text/measure-element";
+import type { MeasuredTextClip } from "@/text/measure-clip";
 
-export type TextNodeParams = TextElement & {
+export type TextNodeParams = TextClip & {
 	transform: Transform;
 	opacity: number;
 	blendMode?: BlendMode;
@@ -20,7 +20,7 @@ export interface ResolvedTextNodeState {
 	textColor: string;
 	backgroundColor: string;
 	effectPasses: EffectPass[][];
-	measuredText: MeasuredTextElement;
+	measuredText: MeasuredTextClip;
 }
 
 export class TextNode extends BaseNode<TextNodeParams, ResolvedTextNodeState> {}

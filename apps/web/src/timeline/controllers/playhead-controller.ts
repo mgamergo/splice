@@ -11,8 +11,8 @@ import {
 	getTimelineSnapThresholdInTicks,
 	resolveTimelineSnap,
 } from "@/timeline/snapping";
-import { getBookmarkSnapPoints } from "@/timeline/bookmarks/index";
-import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
+import { getMarkerSnapPoints } from "@/timeline/markers/index";
+import { getClipEdgeSnapPoints } from "@/timeline/clip-snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import {
 	getCenteredLineLeft,
@@ -20,7 +20,7 @@ import {
 	timelineTimeToSnappedPixels,
 } from "@/timeline";
 import { BASE_TIMELINE_PIXELS_PER_SECOND } from "@/timeline/scale";
-import type { Bookmark, SceneTracks } from "@/timeline";
+import type { Marker, SequenceTracks } from "@/timeline";
 
 // --- Session ---
 
@@ -48,8 +48,8 @@ export interface PlayheadConfig {
 	getRulerScrollEl: () => HTMLDivElement | null;
 	getTracksScrollEl: () => HTMLDivElement | null;
 	getPlayheadEl: () => HTMLDivElement | null;
-	getSceneTracks: () => SceneTracks;
-	getSceneBookmarks: () => Bookmark[];
+	getSequenceTracks: () => SequenceTracks;
+	getSequenceMarkers: () => Marker[];
 	seek: (time: MediaTime) => void;
 	setScrubbing: (isScrubbing: boolean) => void;
 	setTimelineViewState: (viewState: {
@@ -136,7 +136,7 @@ export class PlayheadController {
 			currentTime: null,
 		};
 		this.config.setScrubbing(true);
-		this.scrub({ event, isElementSnappingEnabled: true });
+		this.scrub({ event, isClipSnappingEnabled: true });
 		this.activate();
 	}
 
@@ -152,15 +152,15 @@ export class PlayheadController {
 			currentTime: null,
 		};
 		this.config.setScrubbing(true);
-		// No element-edge snapping on initial ruler click — avoids a jarring jump.
-		this.scrub({ event, isElementSnappingEnabled: false });
+		// No clip-edge snapping on initial ruler click — avoids a jarring jump.
+		this.scrub({ event, isClipSnappingEnabled: false });
 		this.activate();
 	}
 
 	// --- Public non-session methods ---
 
 	/**
-	 * Imperatively updates the playhead DOM element's `left` style.
+	 * Imperatively updates the playhead DOM clip's `left` style.
 	 * Called on scroll and playback events to avoid React re-renders
 	 * during animation frame updates.
 	 */
@@ -226,15 +226,15 @@ export class PlayheadController {
 
 	/**
 	 * Converts pointer position to a frame-snapped timeline time and seeks.
-	 * `isElementSnappingEnabled` controls element-edge snapping; frame-level snapping
+	 * `isClipSnappingEnabled` controls clip-edge snapping; frame-level snapping
 	 * is always applied.
 	 */
 	private scrub({
 		event,
-		isElementSnappingEnabled,
+		isClipSnappingEnabled,
 	}: {
 		event: MouseEvent | ReactMouseEvent;
-		isElementSnappingEnabled: boolean;
+		isClipSnappingEnabled: boolean;
 	}): void {
 		const ruler = this.config.getRulerEl();
 		if (!ruler) return;
@@ -252,20 +252,20 @@ export class PlayheadController {
 		const frameTime = snapSeekMediaTime({ time: rawTime, duration, fps });
 
 		const time = (() => {
-			if (!isElementSnappingEnabled || this.config.isShiftHeld())
+			if (!isClipSnappingEnabled || this.config.isShiftHeld())
 				return frameTime;
 
 			const snapPoints = buildTimelineSnapPoints({
 				sources: [
 					() =>
-						getElementEdgeSnapPoints({ tracks: this.config.getSceneTracks() }),
+						getClipEdgeSnapPoints({ tracks: this.config.getSequenceTracks() }),
 					() =>
-						getBookmarkSnapPoints({
-							bookmarks: this.config.getSceneBookmarks(),
+						getMarkerSnapPoints({
+							markers: this.config.getSequenceMarkers(),
 						}),
 					() =>
 						getAnimationKeyframeSnapPointsForTimeline({
-							tracks: this.config.getSceneTracks(),
+							tracks: this.config.getSequenceTracks(),
 						}),
 				],
 			});
@@ -286,7 +286,7 @@ export class PlayheadController {
 
 	private handleMouseMove(event: MouseEvent): void {
 		if (this.session.kind !== "scrubbing") return;
-		this.scrub({ event, isElementSnappingEnabled: true });
+		this.scrub({ event, isClipSnappingEnabled: true });
 		if (this.session.didStartFromRuler) {
 			this.session.hasMoved = true;
 		}
@@ -309,7 +309,7 @@ export class PlayheadController {
 
 		// Ruler click without drag: snap to clicked position on mouseup.
 		if (session.didStartFromRuler && !session.hasMoved) {
-			this.scrub({ event, isElementSnappingEnabled: false });
+			this.scrub({ event, isClipSnappingEnabled: false });
 		}
 
 		this.session = { kind: "idle" };

@@ -2,14 +2,14 @@
 
 import { usePreviewViewport } from "@/preview/components/preview-viewport";
 import { useTransformHandles } from "@/preview/hooks/use-transform-handles";
-import { isVisualElement } from "@/timeline/element-utils";
+import { isVisualClip } from "@/timeline/clip-utils";
 import {
 	getCornerPosition,
 	getEdgeHandlePosition,
 	ROTATION_HANDLE_OFFSET,
 	type Corner,
 	type Edge,
-} from "@/preview/element-bounds";
+} from "@/preview/clip-bounds";
 import type { OnSnapLinesChange } from "@/preview/hooks/use-preview-interaction";
 import {
 	BoundingBoxOutline,
@@ -46,8 +46,8 @@ export function TransformHandles({
 
 	if (!hasVisualSelection || !selectedWithBounds) return null;
 
-	const { bounds, element } = selectedWithBounds;
-	if (!isVisualElement(element)) return null;
+	const { bounds, clip } = selectedWithBounds;
+	if (!isVisualClip(clip)) return null;
 
 	const displayScale = viewport.getDisplayScale();
 

@@ -1,5 +1,5 @@
 import { resolveGraphicParamsAtTime } from "@/animation";
-import type { ElementAnimations } from "@/animation/types";
+import type { ClipAnimations } from "@/animation/types";
 import { buildDefaultParamValues } from "@/params/registry";
 import type { ParamValues } from "@/params";
 import { graphicsRegistry } from "./registry";
@@ -73,27 +73,27 @@ export function resolveGraphicParams({
 	};
 }
 
-export function resolveGraphicElementParamsAtTime({
-	element,
+export function resolveGraphicClipParamsAtTime({
+	clip,
 	localTime,
 }: {
-	element: {
+	clip: {
 		definitionId: string;
 		params: ParamValues;
-		animations?: ElementAnimations;
+		animations?: ClipAnimations;
 	};
 	localTime: number;
 }): ParamValues {
 	const definition = getGraphicDefinition({
-		definitionId: element.definitionId,
+		definitionId: clip.definitionId,
 	});
 	return resolveGraphicParamsAtTime({
 		params: resolveGraphicParams({
 			definition,
-			params: element.params,
+			params: clip.params,
 		}),
 		definitions: definition.params,
-		animations: element.animations,
+		animations: clip.animations,
 		localTime,
 	});
 }

@@ -1,18 +1,18 @@
 import type { ReactNode } from "react";
 import type {
-	EffectElement,
-	GraphicElement,
-	ImageElement,
-	MaskableElement,
-	RetimableElement,
-	StickerElement,
-	TextElement,
-	VisualElement,
-	VideoElement,
-	AudioElement,
-	TimelineElement,
+	EffectClip,
+	GraphicClip,
+	ImageClip,
+	MaskableClip,
+	RetimableClip,
+	StickerClip,
+	TextClip,
+	VisualClip,
+	VideoClip,
+	AudioClip,
+	TimelineClip,
 } from "@/timeline";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	TextFontIcon,
@@ -22,7 +22,7 @@ import {
 	MagicWand05Icon,
 	DashboardSpeed02Icon,
 } from "@hugeicons/core-free-icons";
-import { ElementParamsTab } from "./components/element-params-tab";
+import { ClipParamsTab } from "./components/clip-params-tab";
 import { ClipEffectsTab, StandaloneEffectTab } from "@/effects/components/effects-tab";
 import { MasksTab } from "@/masks/components/masks-tab";
 import { SpeedTab } from "@/speed/components/speed-tab";
@@ -70,23 +70,23 @@ export type PropertiesTabDef = {
 	content: (props: TabContentProps) => ReactNode;
 };
 
-export type ElementPropertiesConfig = {
+export type ClipPropertiesConfig = {
 	defaultTab: string;
 	tabs: PropertiesTabDef[];
 };
 
 function buildTransformTab({
-	element,
+	clip,
 }: {
-	element: VisualElement;
+	clip: VisualClip;
 }): PropertiesTabDef {
 	return {
 		id: "transform",
 		label: "Transform",
 		icon: <HugeiconsIcon icon={ArrowExpandIcon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
+			<ClipParamsTab
+				clip={clip}
 				trackId={trackId}
 				paramKeys={TRANSFORM_PARAM_KEYS}
 				sectionKey="transform"
@@ -96,17 +96,17 @@ function buildTransformTab({
 }
 
 function buildBlendingTab({
-	element,
+	clip,
 }: {
-	element: VisualElement;
+	clip: VisualClip;
 }): PropertiesTabDef {
 	return {
 		id: "blending",
 		label: "Blending",
 		icon: <HugeiconsIcon icon={RainDropIcon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
+			<ClipParamsTab
+				clip={clip}
 				trackId={trackId}
 				paramKeys={BLENDING_PARAM_KEYS}
 				sectionKey="blending"
@@ -116,17 +116,17 @@ function buildBlendingTab({
 }
 
 function buildAudioTab({
-	element,
+	clip,
 }: {
-	element: AudioElement | VideoElement;
+	clip: AudioClip | VideoClip;
 }): PropertiesTabDef {
 	return {
 		id: "audio",
 		label: "Audio",
 		icon: <HugeiconsIcon icon={MusicNote03Icon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
+			<ClipParamsTab
+				clip={clip}
 				trackId={trackId}
 				paramKeys={AUDIO_PARAM_KEYS}
 				sectionKey="audio"
@@ -136,54 +136,54 @@ function buildAudioTab({
 }
 
 function buildSpeedTab({
-	element,
+	clip,
 }: {
-	element: RetimableElement;
+	clip: RetimableClip;
 }): PropertiesTabDef {
 	return {
 		id: "speed",
 		label: "Speed",
 		icon: <HugeiconsIcon icon={DashboardSpeed02Icon} size={16} />,
-		content: ({ trackId }) => <SpeedTab element={element} trackId={trackId} />,
+		content: ({ trackId }) => <SpeedTab clip={clip} trackId={trackId} />,
 	};
 }
 
 function buildMasksTab({
-	element,
+	clip,
 }: {
-	element: MaskableElement;
+	clip: MaskableClip;
 }): PropertiesTabDef {
 	return {
 		id: "masks",
 		label: "Masks",
 		icon: <OcShapesIcon size={16} />,
-		content: ({ trackId }) => <MasksTab element={element} trackId={trackId} />,
+		content: ({ trackId }) => <MasksTab clip={clip} trackId={trackId} />,
 	};
 }
 
 function buildClipEffectsTab({
-	element,
+	clip,
 }: {
-	element: VisualElement;
+	clip: VisualClip;
 }): PropertiesTabDef {
 	return {
 		id: "effects",
 		label: "Effects",
 		icon: <HugeiconsIcon icon={MagicWand05Icon} size={16} />,
 		content: ({ trackId }) => (
-			<ClipEffectsTab element={element} trackId={trackId} />
+			<ClipEffectsTab clip={clip} trackId={trackId} />
 		),
 	};
 }
 
-function buildTextTab({ element }: { element: TextElement }): PropertiesTabDef {
+function buildTextTab({ clip }: { clip: TextClip }): PropertiesTabDef {
 	return {
 		id: "text",
 		label: "Text",
 		icon: <HugeiconsIcon icon={TextFontIcon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
+			<ClipParamsTab
+				clip={clip}
 				trackId={trackId}
 				paramKeys={TEXT_PARAM_KEYS}
 				sectionKey="text"
@@ -193,162 +193,162 @@ function buildTextTab({ element }: { element: TextElement }): PropertiesTabDef {
 }
 
 function buildGraphicTab({
-	element,
+	clip,
 }: {
-	element: GraphicElement;
+	clip: GraphicClip;
 }): PropertiesTabDef {
 	return {
 		id: "graphic",
 		label: "Graphic",
 		icon: <OcShapesIcon size={16} />,
-		content: ({ trackId }) => <GraphicTab element={element} trackId={trackId} />,
+		content: ({ trackId }) => <GraphicTab clip={clip} trackId={trackId} />,
 	};
 }
 
 function buildStandaloneEffectTab({
-	element,
+	clip,
 }: {
-	element: EffectElement;
+	clip: EffectClip;
 }): PropertiesTabDef {
 	return {
 		id: "effects",
 		label: "Effects",
 		icon: <HugeiconsIcon icon={MagicWand05Icon} size={16} />,
 		content: ({ trackId }) => (
-			<StandaloneEffectTab element={element} trackId={trackId} />
+			<StandaloneEffectTab clip={clip} trackId={trackId} />
 		),
 	};
 }
 
 function getTextConfig({
-	element,
+	clip,
 }: {
-	element: TextElement;
-}): ElementPropertiesConfig {
+	clip: TextClip;
+}): ClipPropertiesConfig {
 	return {
 		defaultTab: "text",
 		tabs: [
-			buildTextTab({ element }),
-			buildTransformTab({ element }),
-			buildBlendingTab({ element }),
+			buildTextTab({ clip }),
+			buildTransformTab({ clip }),
+			buildBlendingTab({ clip }),
 		],
 	};
 }
 
 function getVideoConfig({
-	element,
-	mediaAsset,
+	clip,
+	projectItem,
 }: {
-	element: VideoElement;
-	mediaAsset: MediaAsset | undefined;
-}): ElementPropertiesConfig {
-	const showAudioTab = mediaAsset?.hasAudio !== false;
+	clip: VideoClip;
+	projectItem: ProjectItem | undefined;
+}): ClipPropertiesConfig {
+	const showAudioTab = projectItem?.hasAudio !== false;
 	return {
 		defaultTab: "transform",
 		tabs: [
-			buildTransformTab({ element }),
-			...(showAudioTab ? [buildAudioTab({ element })] : []),
-			buildSpeedTab({ element }),
-			buildBlendingTab({ element }),
-			buildMasksTab({ element }),
-			buildClipEffectsTab({ element }),
+			buildTransformTab({ clip }),
+			...(showAudioTab ? [buildAudioTab({ clip })] : []),
+			buildSpeedTab({ clip }),
+			buildBlendingTab({ clip }),
+			buildMasksTab({ clip }),
+			buildClipEffectsTab({ clip }),
 		],
 	};
 }
 
 function getImageConfig({
-	element,
+	clip,
 }: {
-	element: ImageElement;
-}): ElementPropertiesConfig {
+	clip: ImageClip;
+}): ClipPropertiesConfig {
 	return {
 		defaultTab: "transform",
 		tabs: [
-			buildTransformTab({ element }),
-			buildBlendingTab({ element }),
-			buildMasksTab({ element }),
-			buildClipEffectsTab({ element }),
+			buildTransformTab({ clip }),
+			buildBlendingTab({ clip }),
+			buildMasksTab({ clip }),
+			buildClipEffectsTab({ clip }),
 		],
 	};
 }
 
 function getStickerConfig({
-	element,
+	clip,
 }: {
-	element: StickerElement;
-}): ElementPropertiesConfig {
+	clip: StickerClip;
+}): ClipPropertiesConfig {
 	return {
 		defaultTab: "transform",
 		tabs: [
-			buildTransformTab({ element }),
-			buildBlendingTab({ element }),
-			buildClipEffectsTab({ element }),
+			buildTransformTab({ clip }),
+			buildBlendingTab({ clip }),
+			buildClipEffectsTab({ clip }),
 		],
 	};
 }
 
 function getGraphicConfig({
-	element,
+	clip,
 }: {
-	element: GraphicElement;
-}): ElementPropertiesConfig {
+	clip: GraphicClip;
+}): ClipPropertiesConfig {
 	return {
 		defaultTab: "graphic",
 		tabs: [
-			buildGraphicTab({ element }),
-			buildTransformTab({ element }),
-			buildBlendingTab({ element }),
-			buildMasksTab({ element }),
-			buildClipEffectsTab({ element }),
+			buildGraphicTab({ clip }),
+			buildTransformTab({ clip }),
+			buildBlendingTab({ clip }),
+			buildMasksTab({ clip }),
+			buildClipEffectsTab({ clip }),
 		],
 	};
 }
 
 function getAudioConfig({
-	element,
+	clip,
 }: {
-	element: AudioElement;
-}): ElementPropertiesConfig {
+	clip: AudioClip;
+}): ClipPropertiesConfig {
 	return {
 		defaultTab: "audio",
-		tabs: [buildAudioTab({ element }), buildSpeedTab({ element })],
+		tabs: [buildAudioTab({ clip }), buildSpeedTab({ clip })],
 	};
 }
 
 function getEffectConfig({
-	element,
+	clip,
 }: {
-	element: EffectElement;
-}): ElementPropertiesConfig {
+	clip: EffectClip;
+}): ClipPropertiesConfig {
 	return {
 		defaultTab: "effects",
-		tabs: [buildStandaloneEffectTab({ element })],
+		tabs: [buildStandaloneEffectTab({ clip })],
 	};
 }
 
 export function getPropertiesConfig({
-	element,
-	mediaAssets,
+	clip,
+	projectItems,
 }: {
-	element: TimelineElement;
-	mediaAssets: MediaAsset[];
-}): ElementPropertiesConfig {
-	switch (element.type) {
+	clip: TimelineClip;
+	projectItems: ProjectItem[];
+}): ClipPropertiesConfig {
+	switch (clip.type) {
 		case "text":
-			return getTextConfig({ element });
+			return getTextConfig({ clip });
 		case "video": {
-			const mediaAsset = mediaAssets.find((a) => a.id === element.mediaId);
-			return getVideoConfig({ element, mediaAsset });
+			const projectItem = projectItems.find((a) => a.id === clip.mediaId);
+			return getVideoConfig({ clip, projectItem });
 		}
 		case "image":
-			return getImageConfig({ element });
+			return getImageConfig({ clip });
 		case "sticker":
-			return getStickerConfig({ element });
+			return getStickerConfig({ clip });
 		case "graphic":
-			return getGraphicConfig({ element });
+			return getGraphicConfig({ clip });
 		case "audio":
-			return getAudioConfig({ element });
+			return getAudioConfig({ clip });
 		case "effect":
-			return getEffectConfig({ element });
+			return getEffectConfig({ clip });
 	}
 }

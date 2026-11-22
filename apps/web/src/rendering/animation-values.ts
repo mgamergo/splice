@@ -1,4 +1,4 @@
-import type { ElementAnimations } from "@/animation/types";
+import type { ClipAnimations } from "@/animation/types";
 import { resolveAnimationPathValueAtTime } from "@/animation";
 import type { Transform } from "./index";
 
@@ -8,7 +8,7 @@ export function resolveTransformAtTime({
 	localTime,
 }: {
 	baseTransform: Transform;
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	localTime: number;
 }): Transform {
 	const safeLocalTime = Math.max(0, localTime);

@@ -62,7 +62,7 @@ export interface CurveHandle {
 
 interface BaseAnimationKeyframe<TValue extends ParamValue> {
 	id: string;
-	time: MediaTime; // relative to element start time
+	time: MediaTime; // relative to clip start time
 	value: TValue;
 }
 
@@ -108,7 +108,7 @@ export type AnimationChannel = Channel;
 export type CompositeChannelData = Record<string, AnimationChannel | undefined>;
 export type ChannelData = AnimationChannel | CompositeChannelData;
 
-export interface ElementAnimations {
+export interface ClipAnimations {
 	[propertyPath: AnimationPath]: ChannelData | undefined;
 }
 
@@ -141,7 +141,7 @@ export interface ScalarCurveKeyframePatch {
 	tangentMode?: TangentMode;
 }
 
-export interface ElementKeyframe {
+export interface ClipKeyframe {
 	propertyPath: AnimationPath;
 	id: string;
 	time: MediaTime;
@@ -151,7 +151,7 @@ export interface ElementKeyframe {
 
 export interface SelectedKeyframeRef {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 	propertyPath: AnimationPath;
 	keyframeId: string;
 }

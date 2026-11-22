@@ -1,11 +1,11 @@
 import {
 	Command,
-	createElementSelectionResult,
+	createClipSelectionResult,
 	type CommandResult,
 } from "@/commands/base-command";
 import { EditorCore } from "@/core";
-import type { SceneTracks, TimelineElement } from "@/timeline";
-import type { ElementClipboardItem } from "@/clipboard";
+import type { SequenceTracks, TimelineClip } from "@/timeline";
+import type { ClipClipboardItem } from "@/clipboard";
 import { generateUUID } from "@/utils/id";
 import {
 	applyPlacement,
@@ -22,17 +22,17 @@ import {
 } from "@/wasm";
 
 export class PasteCommand extends Command {
-	private savedState: SceneTracks | null = null;
-	private pastedElements: { trackId: string; elementId: string }[] = [];
+	private savedState: SequenceTracks | null = null;
+	private pastedClips: { trackId: string; clipId: string }[] = [];
 	private readonly time: MediaTime;
-	private readonly clipboardItems: ElementClipboardItem[];
+	private readonly clipboardItems: ClipClipboardItem[];
 
 	constructor({
 		time,
 		clipboardItems,
 	}: {
 		time: MediaTime;
-		clipboardItems: ElementClipboardItem[];
+		clipboardItems: ClipClipboardItem[];
 	}) {
 		super();
 		this.time = time;
@@ -43,15 +43,15 @@ export class PasteCommand extends Command {
 		if (this.clipboardItems.length === 0) return undefined;
 
 		const editor = EditorCore.getInstance();
-		this.savedState = editor.scenes.getActiveScene().tracks;
-		this.pastedElements = [];
+		this.savedState = editor.sequences.getActiveSequence().tracks;
+		this.pastedClips = [];
 
 		const minStart = this.clipboardItems.reduce(
 			(earliestStartTime, item) =>
-				item.element.startTime < earliestStartTime
-					? item.element.startTime
+				item.clip.startTime < earliestStartTime
+					? item.clip.startTime
 					: earliestStartTime,
-			this.clipboardItems[0].element.startTime,
+			this.clipboardItems[0].clip.startTime,
 		);
 
 		let updatedTracks = this.savedState;
@@ -60,13 +60,13 @@ export class PasteCommand extends Command {
 		});
 
 		for (const [trackId, items] of itemsByTrackId) {
-			const elementsToAdd = buildPastedElements({
+			const clipsToAdd = buildPastedClips({
 				items,
 				minStart,
 				time: this.time,
 			});
 
-			if (elementsToAdd.length === 0) {
+			if (clipsToAdd.length === 0) {
 				continue;
 			}
 
@@ -79,9 +79,9 @@ export class PasteCommand extends Command {
 			const placementResult = resolveTrackPlacement({
 				tracks: updatedTracks,
 				trackType,
-				timeSpans: elementsToAdd.map((element) => ({
-					startTime: element.startTime,
-					duration: element.duration,
+				timeSpans: clipsToAdd.map((clip) => ({
+					startTime: clip.startTime,
+					duration: clip.duration,
 				})),
 				strategy: { type: "aboveSource", sourceTrackIndex },
 			});
@@ -89,7 +89,7 @@ export class PasteCommand extends Command {
 				continue;
 			}
 
-			let elementsForPlacement = elementsToAdd;
+			let clipsForPlacement = clipsToAdd;
 			if (placementResult.kind === "existingTrack") {
 				const targetTrack =
 					placementResult.trackIndex < updatedTracks.overlay.length
@@ -100,25 +100,25 @@ export class PasteCommand extends Command {
 									placementResult.trackIndex - updatedTracks.overlay.length - 1
 								];
 				if (targetTrack?.id === updatedTracks.main.id) {
-					const earliestElement = elementsToAdd.reduce((earliest, element) =>
-						element.startTime < earliest.startTime ? element : earliest,
+					const earliestClip = clipsToAdd.reduce((earliest, clip) =>
+						clip.startTime < earliest.startTime ? clip : earliest,
 					);
 					const adjustedEarliestStartTime = enforceMainTrackStart({
 						tracks: updatedTracks,
 						targetTrackId: targetTrack.id,
-						requestedStartTime: earliestElement.startTime,
+						requestedStartTime: earliestClip.startTime,
 					});
 					const delta = subMediaTime({
 						a: adjustedEarliestStartTime,
-						b: earliestElement.startTime,
+						b: earliestClip.startTime,
 					});
 
 					if (delta !== ZERO_MEDIA_TIME) {
-						elementsForPlacement = elementsToAdd.map((element) => ({
-							...element,
+						clipsForPlacement = clipsToAdd.map((clip) => ({
+							...clip,
 							startTime: maxMediaTime({
 								a: ZERO_MEDIA_TIME,
-								b: addMediaTime({ a: element.startTime, b: delta }),
+								b: addMediaTime({ a: clip.startTime, b: delta }),
 							}),
 						}));
 					}
@@ -128,7 +128,7 @@ export class PasteCommand extends Command {
 			const applied = applyPlacement({
 				tracks: updatedTracks,
 				placementResult,
-				elements: elementsForPlacement,
+				clips: clipsForPlacement,
 			});
 			if (!applied) {
 				continue;
@@ -136,18 +136,18 @@ export class PasteCommand extends Command {
 
 			updatedTracks = applied.updatedTracks;
 
-			for (const element of elementsForPlacement) {
-				this.pastedElements.push({
+			for (const clip of clipsForPlacement) {
+				this.pastedClips.push({
 					trackId: applied.targetTrackId,
-					elementId: element.id,
+					clipId: clip.id,
 				});
 			}
 		}
 
 		editor.timeline.updateTracks(updatedTracks);
 
-		if (this.pastedElements.length > 0) {
-			return createElementSelectionResult(this.pastedElements);
+		if (this.pastedClips.length > 0) {
+			return createClipSelectionResult(this.pastedClips);
 		}
 		return undefined;
 	}
@@ -159,17 +159,17 @@ export class PasteCommand extends Command {
 		}
 	}
 
-	getPastedElements(): { trackId: string; elementId: string }[] {
-		return this.pastedElements;
+	getPastedClips(): { trackId: string; clipId: string }[] {
+		return this.pastedClips;
 	}
 }
 
 function groupClipboardItemsByTrackId({
 	clipboardItems,
 }: {
-	clipboardItems: ElementClipboardItem[];
-}): Map<string, ElementClipboardItem[]> {
-	const groupedItems = new Map<string, ElementClipboardItem[]>();
+	clipboardItems: ClipClipboardItem[];
+}): Map<string, ClipClipboardItem[]> {
+	const groupedItems = new Map<string, ClipClipboardItem[]>();
 
 	for (const item of clipboardItems) {
 		const existingItems = groupedItems.get(item.trackId) ?? [];
@@ -179,38 +179,38 @@ function groupClipboardItemsByTrackId({
 	return groupedItems;
 }
 
-function buildPastedElements({
+function buildPastedClips({
 	items,
 	minStart,
 	time,
 }: {
-	items: ElementClipboardItem[];
+	items: ClipClipboardItem[];
 	minStart: MediaTime;
 	time: MediaTime;
-}): TimelineElement[] {
-	const elementsToAdd: TimelineElement[] = [];
+}): TimelineClip[] {
+	const clipsToAdd: TimelineClip[] = [];
 
 	for (const item of items) {
 		const relativeOffset = subMediaTime({
-			a: item.element.startTime,
+			a: item.clip.startTime,
 			b: minStart,
 		});
 		const startTime = maxMediaTime({
 			a: ZERO_MEDIA_TIME,
 			b: addMediaTime({ a: time, b: relativeOffset }),
 		});
-		const newElementId = generateUUID();
+		const newClipId = generateUUID();
 
-		elementsToAdd.push({
-			...item.element,
-			id: newElementId,
+		clipsToAdd.push({
+			...item.clip,
+			id: newClipId,
 			startTime,
 			animations: cloneAnimations({
-				animations: item.element.animations,
+				animations: item.clip.animations,
 				shouldRegenerateKeyframeIds: true,
 			}),
-		} as TimelineElement);
+		} as TimelineClip);
 	}
 
-	return elementsToAdd;
+	return clipsToAdd;
 }

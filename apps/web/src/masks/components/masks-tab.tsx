@@ -1,6 +1,6 @@
 "use client";
 
-import type { MaskableElement } from "@/timeline";
+import type { MaskableClip } from "@/timeline";
 import type { Mask, MaskType, TextMask } from "@/masks/types";
 import type { NumberParamDefinition, SelectParamDefinition } from "@/params";
 import {
@@ -9,9 +9,9 @@ import {
 	getMaskDefinitionsForMenu,
 } from "@/masks";
 import { useEditor } from "@/editor/use-editor";
-import { useElementPreview } from "@/timeline/hooks/use-element-preview";
+import { useClipPreview } from "@/timeline/hooks/use-clip-preview";
 import { useMenuPreview } from "@/editor/use-menu-preview";
-import { getVisibleElementsWithBounds } from "@/preview/element-bounds";
+import { getVisibleClipsWithBounds } from "@/preview/clip-bounds";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	ArrowExpandIcon,
@@ -69,13 +69,13 @@ import {
 import { cn } from "@/utils/ui";
 
 type MasksTabProps = {
-	element: MaskableElement;
+	clip: MaskableClip;
 	trackId: string;
 };
 
 type MaskItemProps = {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 	mask: Mask;
 	previewParam: (key: string) => (value: number | string | boolean) => void;
 	onCommit: () => void;
@@ -126,51 +126,51 @@ function withPreviewedMaskParam({
 	}
 }
 
-export function MasksTab({ element, trackId }: MasksTabProps) {
+export function MasksTab({ clip, trackId }: MasksTabProps) {
 	const editor = useEditor();
-	const { renderElement, previewUpdates, commit } =
-		useElementPreview<MaskableElement>({
+	const { renderClip, previewUpdates, commit } =
+		useClipPreview<MaskableClip>({
 			trackId,
-			elementId: element.id,
-			fallback: element,
+			clipId: clip.id,
+			fallback: clip,
 		});
 	const maskDefs = getMaskDefinitionsForMenu();
 	const tracks = useEditor(
-		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
+		(e) => e.timeline.getPreviewTracks() ?? e.sequences.getActiveSequence().tracks,
 	);
 	const currentTime = useEditor((e) => e.playback.getCurrentTime());
-	const mediaAssets = useEditor((e) => e.media.getAssets());
+	const projectItems = useEditor((e) => e.media.getProjectItems());
 	const canvasSize = useEditor(
 		(e) => e.project.getActive().settings.canvasSize,
 	);
-	const masks = element.masks ?? [];
-	const renderMasks = renderElement.masks ?? masks;
+	const masks = clip.masks ?? [];
+	const renderMasks = renderClip.masks ?? masks;
 	const hasMask = masks.length > 0;
 	const { onPointerLeave, onOpenChange, markCommitted } = useMenuPreview();
 	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-	const elementBounds = useMemo(() => {
+	const clipBounds = useMemo(() => {
 		const clampedTime = Math.min(
-			Math.max(currentTime, element.startTime),
-			element.startTime + element.duration - 1,
+			Math.max(currentTime, clip.startTime),
+			clip.startTime + clip.duration - 1,
 		);
 
 		return (
-			getVisibleElementsWithBounds({
+			getVisibleClipsWithBounds({
 				tracks,
 				currentTime: clampedTime,
 				canvasSize,
-				mediaAssets,
+				projectItems,
 			}).find(
-				(item) => item.trackId === trackId && item.elementId === element.id,
+				(item) => item.trackId === trackId && item.clipId === clip.id,
 			)?.bounds ?? null
 		);
 	}, [
 		canvasSize,
 		currentTime,
-		element.duration,
-		element.id,
-		element.startTime,
-		mediaAssets,
+		clip.duration,
+		clip.id,
+		clip.startTime,
+		projectItems,
 		trackId,
 		tracks,
 	]);
@@ -182,24 +182,24 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 	};
 
 	const previewMask = ({ maskType }: { maskType: MaskType }) => {
-		editor.timeline.previewElements({
+		editor.timeline.previewClips({
 			updates: [
 				{
 					trackId,
-					elementId: element.id,
+					clipId: clip.id,
 					updates: {
 						masks: [
 							buildDefaultMaskInstance({
 								maskType,
-								elementSize: elementBounds
+								clipSize: clipBounds
 									? {
-											width: elementBounds.width,
-											height: elementBounds.height,
+											width: clipBounds.width,
+											height: clipBounds.height,
 										}
 									: undefined,
 							}),
 						],
-					} as Partial<MaskableElement>,
+					} as Partial<MaskableClip>,
 				},
 			],
 		});
@@ -209,24 +209,24 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 		if (editor.timeline.isPreviewActive()) {
 			editor.timeline.commitPreview();
 		} else {
-			editor.timeline.updateElements({
+			editor.timeline.updateClips({
 				updates: [
 					{
 						trackId,
-						elementId: element.id,
+						clipId: clip.id,
 						patch: {
 							masks: [
 								buildDefaultMaskInstance({
 									maskType,
-									elementSize: elementBounds
+									clipSize: clipBounds
 										? {
-												width: elementBounds.width,
-												height: elementBounds.height,
+												width: clipBounds.width,
+												height: clipBounds.height,
 											}
 										: undefined,
 								}),
 							],
-						} as Partial<MaskableElement>,
+						} as Partial<MaskableClip>,
 					},
 				],
 			});
@@ -309,7 +309,7 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 					<MaskItem
 						key={mask.id}
 						trackId={trackId}
-						elementId={element.id}
+						clipId={clip.id}
 						mask={renderMasks[index] ?? mask}
 						previewParam={(paramKey) =>
 							previewMaskParam({ index, key: paramKey })
@@ -324,7 +324,7 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 
 function MaskItem({
 	trackId,
-	elementId,
+	clipId,
 	mask,
 	previewParam,
 	onCommit,
@@ -344,7 +344,7 @@ function MaskItem({
 							onClick={() =>
 								editor.timeline.toggleMaskInverted({
 									trackId,
-									elementId,
+									clipId,
 									maskId: mask.id,
 								})
 							}
@@ -360,7 +360,7 @@ function MaskItem({
 							onClick={() =>
 								editor.timeline.removeMask({
 									trackId,
-									elementId,
+									clipId,
 									maskId: mask.id,
 								})
 							}

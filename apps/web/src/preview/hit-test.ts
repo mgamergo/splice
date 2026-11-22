@@ -1,5 +1,5 @@
-import type { ElementWithBounds } from "./element-bounds";
-import type { ElementRef } from "@/timeline/types";
+import type { ClipWithBounds } from "./clip-bounds";
+import type { ClipRef } from "@/timeline/types";
 
 function pointInRotatedRect({
 	px,
@@ -32,19 +32,19 @@ function pointInRotatedRect({
 	);
 }
 
-export function getHitElements({
+export function getHitClips({
 	canvasX,
 	canvasY,
-	elementsWithBounds,
+	clipsWithBounds,
 }: {
 	canvasX: number;
 	canvasY: number;
-	elementsWithBounds: ElementWithBounds[];
-}): ElementWithBounds[] {
-	const hits: ElementWithBounds[] = [];
+	clipsWithBounds: ClipWithBounds[];
+}): ClipWithBounds[] {
+	const hits: ClipWithBounds[] = [];
 
-	for (let i = elementsWithBounds.length - 1; i >= 0; i--) {
-		const { bounds } = elementsWithBounds[i];
+	for (let i = clipsWithBounds.length - 1; i >= 0; i--) {
+		const { bounds } = clipsWithBounds[i];
 		if (
 			pointInRotatedRect({
 				px: canvasX,
@@ -56,7 +56,7 @@ export function getHitElements({
 				rotation: bounds.rotation,
 			})
 		) {
-			hits.push(elementsWithBounds[i]);
+			hits.push(clipsWithBounds[i]);
 		}
 	}
 
@@ -66,36 +66,36 @@ export function getHitElements({
 export function hitTest({
 	canvasX,
 	canvasY,
-	elementsWithBounds,
+	clipsWithBounds,
 }: {
 	canvasX: number;
 	canvasY: number;
-	elementsWithBounds: ElementWithBounds[];
-}): ElementWithBounds | null {
+	clipsWithBounds: ClipWithBounds[];
+}): ClipWithBounds | null {
 	return (
-		getHitElements({
+		getHitClips({
 			canvasX,
 			canvasY,
-			elementsWithBounds,
+			clipsWithBounds,
 		})[0] ?? null
 	);
 }
 
 export function resolvePreferredHit({
 	hits,
-	preferredElements,
+	preferredClips,
 }: {
-	hits: ElementWithBounds[];
-	preferredElements: ElementRef[];
-}): ElementWithBounds | null {
-	if (preferredElements.length === 0) return null;
+	hits: ClipWithBounds[];
+	preferredClips: ClipRef[];
+}): ClipWithBounds | null {
+	if (preferredClips.length === 0) return null;
 
 	return (
 		hits.find((hit) =>
-			preferredElements.some(
-				(preferredElement) =>
-					preferredElement.trackId === hit.trackId &&
-					preferredElement.elementId === hit.elementId,
+			preferredClips.some(
+				(preferredClip) =>
+					preferredClip.trackId === hit.trackId &&
+					preferredClip.clipId === hit.clipId,
 			),
 		) ?? null
 	);

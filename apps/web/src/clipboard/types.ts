@@ -8,16 +8,16 @@ import type {
 import type { ParamValue } from "@/params";
 import type { Command } from "@/commands/base-command";
 import type {
-	CreateTimelineElement,
-	ElementRef,
+	CreateTimelineClip,
+	ClipRef,
 	TrackType,
 } from "@/timeline";
 import type { MediaTime } from "@/wasm";
 
-export interface ElementClipboardItem {
+export interface ClipClipboardItem {
 	trackId: string;
 	trackType: TrackType;
-	element: CreateTimelineElement;
+	clip: CreateTimelineClip;
 }
 
 export interface KeyframeClipboardCurvePatch {
@@ -33,19 +33,19 @@ export interface KeyframeClipboardItem {
 	curvePatches: KeyframeClipboardCurvePatch[];
 }
 
-export interface ElementsClipboardEntry {
-	type: "elements";
-	items: ElementClipboardItem[];
+export interface ClipsClipboardEntry {
+	type: "clips";
+	items: ClipClipboardItem[];
 }
 
 export interface KeyframesClipboardEntry {
 	type: "keyframes";
-	sourceElement: ElementRef;
+	sourceClip: ClipRef;
 	items: KeyframeClipboardItem[];
 }
 
 export interface ClipboardEntryByType {
-	elements: ElementsClipboardEntry;
+	clips: ClipsClipboardEntry;
 	keyframes: KeyframesClipboardEntry;
 }
 
@@ -54,13 +54,13 @@ export type ClipboardEntryType = keyof ClipboardEntryByType;
 
 export interface CopyContext {
 	editor: EditorCore;
-	selectedElements: ElementRef[];
+	selectedClips: ClipRef[];
 	selectedKeyframes: SelectedKeyframeRef[];
 }
 
 export interface PasteContext {
 	editor: EditorCore;
-	selectedElements: ElementRef[];
+	selectedClips: ClipRef[];
 	selectedKeyframes: SelectedKeyframeRef[];
 	time: MediaTime;
 }

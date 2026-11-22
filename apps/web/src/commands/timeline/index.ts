@@ -1,5 +1,5 @@
 export * from "./track";
-export * from "./element";
+export * from "./clip";
 export * from "./clipboard";
 
 export { TracksSnapshotCommand } from "./tracks-snapshot";

@@ -1,36 +1,36 @@
 "use client";
 
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
-import { TimelineElement } from "./timeline-element";
+import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
+import { TimelineClip } from "./timeline-clip";
 import type { TimelineTrack } from "@/timeline";
-import type { TimelineElement as TimelineElementType } from "@/timeline";
+import type { TimelineClip as TimelineClipType } from "@/timeline";
 import { TIMELINE_LAYERS } from "./layers";
-import type { ElementDragView } from "@/timeline";
+import type { ClipDragView } from "@/timeline";
 
 interface TimelineTrackContentProps {
 	track: TimelineTrack;
 	zoomLevel: number;
-	dragView: ElementDragView;
+	dragView: ClipDragView;
 	onResizeStart: (params: {
 		event: React.MouseEvent;
-		element: TimelineElementType;
+		clip: TimelineClipType;
 		track: TimelineTrack;
 		side: "left" | "right";
 	}) => void;
-	onElementMouseDown: (params: {
+	onClipMouseDown: (params: {
 		event: React.MouseEvent;
-		element: TimelineElementType;
+		clip: TimelineClipType;
 		track: TimelineTrack;
 	}) => void;
-	onElementClick: (params: {
+	onClipClick: (params: {
 		event: React.MouseEvent;
-		element: TimelineElementType;
+		clip: TimelineClipType;
 		track: TimelineTrack;
 	}) => void;
 	onTrackMouseDown?: (event: React.MouseEvent) => void;
 	onTrackMouseUp?: (event: React.MouseEvent) => void;
 	shouldIgnoreClick?: () => boolean;
-	targetElementId?: string | null;
+	targetClipId?: string | null;
 }
 
 export function TimelineTrackContent({
@@ -38,14 +38,14 @@ export function TimelineTrackContent({
 	zoomLevel,
 	dragView,
 	onResizeStart,
-	onElementMouseDown,
-	onElementClick,
+	onClipMouseDown,
+	onClipClick,
 	onTrackMouseDown,
 	onTrackMouseUp,
 	shouldIgnoreClick,
-	targetElementId = null,
+	targetClipId = null,
 }: TimelineTrackContentProps) {
-	const { isElementSelected } = useElementSelection();
+	const { isClipSelected } = useClipSelection();
 
 	return (
 		<div className="relative size-full">
@@ -77,33 +77,33 @@ export function TimelineTrackContent({
 					onTrackMouseDown?.(event);
 				}}
 			>
-				{track.elements.length === 0 ? (
+				{track.clips.length === 0 ? (
 					<div className="text-muted-foreground border-muted/30 pointer-events-none flex size-full items-center justify-center rounded-sm border-2 border-dashed text-xs" />
 				) : (
-					track.elements.map((element) => {
-						const isSelected = isElementSelected({
+					track.clips.map((clip) => {
+						const isSelected = isClipSelected({
 							trackId: track.id,
-							elementId: element.id,
+							clipId: clip.id,
 						});
 
 						return (
-							<TimelineElement
-								key={element.id}
-								element={element}
+							<TimelineClip
+								key={clip.id}
+								clip={clip}
 								track={track}
 								zoomLevel={zoomLevel}
 								isSelected={isSelected}
-								onResizeStart={({ event, element, side }) =>
-									onResizeStart({ event, element, track, side })
+								onResizeStart={({ event, clip, side }) =>
+									onResizeStart({ event, clip, track, side })
 								}
-								onElementMouseDown={({ event, element }) =>
-									onElementMouseDown({ event, element, track })
+								onClipMouseDown={({ event, clip }) =>
+									onClipMouseDown({ event, clip, track })
 								}
-								onElementClick={({ event, element }) =>
-									onElementClick({ event, element, track })
+								onClipClick={({ event, clip }) =>
+									onClipClick({ event, clip, track })
 								}
 								dragView={dragView}
-								isDropTarget={element.id === targetElementId}
+								isDropTarget={clip.id === targetClipId}
 							/>
 						);
 					})

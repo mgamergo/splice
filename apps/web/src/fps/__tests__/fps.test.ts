@@ -8,7 +8,7 @@ describe("getHighestImportedVideoFps", () => {
 	test("returns the highest valid video fps", () => {
 		expect(
 			getHighestImportedVideoFps({
-				mediaAssets: [
+				projectItems: [
 					{ type: "audio" },
 					{ type: "video", fps: 30 },
 					{ type: "image", fps: 120 },
@@ -21,7 +21,7 @@ describe("getHighestImportedVideoFps", () => {
 	test("ignores missing and invalid fps values", () => {
 		expect(
 			getHighestImportedVideoFps({
-				mediaAssets: [
+				projectItems: [
 					{ type: "video" },
 					{ type: "video", fps: 0 },
 					{ type: "video", fps: -10 },
@@ -37,7 +37,7 @@ describe("getRaisedProjectFpsForImportedMedia", () => {
 		expect(
 			getRaisedProjectFpsForImportedMedia({
 				currentFps: { numerator: 30, denominator: 1 },
-				importedAssets: [{ type: "video", fps: 60 }],
+				importedProjectItems: [{ type: "video", fps: 60 }],
 			}),
 		).toEqual({ numerator: 60, denominator: 1 });
 	});
@@ -46,7 +46,7 @@ describe("getRaisedProjectFpsForImportedMedia", () => {
 		expect(
 			getRaisedProjectFpsForImportedMedia({
 				currentFps: { numerator: 60, denominator: 1 },
-				importedAssets: [{ type: "video", fps: 10 }],
+				importedProjectItems: [{ type: "video", fps: 10 }],
 			}),
 		).toBeNull();
 	});
@@ -55,7 +55,7 @@ describe("getRaisedProjectFpsForImportedMedia", () => {
 		expect(
 			getRaisedProjectFpsForImportedMedia({
 				currentFps: { numerator: 30, denominator: 1 },
-				importedAssets: [
+				importedProjectItems: [
 					{ type: "image", fps: 60 },
 					{ type: "audio", fps: 120 },
 				],

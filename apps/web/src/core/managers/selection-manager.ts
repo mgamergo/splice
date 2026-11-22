@@ -6,10 +6,10 @@ import type {
 	EditorSelectionSnapshot,
 	SelectedMaskPointSelection,
 } from "@/selection/editor-selection";
-import type { ElementRef } from "@/timeline/types";
+import type { ClipRef } from "@/timeline/types";
 
 export class SelectionManager {
-	private selectedElements: ElementRef[] = [];
+	private selectedClips: ClipRef[] = [];
 	private selectedKeyframes: SelectedKeyframeRef[] = [];
 	private keyframeSelectionAnchor: SelectedKeyframeRef | null = null;
 	private selectedMaskPoints: SelectedMaskPointSelection | null = null;
@@ -19,8 +19,8 @@ export class SelectionManager {
 		void editor;
 	}
 
-	getSelectedElements(): ElementRef[] {
-		return this.selectedElements;
+	getSelectedClips(): ClipRef[] {
+		return this.selectedClips;
 	}
 
 	getSelectedKeyframes(): SelectedKeyframeRef[] {
@@ -42,15 +42,15 @@ export class SelectionManager {
 		if (this.selectedKeyframes.length > 0) {
 			return "keyframes";
 		}
-		if (this.selectedElements.length > 0) {
-			return "elements";
+		if (this.selectedClips.length > 0) {
+			return "clips";
 		}
 		return null;
 	}
 
 	getSnapshot(): EditorSelectionSnapshot {
 		return {
-			selectedElements: [...this.selectedElements],
+			selectedClips: [...this.selectedClips],
 			selectedKeyframes: [...this.selectedKeyframes],
 			keyframeSelectionAnchor: this.keyframeSelectionAnchor,
 			selectedMaskPoints: this.selectedMaskPoints
@@ -62,8 +62,8 @@ export class SelectionManager {
 		};
 	}
 
-	setSelectedElements({ elements }: { elements: ElementRef[] }): void {
-		this.selectedElements = elements;
+	setSelectedClips({ clips }: { clips: ClipRef[] }): void {
+		this.selectedClips = clips;
 		this.selectedKeyframes = [];
 		this.keyframeSelectionAnchor = null;
 		this.selectedMaskPoints = null;
@@ -105,7 +105,7 @@ export class SelectionManager {
 	}
 
 	clearSelection(): void {
-		this.selectedElements = [];
+		this.selectedClips = [];
 		this.selectedKeyframes = [];
 		this.keyframeSelectionAnchor = null;
 		this.selectedMaskPoints = null;
@@ -136,8 +136,8 @@ export class SelectionManager {
 			this.clearKeyframeSelection();
 			return true;
 		}
-		if (activeSelectionKind === "elements") {
-			this.setSelectedElements({ elements: [] });
+		if (activeSelectionKind === "clips") {
+			this.setSelectedClips({ clips: [] });
 			return true;
 		}
 		return false;
@@ -148,8 +148,8 @@ export class SelectionManager {
 	}: {
 		patch: EditorSelectionPatch;
 	}): EditorSelectionSnapshot {
-		if (patch.selectedElements !== undefined) {
-			this.selectedElements = [...patch.selectedElements];
+		if (patch.selectedClips !== undefined) {
+			this.selectedClips = [...patch.selectedClips];
 		}
 		if (patch.selectedKeyframes !== undefined) {
 			this.selectedKeyframes = [...patch.selectedKeyframes];
@@ -170,7 +170,7 @@ export class SelectionManager {
 	}
 
 	restoreSnapshot({ snapshot }: { snapshot: EditorSelectionSnapshot }): void {
-		this.selectedElements = [...snapshot.selectedElements];
+		this.selectedClips = [...snapshot.selectedClips];
 		this.selectedKeyframes = [...snapshot.selectedKeyframes];
 		this.keyframeSelectionAnchor = snapshot.keyframeSelectionAnchor;
 		this.selectedMaskPoints = snapshot.selectedMaskPoints

@@ -9,13 +9,13 @@ import { getChannelsFromData } from "@/animation/channel-data";
 import { isScalarChannel } from "@/animation/interpolation";
 import type {
 	AnimationPath,
-	ElementAnimations,
+	ClipAnimations,
 	NormalizedCubicBezier,
 	ScalarCurveKeyframePatch,
 	ScalarGraphKeyframeContext,
 	SelectedKeyframeRef,
 } from "@/animation/types";
-import type { SceneTracks, TimelineElement } from "@/timeline";
+import type { SequenceTracks, TimelineClip } from "@/timeline";
 
 const GRAPH_LINEAR_CURVE: NormalizedCubicBezier = [0, 0, 1, 1];
 const FLAT_VALUE_EPSILON = 1e-6;
@@ -24,11 +24,11 @@ const LINEAR_CURVE_EPSILON = 1e-6;
 export type GraphEditorUnavailableReason =
 	| "no-keyframe-selected"
 	| "multiple-keyframes-selected"
-	| "selected-keyframes-span-multiple-elements"
+	| "selected-keyframes-span-multiple-clips"
 	| "selected-keyframes-are-not-adjacent"
 	| "selected-properties-have-no-shared-component"
-	| "selected-element-missing"
-	| "selected-element-has-no-animations"
+	| "selected-clip-missing"
+	| "selected-clip-has-no-animations"
 	| "selected-keyframe-has-no-scalar-channel"
 	| "selected-keyframe-missing-on-channel"
 	| "selected-keyframe-has-no-next-segment"
@@ -71,8 +71,8 @@ export interface GraphEditorUnavailableState
 export interface GraphEditorReadyState extends GraphEditorBaseSelectionState {
 	status: "ready";
 	trackId: string;
-	elementId: string;
-	element: TimelineElement;
+	clipId: string;
+	clip: TimelineClip;
 	segments: GraphEditorResolvedSegment[];
 	cubicBezier: NormalizedCubicBezier;
 }
@@ -106,29 +106,29 @@ function createUnavailableState({
 	};
 }
 
-function findElementByKeyframe({
+function findClipByKeyframe({
 	tracks,
 	keyframe,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	keyframe: SelectedKeyframeRef;
-}): { element: TimelineElement; trackId: string; elementId: string } | null {
+}): { clip: TimelineClip; trackId: string; clipId: string } | null {
 	for (const track of [...tracks.overlay, tracks.main, ...tracks.audio]) {
 		if (track.id !== keyframe.trackId) {
 			continue;
 		}
 
-		const element = track.elements.find(
-			(trackElement) => trackElement.id === keyframe.elementId,
+		const clip = track.clips.find(
+			(trackClip) => trackClip.id === keyframe.clipId,
 		);
-		if (!element) {
+		if (!clip) {
 			return null;
 		}
 
 		return {
-			element,
+			clip,
 			trackId: track.id,
-			elementId: element.id,
+			clipId: clip.id,
 		};
 	}
 
@@ -140,7 +140,7 @@ function findKeyframeTime({
 	propertyPath,
 	keyframeId,
 }: {
-	animations: ElementAnimations;
+	animations: ClipAnimations;
 	propertyPath: AnimationPath;
 	keyframeId: string;
 }): number | null {
@@ -163,14 +163,14 @@ function groupSelectedKeyframesByProperty({
 		string,
 		{
 			trackId: string;
-			elementId: string;
+			clipId: string;
 			propertyPath: SelectedKeyframeRef["propertyPath"];
 			keyframes: SelectedKeyframeRef[];
 		}
 	>();
 
 	for (const keyframe of selectedKeyframes) {
-		const groupKey = `${keyframe.trackId}:${keyframe.elementId}:${keyframe.propertyPath}`;
+		const groupKey = `${keyframe.trackId}:${keyframe.clipId}:${keyframe.propertyPath}`;
 		const existingGroup = groups.get(groupKey);
 		if (existingGroup) {
 			existingGroup.keyframes.push(keyframe);
@@ -179,7 +179,7 @@ function groupSelectedKeyframesByProperty({
 
 		groups.set(groupKey, {
 			trackId: keyframe.trackId,
-			elementId: keyframe.elementId,
+			clipId: keyframe.clipId,
 			propertyPath: keyframe.propertyPath,
 			keyframes: [keyframe],
 		});
@@ -236,10 +236,10 @@ interface GraphEditorPropertySelection {
 }
 
 function resolvePropertySelection({
-	element,
+	clip,
 	propertyKeyframes,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	propertyKeyframes: ReturnType<
 		typeof groupSelectedKeyframesByProperty
 	>[number];
@@ -256,15 +256,15 @@ function resolvePropertySelection({
 		};
 	}
 
-	if (!element.animations) {
+	if (!clip.animations) {
 		return {
-			reason: "selected-element-has-no-animations",
+			reason: "selected-clip-has-no-animations",
 			message: "The selected keyframe has no editable graph.",
 		};
 	}
 
 	const scalarResult = getEditableScalarChannels({
-		animations: element.animations,
+		animations: clip.animations,
 		propertyPath: propertyKeyframes.propertyPath,
 	});
 	if (!scalarResult || scalarResult.channels.length === 0) {
@@ -283,12 +283,12 @@ function resolvePropertySelection({
 
 	if (secondaryKeyframeId !== null) {
 		const time1 = findKeyframeTime({
-			animations: element.animations,
+			animations: clip.animations,
 			propertyPath: propertyKeyframes.propertyPath,
 			keyframeId: primaryKeyframe.keyframeId,
 		});
 		const time2 = findKeyframeTime({
-			animations: element.animations,
+			animations: clip.animations,
 			propertyPath: propertyKeyframes.propertyPath,
 			keyframeId: secondaryKeyframeId,
 		});
@@ -301,7 +301,7 @@ function resolvePropertySelection({
 	const { easingMode, channels: scalarChannels } = scalarResult;
 	const contexts = scalarChannels.flatMap((channel) => {
 		const context = getScalarKeyframeContext({
-			animations: element.animations,
+			animations: clip.animations,
 			propertyPath: propertyKeyframes.propertyPath,
 			componentKey: channel.componentKey,
 			keyframeId: resolvedKeyframeId,
@@ -451,7 +451,7 @@ export function resolveGraphEditorSelectionState({
 	selectedKeyframes,
 	preferredComponentKey,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	selectedKeyframes: SelectedKeyframeRef[];
 	preferredComponentKey?: string | null;
 }): GraphEditorSelectionState {
@@ -473,32 +473,32 @@ export function resolveGraphEditorSelectionState({
 		});
 	}
 
-	const selectedElement = findElementByKeyframe({
+	const selectedClip = findClipByKeyframe({
 		tracks,
 		keyframe: primaryKeyframe,
 	});
-	if (!selectedElement) {
+	if (!selectedClip) {
 		return createUnavailableState({
-			reason: "selected-element-missing",
+			reason: "selected-clip-missing",
 			message: "The selected keyframe could not be resolved.",
 		});
 	}
 
-	const spansMultipleElements = propertyKeyframes.some(
+	const spansMultipleClips = propertyKeyframes.some(
 		(propertySelection) =>
-			propertySelection.trackId !== selectedElement.trackId ||
-			propertySelection.elementId !== selectedElement.elementId,
+			propertySelection.trackId !== selectedClip.trackId ||
+			propertySelection.clipId !== selectedClip.clipId,
 	);
-	if (spansMultipleElements) {
+	if (spansMultipleClips) {
 		return createUnavailableState({
-			reason: "selected-keyframes-span-multiple-elements",
-			message: "Selected keyframes must be on the same element.",
+			reason: "selected-keyframes-span-multiple-clips",
+			message: "Selected keyframes must be on the same clip.",
 		});
 	}
 
 	const propertySelections = propertyKeyframes.map((propertySelection) =>
 		resolvePropertySelection({
-			element: selectedElement.element,
+			clip: selectedClip.clip,
 			propertyKeyframes: propertySelection,
 		}),
 	);
@@ -601,9 +601,9 @@ export function resolveGraphEditorSelectionState({
 				: `Edit graph for ${segments.length} properties`,
 		componentOptions,
 		activeComponentKey,
-		trackId: selectedElement.trackId,
-		elementId: selectedElement.elementId,
-		element: selectedElement.element,
+		trackId: selectedClip.trackId,
+		clipId: selectedClip.clipId,
+		clip: selectedClip.clip,
 		segments,
 		cubicBezier: primarySegment.cubicBezier,
 	};
@@ -673,11 +673,11 @@ export function applyGraphEditorCurvePreview({
 	cubicBezier,
 	referenceSpanValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	context: ScalarGraphKeyframeContext;
 	cubicBezier: NormalizedCubicBezier;
 	referenceSpanValue: number;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	const patches = buildGraphEditorCurvePatches({
 		context,
 		cubicBezier,
@@ -687,7 +687,7 @@ export function applyGraphEditorCurvePreview({
 		return animations;
 	}
 
-	return patches.reduce<ElementAnimations | undefined>(
+	return patches.reduce<ClipAnimations | undefined>(
 		(nextAnimations, { keyframeId, patch }) =>
 			updateScalarKeyframeCurve({
 				animations: nextAnimations,

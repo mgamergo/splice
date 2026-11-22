@@ -1,10 +1,10 @@
 import { Command, type CommandResult } from "@/commands/base-command";
-import type { SceneTracks } from "@/timeline";
+import type { SequenceTracks } from "@/timeline";
 import { EditorCore } from "@/core";
-import { canTrackBeHidden, findTrackInSceneTracks, updateTrackInSceneTracks } from "@/timeline";
+import { canTrackBeHidden, findTrackInSequenceTracks, updateTrackInSequenceTracks } from "@/timeline";
 
 export class ToggleTrackVisibilityCommand extends Command {
-	private savedState: SceneTracks | null = null;
+	private savedState: SequenceTracks | null = null;
 
 	constructor(private trackId: string) {
 		super();
@@ -12,9 +12,9 @@ export class ToggleTrackVisibilityCommand extends Command {
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
-		this.savedState = editor.scenes.getActiveScene().tracks;
+		this.savedState = editor.sequences.getActiveSequence().tracks;
 
-		const targetTrack = findTrackInSceneTracks({
+		const targetTrack = findTrackInSequenceTracks({
 			tracks: this.savedState,
 			trackId: this.trackId,
 		});
@@ -22,7 +22,7 @@ export class ToggleTrackVisibilityCommand extends Command {
 			return;
 		}
 
-		const updatedTracks = updateTrackInSceneTracks({
+		const updatedTracks = updateTrackInSequenceTracks({
 			tracks: this.savedState,
 			trackId: this.trackId,
 			update: (track) => {

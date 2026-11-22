@@ -54,8 +54,8 @@ type PersistedState = {
 	isCustomized: boolean;
 };
 
-function isDOMElement(element: EventTarget | null): element is HTMLElement {
-	return element instanceof HTMLElement;
+function isDOMElement(clip: EventTarget | null): clip is HTMLElement {
+	return clip instanceof HTMLElement;
 }
 
 function isPersistedState(value: unknown): value is PersistedState {
@@ -216,7 +216,7 @@ function generateKeybindingString(ev: KeyboardEvent): ShortcutKey | null {
 		if (
 			modifierKey === "shift" &&
 			isDOMElement(target) &&
-			isTypableDOMElement({ element: target })
+			isTypableDOMElement({ clip: target })
 		) {
 			return null;
 		}
@@ -224,7 +224,7 @@ function generateKeybindingString(ev: KeyboardEvent): ShortcutKey | null {
 		return `${modifierKey}+${key}`;
 	}
 
-	if (isDOMElement(target) && isTypableDOMElement({ element: target })) {
+	if (isDOMElement(target) && isTypableDOMElement({ clip: target })) {
 		return null;
 	}
 

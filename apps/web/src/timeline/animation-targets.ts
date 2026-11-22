@@ -22,10 +22,10 @@ import {
 	type ParamValues,
 } from "@/params";
 import {
-	getElementParam,
+	getClipParam,
 } from "@/params/registry";
-import type { TimelineElement } from "@/timeline";
-import { isVisualElement } from "@/timeline/element-utils";
+import type { TimelineClip } from "@/timeline";
+import { isVisualClip } from "@/timeline/clip-utils";
 
 export interface AnimationPathDescriptor {
 	channelLayout: ParamChannelLayout;
@@ -33,7 +33,7 @@ export interface AnimationPathDescriptor {
 	numericRanges?: Partial<Record<string, NumericSpec>>;
 	coerceValue: ({ value }: { value: ParamValue }) => ParamValue | null;
 	getBaseValue: () => ParamValue | null;
-	setBaseValue: ({ value }: { value: ParamValue }) => TimelineElement;
+	setBaseValue: ({ value }: { value: ParamValue }) => TimelineClip;
 }
 
 // Leaf params expose a single component named "value". Composite params don't
@@ -54,7 +54,7 @@ function buildParamDescriptor({
 }: {
 	param: ParamDefinition;
 	baseParams: ParamValues;
-	setParams: (params: ParamValues) => TimelineElement;
+	setParams: (params: ParamValues) => TimelineClip;
 }): AnimationPathDescriptor | null {
 	if (param.keyframable === false) {
 		return null;
@@ -80,41 +80,41 @@ function buildParamDescriptor({
 	};
 }
 
-function buildElementParamDescriptor({
-	element,
+function buildClipParamDescriptor({
+	clip,
 	paramKey,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	paramKey: string;
 }): AnimationPathDescriptor | null {
-	const param = getElementParam({ element, key: paramKey });
+	const param = getClipParam({ clip, key: paramKey });
 	if (!param) {
 		return null;
 	}
 
 	return buildParamDescriptor({
 		param,
-		baseParams: element.params,
+		baseParams: clip.params,
 		setParams: (params) => ({
-			...element,
+			...clip,
 			params,
 		}),
 	});
 }
 
 function buildGraphicParamDescriptor({
-	element,
+	clip,
 	paramKey,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	paramKey: string;
 }): AnimationPathDescriptor | null {
-	if (element.type !== "graphic") {
+	if (clip.type !== "graphic") {
 		return null;
 	}
 
 	const definition = getGraphicDefinition({
-		definitionId: element.definitionId,
+		definitionId: clip.definitionId,
 	});
 	const param = definition.params.find((candidate) => candidate.key === paramKey);
 	if (!param) {
@@ -123,28 +123,28 @@ function buildGraphicParamDescriptor({
 
 	return buildParamDescriptor({
 		param,
-		baseParams: element.params,
+		baseParams: clip.params,
 		setParams: (params) => ({
-			...element,
+			...clip,
 			params,
 		}),
 	});
 }
 
 function buildEffectParamDescriptor({
-	element,
+	clip,
 	effectId,
 	paramKey,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	effectId: string;
 	paramKey: string;
 }): AnimationPathDescriptor | null {
-	if (!isVisualElement(element)) {
+	if (!isVisualClip(clip)) {
 		return null;
 	}
 
-	const effect = element.effects?.find((candidate) => candidate.id === effectId);
+	const effect = clip.effects?.find((candidate) => candidate.id === effectId);
 	if (!effect) {
 		return null;
 	}
@@ -160,39 +160,39 @@ function buildEffectParamDescriptor({
 		param,
 		baseParams: effect.params,
 		setParams: (params) => ({
-			...element,
+			...clip,
 			effects:
-				element.effects?.map((candidate) =>
+				clip.effects?.map((candidate) =>
 					candidate.id !== effectId
 						? candidate
 						: {
 								...candidate,
 								params,
 							},
-				) ?? element.effects,
+				) ?? clip.effects,
 		}),
 	});
 }
 
 export function resolveAnimationTarget({
-	element,
+	clip,
 	path,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	path: AnimationPath;
 }): AnimationPathDescriptor | null {
-	const elementParamTarget = buildElementParamDescriptor({
-		element,
+	const clipParamTarget = buildClipParamDescriptor({
+		clip,
 		paramKey: path,
 	});
-	if (elementParamTarget) {
-		return elementParamTarget;
+	if (clipParamTarget) {
+		return clipParamTarget;
 	}
 
 	const graphicParamTarget = parseGraphicParamPath({ propertyPath: path });
 	if (graphicParamTarget) {
 		return buildGraphicParamDescriptor({
-			element,
+			clip,
 			paramKey: graphicParamTarget.paramKey,
 		});
 	}
@@ -200,7 +200,7 @@ export function resolveAnimationTarget({
 	const effectParamTarget = parseEffectParamPath({ propertyPath: path });
 	if (effectParamTarget) {
 		return buildEffectParamDescriptor({
-			element,
+			clip,
 			effectId: effectParamTarget.effectId,
 			paramKey: effectParamTarget.paramKey,
 		});

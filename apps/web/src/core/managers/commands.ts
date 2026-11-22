@@ -2,7 +2,7 @@ import type { EditorCore } from "@/core";
 import type { Command, CommandResult } from "@/commands";
 import type { EditorSelectionSnapshot } from "@/selection/editor-selection";
 import { applyRippleAdjustments, computeRippleAdjustments } from "@/ripple";
-import type { SceneTracks } from "@/timeline/types";
+import type { SequenceTracks } from "@/timeline/types";
 
 interface CommandHistoryEntry {
 	command: Command;
@@ -20,7 +20,7 @@ export class CommandManager {
 
 	execute({ command }: { command: Command }): Command {
 		const beforeTracks = this.isRippleEnabled
-			? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
+			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
@@ -75,7 +75,7 @@ export class CommandManager {
 		}
 
 		const beforeTracks = this.isRippleEnabled
-			? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
+			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = entry.command.redo();
@@ -127,13 +127,13 @@ export class CommandManager {
 	private applyRippleIfEnabled({
 		beforeTracks,
 	}: {
-		beforeTracks: SceneTracks | null;
+		beforeTracks: SequenceTracks | null;
 	}): void {
 		if (!this.isRippleEnabled || !beforeTracks) {
 			return;
 		}
 
-		const afterTracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		const afterTracks = this.editor.sequences.getActiveSequenceOrNull()?.tracks;
 		if (!afterTracks) {
 			return;
 		}

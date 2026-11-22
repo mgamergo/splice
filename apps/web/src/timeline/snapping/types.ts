@@ -1,16 +1,16 @@
 import type { MediaTime } from "@/wasm";
 
 export type SnapPointType =
-	| "element-start"
-	| "element-end"
+	| "clip-start"
+	| "clip-end"
 	| "playhead"
-	| "bookmark"
+	| "marker"
 	| "keyframe";
 
 export interface SnapPoint {
 	time: MediaTime;
 	type: SnapPointType;
-	elementId?: string;
+	clipId?: string;
 	trackId?: string;
 }
 

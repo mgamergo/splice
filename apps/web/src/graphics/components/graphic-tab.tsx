@@ -1,15 +1,15 @@
 "use client";
 
 import { useRef } from "react";
-import { useElementPlayhead } from "@/components/editor/panels/properties/hooks/use-element-playhead";
+import { useClipPlayhead } from "@/components/editor/panels/properties/hooks/use-clip-playhead";
 import {
 	useKeyframedParamProperty,
 	type KeyframedParamPropertyResult,
 } from "@/components/editor/panels/properties/hooks/use-keyframed-param-property";
 import type { ParamDefinition, ParamValues } from "@/params";
-import type { GraphicElement } from "@/timeline";
-import { graphicsRegistry, registerDefaultGraphics, resolveGraphicElementParamsAtTime } from "@/graphics";
-import { useElementPreview } from "@/timeline/hooks/use-element-preview";
+import type { GraphicClip } from "@/timeline";
+import { graphicsRegistry, registerDefaultGraphics, resolveGraphicClipParamsAtTime } from "@/graphics";
+import { useClipPreview } from "@/timeline/hooks/use-clip-preview";
 import { useEditor } from "@/editor/use-editor";
 import {
 	Section,
@@ -30,26 +30,26 @@ registerDefaultGraphics();
 const DEFAULT_STROKE_WIDTH = 2;
 
 export function GraphicTab({
-	element,
+	clip,
 	trackId,
 }: {
-	element: GraphicElement;
+	clip: GraphicClip;
 	trackId: string;
 }) {
-	const definition = graphicsRegistry.get(element.definitionId);
-	const { localTime, isPlayheadWithinElementRange } = useElementPlayhead({
-		startTime: element.startTime,
-		duration: element.duration,
+	const definition = graphicsRegistry.get(clip.definitionId);
+	const { localTime, isPlayheadWithinClipRange } = useClipPlayhead({
+		startTime: clip.startTime,
+		duration: clip.duration,
 	});
-	const { renderElement } = useElementPreview({
+	const { renderClip } = useClipPreview({
 		trackId,
-		elementId: element.id,
-		fallback: element,
+		clipId: clip.id,
+		fallback: clip,
 	});
 
-	const liveElement = renderElement as GraphicElement;
-	const resolvedParams = resolveGraphicElementParamsAtTime({
-		element: liveElement,
+	const liveClip = renderClip as GraphicClip;
+	const resolvedParams = resolveGraphicClipParamsAtTime({
+		clip: liveClip,
 		localTime,
 	});
 
@@ -58,7 +58,7 @@ export function GraphicTab({
 
 	return (
 		<div className="flex flex-col">
-			<Section collapsible sectionKey={`${element.id}:graphic`}>
+			<Section collapsible sectionKey={`${clip.id}:graphic`}>
 				<SectionHeader>
 					<SectionTitle>{definition.name}</SectionTitle>
 				</SectionHeader>
@@ -69,71 +69,71 @@ export function GraphicTab({
 								key={param.key}
 								param={param}
 								trackId={trackId}
-								element={liveElement}
+								clip={liveClip}
 								localTime={localTime}
-								isPlayheadWithinElementRange={isPlayheadWithinElementRange}
+								isPlayheadWithinClipRange={isPlayheadWithinClipRange}
 								resolvedParams={resolvedParams}
 							/>
 						))}
 					</SectionFields>
 				</SectionContent>
 			</Section>
-			{hasStrokeParams && <StrokeSection element={element} trackId={trackId} />}
+			{hasStrokeParams && <StrokeSection clip={clip} trackId={trackId} />}
 		</div>
 	);
 }
 
 function StrokeSection({
-	element,
+	clip,
 	trackId,
 }: {
-	element: GraphicElement;
+	clip: GraphicClip;
 	trackId: string;
 }) {
 	const editor = useEditor();
-	const definition = graphicsRegistry.get(element.definitionId);
-	const { localTime, isPlayheadWithinElementRange } = useElementPlayhead({
-		startTime: element.startTime,
-		duration: element.duration,
+	const definition = graphicsRegistry.get(clip.definitionId);
+	const { localTime, isPlayheadWithinClipRange } = useClipPlayhead({
+		startTime: clip.startTime,
+		duration: clip.duration,
 	});
-	const { renderElement } = useElementPreview({
+	const { renderClip } = useClipPreview({
 		trackId,
-		elementId: element.id,
-		fallback: element,
+		clipId: clip.id,
+		fallback: clip,
 	});
 
-	const liveElement = renderElement as GraphicElement;
-	const resolvedParams = resolveGraphicElementParamsAtTime({
-		element: liveElement,
+	const liveClip = renderClip as GraphicClip;
+	const resolvedParams = resolveGraphicClipParamsAtTime({
+		clip: liveClip,
 		localTime,
 	});
 	const strokeParams = definition.params.filter((p) => p.group === "stroke");
 	const lastStrokeWidth = useRef(DEFAULT_STROKE_WIDTH);
-	const isStrokeEnabled = Number(element.params.strokeWidth ?? 0) > 0;
+	const isStrokeEnabled = Number(clip.params.strokeWidth ?? 0) > 0;
 
 	const toggleStroke = () => {
 		if (isStrokeEnabled) {
 			lastStrokeWidth.current = Number(
-				element.params.strokeWidth ?? DEFAULT_STROKE_WIDTH,
+				clip.params.strokeWidth ?? DEFAULT_STROKE_WIDTH,
 			);
-			editor.timeline.updateElements({
+			editor.timeline.updateClips({
 				updates: [
 					{
 						trackId,
-						elementId: element.id,
-						patch: { params: { ...element.params, strokeWidth: 0 } },
+						clipId: clip.id,
+						patch: { params: { ...clip.params, strokeWidth: 0 } },
 					},
 				],
 			});
 		} else {
-			editor.timeline.updateElements({
+			editor.timeline.updateClips({
 				updates: [
 					{
 						trackId,
-						elementId: element.id,
+						clipId: clip.id,
 						patch: {
 							params: {
-								...element.params,
+								...clip.params,
 								strokeWidth: lastStrokeWidth.current,
 							},
 						},
@@ -147,7 +147,7 @@ function StrokeSection({
 		<Section
 			collapsible
 			defaultOpen={isStrokeEnabled}
-			sectionKey={`${element.id}:stroke`}
+			sectionKey={`${clip.id}:stroke`}
 		>
 			<SectionHeader
 				trailing={
@@ -177,9 +177,9 @@ function StrokeSection({
 							key={param.key}
 							param={param}
 							trackId={trackId}
-							element={liveElement}
+							clip={liveClip}
 							localTime={localTime}
-							isPlayheadWithinElementRange={isPlayheadWithinElementRange}
+							isPlayheadWithinClipRange={isPlayheadWithinClipRange}
 							resolvedParams={resolvedParams}
 						/>
 					))}
@@ -192,31 +192,31 @@ function StrokeSection({
 function AnimatedGraphicParamField({
 	param,
 	trackId,
-	element,
+	clip,
 	localTime,
-	isPlayheadWithinElementRange,
+	isPlayheadWithinClipRange,
 	resolvedParams,
 }: {
 	key?: string;
 	param: ParamDefinition;
 	trackId: string;
-	element: GraphicElement;
+	clip: GraphicClip;
 	localTime: MediaTime;
-	isPlayheadWithinElementRange: boolean;
+	isPlayheadWithinClipRange: boolean;
 	resolvedParams: ParamValues;
 }) {
 	const animatedParam: KeyframedParamPropertyResult = useKeyframedParamProperty(
 		{
 			param,
 			trackId,
-			elementId: element.id,
-			animations: element.animations,
+			clipId: clip.id,
+			animations: clip.animations,
 			localTime,
-			isPlayheadWithinElementRange,
+			isPlayheadWithinClipRange,
 			resolvedValue: resolvedParams[param.key] ?? param.default,
 			buildBaseUpdates: ({ value }) => ({
 				params: {
-					...element.params,
+					...clip.params,
 					[param.key]: value,
 				},
 			}),
@@ -231,7 +231,7 @@ function AnimatedGraphicParamField({
 			onCommit={animatedParam.onCommit}
 			keyframe={{
 				isActive: animatedParam.isKeyframedAtTime,
-				isDisabled: !isPlayheadWithinElementRange,
+				isDisabled: !isPlayheadWithinClipRange,
 				onToggle: animatedParam.toggleKeyframe,
 			}}
 		/>

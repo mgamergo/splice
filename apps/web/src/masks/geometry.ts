@@ -1,4 +1,4 @@
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import type { SnapLine } from "@/preview/preview-snap";
 import { MIN_MASK_DIMENSION } from "@/masks/dimensions";
 import type { RectangleMaskParams } from "@/masks/types";
@@ -40,7 +40,7 @@ export function getMaskLocalCenter({
 	bounds,
 }: {
 	params: CenterMaskParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): { x: number; y: number } | null {
 	if (!hasCenterParams(params)) return null;
 
@@ -55,7 +55,7 @@ export function setMaskLocalCenter({
 	bounds,
 }: {
 	center: { x: number; y: number };
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): { centerX: number; centerY: number } {
 	return {
 		centerX: bounds.width === 0 ? 0 : center.x / bounds.width,
@@ -68,7 +68,7 @@ export function getMaskSnapGeometry({
 	bounds,
 }: {
 	params: SnapGeometryParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): {
 	position: { x: number; y: number };
 	size: { width: number; height: number };
@@ -101,7 +101,7 @@ export function toGlobalMaskSnapLines({
 	canvasSize,
 }: {
 	lines: SnapLine[];
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 }): SnapLine[] {
 	const centerX = bounds.cx - canvasSize.width / 2;

@@ -1,7 +1,7 @@
 import type {
 	AnimationColorPropertyPath,
 	AnimationNumericPropertyPath,
-	ElementAnimations,
+	ClipAnimations,
 } from "./types";
 import { resolveAnimationPathValueAtTime } from "./resolve";
 
@@ -11,7 +11,7 @@ export function resolveOpacityAtTime({
 	localTime,
 }: {
 	baseOpacity: number;
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	localTime: number;
 }): number {
 	return resolveAnimationPathValueAtTime({
@@ -29,7 +29,7 @@ export function resolveNumberAtTime({
 	localTime,
 }: {
 	baseValue: number;
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationNumericPropertyPath;
 	localTime: number;
 }): number {
@@ -48,7 +48,7 @@ export function resolveColorAtTime({
 	localTime,
 }: {
 	baseColor: string;
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationColorPropertyPath;
 	localTime: number;
 }): string {

@@ -6,17 +6,17 @@ import type {
 	CopyContext,
 	PasteContext,
 } from "../types";
-import { ElementsClipboardHandler } from "./elements";
+import { ClipsClipboardHandler } from "./clips";
 import { KeyframesClipboardHandler } from "./keyframes";
 
 export const clipboardHandlers = {
-	elements: ElementsClipboardHandler,
+	clips: ClipsClipboardHandler,
 	keyframes: KeyframesClipboardHandler,
 } satisfies ClipboardHandlerMap;
 
 export const clipboardCopyHandlers = [
 	KeyframesClipboardHandler,
-	ElementsClipboardHandler,
+	ClipsClipboardHandler,
 ] as const satisfies readonly ClipboardHandler<ClipboardEntryType>[];
 
 export function copyClipboardEntry({

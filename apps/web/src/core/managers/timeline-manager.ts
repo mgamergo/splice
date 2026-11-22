@@ -1,22 +1,22 @@
 import type { EditorCore } from "@/core";
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import type { ParamValues } from "@/params";
 import type {
-	SceneTracks,
+	SequenceTracks,
 	TrackType,
 	TimelineTrack,
-	TimelineElement,
+	TimelineClip,
 	RetimeConfig,
 } from "@/timeline";
 import { calculateTotalDuration } from "@/timeline";
 import { TimelineDragSource } from "@/timeline/drag-source";
-import { findTrackInSceneTracks } from "@/timeline/track-element-update";
+import { findTrackInSequenceTracks } from "@/timeline/track-clip-update";
 import { lastFrameMediaTime, type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 import {
-	canElementBeHidden,
-	canElementHaveAudio,
-} from "@/timeline/element-utils";
-import { isElementMuted } from "@/timeline/audio-state";
+	canClipBeHidden,
+	canClipHaveAudio,
+} from "@/timeline/clip-utils";
+import { isClipMuted } from "@/timeline/audio-state";
 import type {
 	AnimationPath,
 	AnimationInterpolation,
@@ -24,7 +24,7 @@ import type {
 } from "@/animation/types";
 import type { ParamValue } from "@/params";
 import {
-	getElementLocalTime,
+	getClipLocalTime,
 	resolveAnimationPathValueAtTime,
 } from "@/animation";
 import { resolveAnimationTarget } from "@/timeline/animation-targets";
@@ -34,12 +34,12 @@ import {
 	RemoveTrackCommand,
 	ToggleTrackMuteCommand,
 	ToggleTrackVisibilityCommand,
-	InsertElementCommand,
-	DeleteElementsCommand,
-	DuplicateElementsCommand,
-	UpdateElementsCommand,
-	SplitElementsCommand,
-	MoveElementCommand,
+	InsertClipCommand,
+	DeleteClipsCommand,
+	DuplicateClipsCommand,
+	UpdateClipsCommand,
+	RazorClipsCommand,
+	MoveClipCommand,
 	TracksSnapshotCommand,
 	UpsertKeyframeCommand,
 	RemoveKeyframeCommand,
@@ -58,16 +58,16 @@ import {
 	RemoveEffectParamKeyframeCommand,
 	ToggleSourceAudioSeparationCommand,
 } from "@/commands/timeline";
-import type { InsertElementParams } from "@/commands/timeline/element/insert-element";
+import type { InsertClipParams } from "@/commands/timeline/clip/insert-clip";
 import type {
-	PlannedElementMove,
+	PlannedClipMove,
 	PlannedTrackCreation,
 } from "@/timeline/group-move";
 
 export class TimelineManager {
 	private listeners = new Set<() => void>();
-	private previewOverlay = new Map<string, Partial<TimelineElement>>();
-	private previewTracks: SceneTracks | null = null;
+	private previewOverlay = new Map<string, Partial<TimelineClip>>();
+	private previewTracks: SequenceTracks | null = null;
 	public readonly dragSource = new TimelineDragSource();
 
 	constructor(private editor: EditorCore) {}
@@ -83,32 +83,32 @@ export class TimelineManager {
 		this.editor.command.execute({ command });
 	}
 
-	insertElement({ element, placement }: InsertElementParams): void {
-		const command = new InsertElementCommand({ element, placement });
+	insertClip({ clip, placement }: InsertClipParams): void {
+		const command = new InsertClipCommand({ clip, placement });
 		this.editor.command.execute({ command });
 	}
 
-	updateElementTrim({
-		elementId,
+	updateClipTrim({
+		clipId,
 		trimStart,
 		trimEnd,
 		startTime,
 		duration,
 		pushHistory = true,
 	}: {
-		elementId: string;
+		clipId: string;
 		trimStart: MediaTime;
 		trimEnd: MediaTime;
 		startTime?: MediaTime;
 		duration?: MediaTime;
 		pushHistory?: boolean;
 	}): void {
-		const trackId = this.findTrackIdForElement({ elementId });
+		const trackId = this.findTrackIdForClip({ clipId });
 		if (!trackId) {
 			return;
 		}
 
-		const nextUpdates: Partial<TimelineElement> = {
+		const nextUpdates: Partial<TimelineClip> = {
 			trimStart,
 			trimEnd,
 		};
@@ -119,11 +119,11 @@ export class TimelineManager {
 			nextUpdates.duration = duration;
 		}
 
-		this.updateElements({
+		this.updateClips({
 			updates: [
 				{
 					trackId,
-					elementId,
+					clipId,
 					patch: nextUpdates,
 				},
 			],
@@ -131,22 +131,22 @@ export class TimelineManager {
 		});
 	}
 
-	updateElementRetime({
+	updateClipRetime({
 		trackId,
-		elementId,
+		clipId,
 		retime,
 		pushHistory = true,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		retime?: RetimeConfig;
 		pushHistory?: boolean;
 	}): void {
-		this.updateElements({
+		this.updateClips({
 			updates: [
 				{
 					trackId,
-					elementId,
+					clipId,
 					patch: {
 						retime,
 					},
@@ -156,18 +156,18 @@ export class TimelineManager {
 		});
 	}
 
-	moveElements({
+	moveClips({
 		moves,
 		createTracks,
 	}: {
-		moves: PlannedElementMove[];
+		moves: PlannedClipMove[];
 		createTracks?: PlannedTrackCreation[];
 	}): void {
 		if (moves.length === 0) {
 			return;
 		}
 
-		const command = new MoveElementCommand({
+		const command = new MoveClipCommand({
 			moves,
 			createTracks,
 		});
@@ -184,31 +184,31 @@ export class TimelineManager {
 		this.editor.command.execute({ command });
 	}
 
-	splitElements({
-		elements,
+	razorClips({
+		clips,
 		splitTime,
 		retainSide = "both",
 	}: {
-		elements: { trackId: string; elementId: string }[];
+		clips: { trackId: string; clipId: string }[];
 		splitTime: MediaTime;
 		retainSide?: "both" | "left" | "right";
-	}): { trackId: string; elementId: string }[] {
-		const command = new SplitElementsCommand({
-			elements,
+	}): { trackId: string; clipId: string }[] {
+		const command = new RazorClipsCommand({
+			clips,
 			splitTime,
 			retainSide,
 		});
 		this.editor.command.execute({ command });
-		return command.getRightSideElements();
+		return command.getRightSideClips();
 	}
 
 	getTotalDuration(): MediaTime {
-		const activeScene = this.editor.scenes.getActiveSceneOrNull();
-		if (!activeScene) {
+		const activeSequence = this.editor.sequences.getActiveSequenceOrNull();
+		if (!activeSequence) {
 			return ZERO_MEDIA_TIME;
 		}
 
-		return calculateTotalDuration({ tracks: activeScene.tracks });
+		return calculateTotalDuration({ tracks: activeSequence.tracks });
 	}
 
 	getLastFrameTime(): MediaTime {
@@ -219,67 +219,67 @@ export class TimelineManager {
 	}
 
 	getTrackById({ trackId }: { trackId: string }): TimelineTrack | null {
-		const activeScene = this.editor.scenes.getActiveSceneOrNull();
-		if (!activeScene) {
+		const activeSequence = this.editor.sequences.getActiveSequenceOrNull();
+		if (!activeSequence) {
 			return null;
 		}
 
-		return findTrackInSceneTracks({ tracks: activeScene.tracks, trackId });
+		return findTrackInSequenceTracks({ tracks: activeSequence.tracks, trackId });
 	}
 
-	getElementsWithTracks({
-		elements,
+	getClipsWithTracks({
+		clips,
 	}: {
-		elements: { trackId: string; elementId: string }[];
-	}): Array<{ track: TimelineTrack; element: TimelineElement }> {
-		const result: Array<{ track: TimelineTrack; element: TimelineElement }> =
+		clips: { trackId: string; clipId: string }[];
+	}): Array<{ track: TimelineTrack; clip: TimelineClip }> {
+		const result: Array<{ track: TimelineTrack; clip: TimelineClip }> =
 			[];
 
-		for (const { trackId, elementId } of elements) {
+		for (const { trackId, clipId } of clips) {
 			const track = this.getTrackById({ trackId });
-			const element = track?.elements.find(
-				(trackElement) => trackElement.id === elementId,
+			const clip = track?.clips.find(
+				(trackClip) => trackClip.id === clipId,
 			);
 
-			if (track && element) {
-				result.push({ track, element });
+			if (track && clip) {
+				result.push({ track, clip });
 			}
 		}
 
 		return result;
 	}
 
-	deleteElements({
-		elements,
+	deleteClips({
+		clips,
 	}: {
-		elements: { trackId: string; elementId: string }[];
+		clips: { trackId: string; clipId: string }[];
 	}): void {
-		const command = new DeleteElementsCommand({ elements });
+		const command = new DeleteClipsCommand({ clips });
 		this.editor.command.execute({ command });
 	}
 
 	toggleSourceAudioSeparation({
 		trackId,
-		elementId,
+		clipId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 	}): void {
 		const command = new ToggleSourceAudioSeparationCommand({
 			trackId,
-			elementId,
+			clipId,
 		});
 		this.editor.command.execute({ command });
 	}
 
-	updateElements({
+	updateClips({
 		updates,
 		pushHistory = true,
 	}: {
 		updates: Array<{
 			trackId: string;
-			elementId: string;
-			patch: Partial<TimelineElement>;
+			clipId: string;
+			patch: Partial<TimelineClip>;
 		}>;
 		pushHistory?: boolean;
 	}): void {
@@ -287,7 +287,7 @@ export class TimelineManager {
 			return;
 		}
 
-		const command = new UpdateElementsCommand({
+		const command = new UpdateClipsCommand({
 			updates,
 		});
 		if (pushHistory) {
@@ -299,16 +299,16 @@ export class TimelineManager {
 
 	addClipEffect({
 		trackId,
-		elementId,
+		clipId,
 		effectType,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		effectType: string;
 	}): string {
 		const command = new AddClipEffectCommand({
 			trackId,
-			elementId,
+			clipId,
 			effectType,
 		});
 		this.editor.command.execute({ command });
@@ -317,16 +317,16 @@ export class TimelineManager {
 
 	removeClipEffect({
 		trackId,
-		elementId,
+		clipId,
 		effectId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		effectId: string;
 	}): void {
 		const command = new RemoveClipEffectCommand({
 			trackId,
-			elementId,
+			clipId,
 			effectId,
 		});
 		this.editor.command.execute({ command });
@@ -334,16 +334,16 @@ export class TimelineManager {
 
 	removeMask({
 		trackId,
-		elementId,
+		clipId,
 		maskId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		maskId: string;
 	}): void {
 		const command = new RemoveMaskCommand({
 			trackId,
-			elementId,
+			clipId,
 			maskId,
 		});
 		this.editor.command.execute({ command });
@@ -351,12 +351,12 @@ export class TimelineManager {
 
 	deleteFreeformPathMaskPoints({
 		trackId,
-		elementId,
+		clipId,
 		maskId,
 		pointIds,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		maskId: string;
 		pointIds: string[];
 	}): void {
@@ -365,7 +365,7 @@ export class TimelineManager {
 		}
 		const command = new DeleteFreeformPathMaskPointsCommand({
 			trackId,
-			elementId,
+			clipId,
 			maskId,
 			pointIds,
 		});
@@ -374,22 +374,22 @@ export class TimelineManager {
 
 	insertFreeformPathMaskPoint({
 		trackId,
-		elementId,
+		clipId,
 		maskId,
 		segmentIndex,
 		canvasPoint,
 		bounds,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		maskId: string;
 		segmentIndex: number;
 		canvasPoint: { x: number; y: number };
-		bounds: ElementBounds;
+		bounds: ClipBounds;
 	}): void {
 		const command = new InsertFreeformPathMaskPointCommand({
 			trackId,
-			elementId,
+			clipId,
 			maskId,
 			segmentIndex,
 			canvasPoint,
@@ -400,20 +400,20 @@ export class TimelineManager {
 
 	updateClipEffectParams({
 		trackId,
-		elementId,
+		clipId,
 		effectId,
 		params,
 		pushHistory = true,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		effectId: string;
 		params: Partial<ParamValues>;
 		pushHistory?: boolean;
 	}): void {
 		const command = new UpdateClipEffectParamsCommand({
 			trackId,
-			elementId,
+			clipId,
 			effectId,
 			params,
 		});
@@ -426,16 +426,16 @@ export class TimelineManager {
 
 	toggleClipEffect({
 		trackId,
-		elementId,
+		clipId,
 		effectId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		effectId: string;
 	}): void {
 		const command = new ToggleClipEffectCommand({
 			trackId,
-			elementId,
+			clipId,
 			effectId,
 		});
 		this.editor.command.execute({ command });
@@ -443,16 +443,16 @@ export class TimelineManager {
 
 	toggleMaskInverted({
 		trackId,
-		elementId,
+		clipId,
 		maskId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		maskId: string;
 	}): void {
 		const command = new ToggleMaskInvertedCommand({
 			trackId,
-			elementId,
+			clipId,
 			maskId,
 		});
 		this.editor.command.execute({ command });
@@ -460,18 +460,18 @@ export class TimelineManager {
 
 	reorderClipEffects({
 		trackId,
-		elementId,
+		clipId,
 		fromIndex,
 		toIndex,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		fromIndex: number;
 		toIndex: number;
 	}): void {
 		const command = new ReorderClipEffectsCommand({
 			trackId,
-			elementId,
+			clipId,
 			fromIndex,
 			toIndex,
 		});
@@ -483,7 +483,7 @@ export class TimelineManager {
 	}: {
 		keyframes: Array<{
 			trackId: string;
-			elementId: string;
+			clipId: string;
 			propertyPath: AnimationPath;
 			time: MediaTime;
 			value: ParamValue;
@@ -498,7 +498,7 @@ export class TimelineManager {
 		const commands = keyframes.map(
 			({
 				trackId,
-				elementId,
+				clipId,
 				propertyPath,
 				time,
 				value,
@@ -507,7 +507,7 @@ export class TimelineManager {
 			}) =>
 				new UpsertKeyframeCommand({
 					trackId,
-					elementId,
+					clipId,
 					propertyPath,
 					time,
 					value,
@@ -525,7 +525,7 @@ export class TimelineManager {
 	}: {
 		keyframes: Array<{
 			trackId: string;
-			elementId: string;
+			clipId: string;
 			propertyPath: AnimationPath;
 			keyframeId: string;
 		}>;
@@ -534,30 +534,30 @@ export class TimelineManager {
 			return;
 		}
 
-		// Pre-sample values at playhead for each (element, property) pair.
+		// Pre-sample values at playhead for each (clip, property) pair.
 		// This preserves "what you see is what you get" when all keyframes are deleted.
 		const playheadTime = this.editor.playback.getCurrentTime();
 		const valueAtPlayheadMap = new Map<string, ParamValue | null>();
 
-		for (const { trackId, elementId, propertyPath } of keyframes) {
-			const key = `${elementId}:${propertyPath}`;
+		for (const { trackId, clipId, propertyPath } of keyframes) {
+			const key = `${clipId}:${propertyPath}`;
 			if (valueAtPlayheadMap.has(key)) {
 				continue;
 			}
 
-			const element = this.getElementByRef({ trackId, elementId });
-			if (!element) {
+			const clip = this.getClipByRef({ trackId, clipId });
+			if (!clip) {
 				valueAtPlayheadMap.set(key, null);
 				continue;
 			}
 
-			const localTime = getElementLocalTime({
+			const localTime = getClipLocalTime({
 				timelineTime: playheadTime,
-				elementStartTime: element.startTime,
-				elementDuration: element.duration,
+				clipStartTime: clip.startTime,
+				clipDuration: clip.duration,
 			});
 
-			const target = resolveAnimationTarget({ element, path: propertyPath });
+			const target = resolveAnimationTarget({ clip, path: propertyPath });
 			const baseValue = target?.getBaseValue() ?? null;
 			if (baseValue === null) {
 				valueAtPlayheadMap.set(key, null);
@@ -565,7 +565,7 @@ export class TimelineManager {
 			}
 
 			const value = resolveAnimationPathValueAtTime({
-				animations: element.animations,
+				animations: clip.animations,
 				propertyPath,
 				localTime,
 				fallbackValue: baseValue,
@@ -574,14 +574,14 @@ export class TimelineManager {
 		}
 
 		const commands = keyframes.map(
-			({ trackId, elementId, propertyPath, keyframeId }) =>
+			({ trackId, clipId, propertyPath, keyframeId }) =>
 				new RemoveKeyframeCommand({
 					trackId,
-					elementId,
+					clipId,
 					propertyPath,
 					keyframeId,
 					valueAtPlayhead:
-						valueAtPlayheadMap.get(`${elementId}:${propertyPath}`) ?? null,
+						valueAtPlayheadMap.get(`${clipId}:${propertyPath}`) ?? null,
 				}),
 		);
 		const command =
@@ -591,20 +591,20 @@ export class TimelineManager {
 
 	retimeKeyframe({
 		trackId,
-		elementId,
+		clipId,
 		propertyPath,
 		keyframeId,
 		time,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		propertyPath: AnimationPath;
 		keyframeId: string;
 		time: MediaTime;
 	}): void {
 		const command = new RetimeKeyframeCommand({
 			trackId,
-			elementId,
+			clipId,
 			propertyPath,
 			keyframeId,
 			nextTime: time,
@@ -617,7 +617,7 @@ export class TimelineManager {
 	}: {
 		keyframes: Array<{
 			trackId: string;
-			elementId: string;
+			clipId: string;
 			propertyPath: AnimationPath;
 			componentKey: string;
 			keyframeId: string;
@@ -629,10 +629,10 @@ export class TimelineManager {
 		}
 
 		const commands = keyframes.map(
-			({ trackId, elementId, propertyPath, componentKey, keyframeId, patch }) =>
+			({ trackId, clipId, propertyPath, componentKey, keyframeId, patch }) =>
 				new UpdateScalarKeyframeCurveCommand({
 					trackId,
-					elementId,
+					clipId,
 					propertyPath,
 					componentKey,
 					keyframeId,
@@ -646,7 +646,7 @@ export class TimelineManager {
 
 	upsertEffectParamKeyframe({
 		trackId,
-		elementId,
+		clipId,
 		effectId,
 		paramKey,
 		time,
@@ -655,7 +655,7 @@ export class TimelineManager {
 		keyframeId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		effectId: string;
 		paramKey: string;
 		time: MediaTime;
@@ -665,7 +665,7 @@ export class TimelineManager {
 	}): void {
 		const command = new UpsertEffectParamKeyframeCommand({
 			trackId,
-			elementId,
+			clipId,
 			effectId,
 			paramKey,
 			time,
@@ -678,20 +678,20 @@ export class TimelineManager {
 
 	removeEffectParamKeyframe({
 		trackId,
-		elementId,
+		clipId,
 		effectId,
 		paramKey,
 		keyframeId,
 	}: {
 		trackId: string;
-		elementId: string;
+		clipId: string;
 		effectId: string;
 		paramKey: string;
 		keyframeId: string;
 	}): void {
 		const command = new RemoveEffectParamKeyframeCommand({
 			trackId,
-			elementId,
+			clipId,
 			effectId,
 			paramKey,
 			keyframeId,
@@ -703,21 +703,21 @@ export class TimelineManager {
 		return this.previewOverlay.size > 0;
 	}
 
-	previewElements({
+	previewClips({
 		updates,
 	}: {
 		updates: readonly {
 			trackId: string;
-			elementId: string;
-			updates: Partial<TimelineElement>;
+			clipId: string;
+			updates: Partial<TimelineClip>;
 		}[];
 	}): void {
 		let changedOverlayCount = 0;
-		for (const { elementId, updates: elementUpdates } of updates) {
-			const existingOverlay = this.previewOverlay.get(elementId);
-			const changed = Object.entries(elementUpdates).some(([key, value]) => {
+		for (const { clipId, updates: clipUpdates } of updates) {
+			const existingOverlay = this.previewOverlay.get(clipId);
+			const changed = Object.entries(clipUpdates).some(([key, value]) => {
 				return !Object.is(
-					existingOverlay?.[key as keyof TimelineElement],
+					existingOverlay?.[key as keyof TimelineClip],
 					value,
 				);
 			});
@@ -725,12 +725,12 @@ export class TimelineManager {
 				changedOverlayCount += 1;
 				const mergedOverlay = {
 					...existingOverlay,
-					...elementUpdates,
-				} as Partial<TimelineElement>;
-				this.previewOverlay.set(elementId, mergedOverlay);
+					...clipUpdates,
+				} as Partial<TimelineClip>;
+				this.previewOverlay.set(clipId, mergedOverlay);
 			}
 		}
-		const committedTracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		const committedTracks = this.editor.sequences.getActiveSequenceOrNull()?.tracks;
 		if (!committedTracks) {
 			return;
 		}
@@ -743,7 +743,7 @@ export class TimelineManager {
 
 	commitPreview(): void {
 		if (this.previewOverlay.size === 0) return;
-		const committedTracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		const committedTracks = this.editor.sequences.getActiveSequenceOrNull()?.tracks;
 		if (!committedTracks) {
 			return;
 		}
@@ -766,27 +766,27 @@ export class TimelineManager {
 		this.notify();
 	}
 
-	private applyPreviewOverlay(tracks: SceneTracks): SceneTracks {
+	private applyPreviewOverlay(tracks: SequenceTracks): SequenceTracks {
 		if (this.previewOverlay.size === 0) return tracks;
 
 		const applyTrackOverlay = <TTrack extends TimelineTrack>(
 			track: TTrack,
 		): TTrack => {
-			const hasOverlay = track.elements.some((element) =>
-				this.previewOverlay.has(element.id),
+			const hasOverlay = track.clips.some((clip) =>
+				this.previewOverlay.has(clip.id),
 			);
 			if (!hasOverlay) {
 				return track;
 			}
 
-			const nextElements = track.elements.map((element) => {
-				const overlay = this.previewOverlay.get(element.id);
+			const nextClips = track.clips.map((clip) => {
+				const overlay = this.previewOverlay.get(clip.id);
 				return overlay
-					? ({ ...element, ...overlay } as TimelineElement)
-					: element;
+					? ({ ...clip, ...overlay } as TimelineClip)
+					: clip;
 			});
 
-			return { ...track, elements: nextElements } as TTrack;
+			return { ...track, clips: nextClips } as TTrack;
 		};
 
 		return {
@@ -796,76 +796,76 @@ export class TimelineManager {
 		};
 	}
 
-	duplicateElements({
-		elements,
+	duplicateClips({
+		clips,
 	}: {
-		elements: { trackId: string; elementId: string }[];
-	}): { trackId: string; elementId: string }[] {
-		const command = new DuplicateElementsCommand({ elements });
+		clips: { trackId: string; clipId: string }[];
+	}): { trackId: string; clipId: string }[] {
+		const command = new DuplicateClipsCommand({ clips });
 		this.editor.command.execute({ command });
-		return command.getDuplicatedElements();
+		return command.getDuplicatedClips();
 	}
 
-	toggleElementsVisibility({
-		elements,
+	toggleClipsVisibility({
+		clips,
 	}: {
-		elements: { trackId: string; elementId: string }[];
+		clips: { trackId: string; clipId: string }[];
 	}): void {
-		const shouldHide = elements.some(({ trackId, elementId }) => {
-			const element = this.getElementByRef({ trackId, elementId });
-			return element && canElementBeHidden(element) && !element.hidden;
+		const shouldHide = clips.some(({ trackId, clipId }) => {
+			const clip = this.getClipByRef({ trackId, clipId });
+			return clip && canClipBeHidden(clip) && !clip.hidden;
 		});
 
-		const nextUpdates = elements.flatMap(({ trackId, elementId }) => {
-			const element = this.getElementByRef({ trackId, elementId });
-			if (!element || !canElementBeHidden(element)) {
+		const nextUpdates = clips.flatMap(({ trackId, clipId }) => {
+			const clip = this.getClipByRef({ trackId, clipId });
+			if (!clip || !canClipBeHidden(clip)) {
 				return [];
 			}
 
 			return [
 				{
 					trackId,
-					elementId,
+					clipId,
 					patch: { hidden: shouldHide },
 				},
 			];
 		});
 
-		this.updateElements({ updates: nextUpdates });
+		this.updateClips({ updates: nextUpdates });
 	}
 
-	toggleElementsMuted({
-		elements,
+	toggleClipsMuted({
+		clips,
 	}: {
-		elements: { trackId: string; elementId: string }[];
+		clips: { trackId: string; clipId: string }[];
 	}): void {
-		const shouldMute = elements.some(({ trackId, elementId }) => {
-			const element = this.getElementByRef({ trackId, elementId });
-			return element && canElementHaveAudio(element) && !isElementMuted({ element });
+		const shouldMute = clips.some(({ trackId, clipId }) => {
+			const clip = this.getClipByRef({ trackId, clipId });
+			return clip && canClipHaveAudio(clip) && !isClipMuted({ clip });
 		});
 
-		const nextUpdates = elements.flatMap(({ trackId, elementId }) => {
-			const element = this.getElementByRef({ trackId, elementId });
-			if (!element || !canElementHaveAudio(element)) {
+		const nextUpdates = clips.flatMap(({ trackId, clipId }) => {
+			const clip = this.getClipByRef({ trackId, clipId });
+			if (!clip || !canClipHaveAudio(clip)) {
 				return [];
 			}
 
 			return [
 				{
 					trackId,
-					elementId,
+					clipId,
 					patch: { params: { muted: shouldMute } },
 				},
 			];
 		});
 
-		this.updateElements({ updates: nextUpdates });
+		this.updateClips({ updates: nextUpdates });
 	}
 
-	getPreviewTracks(): SceneTracks | null {
+	getPreviewTracks(): SequenceTracks | null {
 		return (
 			this.previewTracks ??
-			this.editor.scenes.getActiveSceneOrNull()?.tracks ??
+			this.editor.sequences.getActiveSequenceOrNull()?.tracks ??
 			null
 		);
 	}
@@ -881,44 +881,44 @@ export class TimelineManager {
 		});
 	}
 
-	private getElementByRef({
+	private getClipByRef({
 		trackId,
-		elementId,
+		clipId,
 	}: {
 		trackId: string;
-		elementId: string;
-	}): TimelineElement | undefined {
-		return this.getTrackById({ trackId })?.elements.find(
-			(element) => element.id === elementId,
+		clipId: string;
+	}): TimelineClip | undefined {
+		return this.getTrackById({ trackId })?.clips.find(
+			(clip) => clip.id === clipId,
 		);
 	}
 
-	private findTrackIdForElement({
-		elementId,
+	private findTrackIdForClip({
+		clipId,
 	}: {
-		elementId: string;
+		clipId: string;
 	}): string | null {
-		const activeScene = this.editor.scenes.getActiveSceneOrNull();
-		if (!activeScene) {
+		const activeSequence = this.editor.sequences.getActiveSequenceOrNull();
+		if (!activeSequence) {
 			return null;
 		}
 
 		if (
-			activeScene.tracks.main.elements.some(
-				(element) => element.id === elementId,
+			activeSequence.tracks.main.clips.some(
+				(clip) => clip.id === clipId,
 			)
 		) {
-			return activeScene.tracks.main.id;
+			return activeSequence.tracks.main.id;
 		}
 
-		for (const track of activeScene.tracks.overlay) {
-			if (track.elements.some((element) => element.id === elementId)) {
+		for (const track of activeSequence.tracks.overlay) {
+			if (track.clips.some((clip) => clip.id === clipId)) {
 				return track.id;
 			}
 		}
 
-		for (const track of activeScene.tracks.audio) {
-			if (track.elements.some((element) => element.id === elementId)) {
+		for (const track of activeSequence.tracks.audio) {
+			if (track.clips.some((clip) => clip.id === clipId)) {
 				return track.id;
 			}
 		}
@@ -926,10 +926,10 @@ export class TimelineManager {
 		return null;
 	}
 
-	updateTracks(newTracks: SceneTracks): void {
+	updateTracks(newTracks: SequenceTracks): void {
 		this.previewOverlay.clear();
 		this.previewTracks = null;
-		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
+		this.editor.sequences.updateSequenceTracks({ tracks: newTracks });
 		this.notify();
 	}
 }

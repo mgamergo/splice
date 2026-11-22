@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { useActionHandler } from "@/actions/use-action-handler";
 import { useEditor } from "@/editor/use-editor";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
 import {
 	addMediaTime,
 	maxMediaTime,
@@ -15,8 +15,8 @@ import {
 	TICKS_PER_SECOND,
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
-import { useKeyframeSelection } from "@/timeline/hooks/element/use-keyframe-selection";
-import { getElementsAtTime, hasMediaId } from "@/timeline";
+import { useKeyframeSelection } from "@/timeline/hooks/clip/use-keyframe-selection";
+import { getClipsAtTime, hasMediaId } from "@/timeline";
 import { cancelInteraction } from "@/editor/cancel-interaction";
 import { invokeAction } from "@/actions";
 import { canToggleSourceAudio } from "@/timeline/audio-separation";
@@ -29,7 +29,7 @@ import { useCommittedRef } from "@/hooks/use-committed-ref";
 
 export function useEditorActions() {
 	const editor = useEditor();
-	const { selectedElements, setElementSelection } = useElementSelection();
+	const { selectedClips, setClipSelection } = useClipSelection();
 	const { selectedKeyframes, clearKeyframeSelection } = useKeyframeSelection();
 	const selectedMaskPointSelection = useEditor((e) =>
 		e.selection.getSelectedMaskPointSelection(),
@@ -38,7 +38,7 @@ export function useEditorActions() {
 	const rippleEditingEnabled = useTimelineStore((s) => s.rippleEditingEnabled);
 	const toggleRippleEditing = useTimelineStore((s) => s.toggleRippleEditing);
 	const hasTimelineSelection =
-		selectedElements.length > 0 ||
+		selectedClips.length > 0 ||
 		selectedKeyframes.length > 0 ||
 		selectedMaskPointSelection !== null;
 	const hasTimelineSelectionRef = useCommittedRef(hasTimelineSelection);
@@ -218,22 +218,22 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
-		"split",
+		"razor",
 		() => {
 			const currentTime = editor.playback.getCurrentTime();
-			const tracks = editor.scenes.getActiveScene().tracks;
-			const elementsToSplit =
-				selectedElements.length > 0
-					? selectedElements
-					: getElementsAtTime({
+			const tracks = editor.sequences.getActiveSequence().tracks;
+			const clipsToRazor =
+				selectedClips.length > 0
+					? selectedClips
+					: getClipsAtTime({
 							tracks,
 							time: currentTime,
 						});
 
-			if (elementsToSplit.length === 0) return;
+			if (clipsToRazor.length === 0) return;
 
-			editor.timeline.splitElements({
-				elements: elementsToSplit,
+			editor.timeline.razorClips({
+				clips: clipsToRazor,
 				splitTime: currentTime,
 			});
 		},
@@ -241,32 +241,32 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
-		"split-left",
+		"razor-left",
 		() => {
 			const currentTime = editor.playback.getCurrentTime();
-			const tracks = editor.scenes.getActiveScene().tracks;
-			const elementsToSplit =
-				selectedElements.length > 0
-					? selectedElements
-					: getElementsAtTime({
+			const tracks = editor.sequences.getActiveSequence().tracks;
+			const clipsToRazor =
+				selectedClips.length > 0
+					? selectedClips
+					: getClipsAtTime({
 							tracks,
 							time: currentTime,
 						});
 
-			if (elementsToSplit.length === 0) return;
+			if (clipsToRazor.length === 0) return;
 
-			const rightSideElements = editor.timeline.splitElements({
-				elements: elementsToSplit,
+			const rightSideClips = editor.timeline.razorClips({
+				clips: clipsToRazor,
 				splitTime: currentTime,
 				retainSide: "right",
 			});
 
-			if (rippleEditingEnabled && rightSideElements.length > 0) {
-				const firstRightElement = editor.timeline.getElementsWithTracks({
-					elements: [rightSideElements[0]],
+			if (rippleEditingEnabled && rightSideClips.length > 0) {
+				const firstRightClip = editor.timeline.getClipsWithTracks({
+					clips: [rightSideClips[0]],
 				})[0];
-				if (firstRightElement) {
-					editor.playback.seek({ time: firstRightElement.element.startTime });
+				if (firstRightClip) {
+					editor.playback.seek({ time: firstRightClip.clip.startTime });
 				}
 			}
 		},
@@ -274,22 +274,22 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
-		"split-right",
+		"razor-right",
 		() => {
 			const currentTime = editor.playback.getCurrentTime();
-			const tracks = editor.scenes.getActiveScene().tracks;
-			const elementsToSplit =
-				selectedElements.length > 0
-					? selectedElements
-					: getElementsAtTime({
+			const tracks = editor.sequences.getActiveSequence().tracks;
+			const clipsToRazor =
+				selectedClips.length > 0
+					? selectedClips
+					: getClipsAtTime({
 							tracks,
 							time: currentTime,
 						});
 
-			if (elementsToSplit.length === 0) return;
+			if (clipsToRazor.length === 0) return;
 
-			editor.timeline.splitElements({
-				elements: elementsToSplit,
+			editor.timeline.razorClips({
+				clips: clipsToRazor,
 				splitTime: currentTime,
 				retainSide: "left",
 			});
@@ -307,7 +307,7 @@ export function useEditorActions() {
 					}
 					editor.timeline.deleteFreeformPathMaskPoints({
 						trackId: selectedMaskPointSelection.trackId,
-						elementId: selectedMaskPointSelection.elementId,
+						clipId: selectedMaskPointSelection.clipId,
 						maskId: selectedMaskPointSelection.maskId,
 						pointIds: selectedMaskPointSelection.pointIds,
 					});
@@ -319,12 +319,12 @@ export function useEditorActions() {
 					editor.timeline.removeKeyframes({ keyframes: selectedKeyframes });
 					clearKeyframeSelection();
 					return;
-				case "elements":
-					if (selectedElements.length === 0) {
+				case "clips":
+					if (selectedClips.length === 0) {
 						return;
 					}
-					editor.timeline.deleteElements({
-						elements: selectedElements,
+					editor.timeline.deleteClips({
+						clips: selectedClips,
 					});
 					return;
 				default:
@@ -337,36 +337,36 @@ export function useEditorActions() {
 	useActionHandler(
 		"toggle-source-audio",
 		() => {
-			if (selectedElements.length !== 1) {
+			if (selectedClips.length !== 1) {
 				return;
 			}
 
-			const selectedElement = editor.timeline.getElementsWithTracks({
-				elements: selectedElements,
+			const selectedClip = editor.timeline.getClipsWithTracks({
+				clips: selectedClips,
 			})[0];
-			if (!selectedElement) {
+			if (!selectedClip) {
 				return;
 			}
 
-			const mediaAsset = (() => {
-				const { element } = selectedElement;
-				if (!hasMediaId(element)) {
+			const projectItem = (() => {
+				const { clip } = selectedClip;
+				if (!hasMediaId(clip)) {
 					return null;
 				}
 
 				return (
 					editor.media
-						.getAssets()
-						.find((asset) => asset.id === element.mediaId) ?? null
+						.getProjectItems()
+						.find((projectItem) => projectItem.id === clip.mediaId) ?? null
 				);
 			})();
-			if (!canToggleSourceAudio(selectedElement.element, mediaAsset)) {
+			if (!canToggleSourceAudio(selectedClip.clip, projectItem)) {
 				return;
 			}
 
 			editor.timeline.toggleSourceAudioSeparation({
-				trackId: selectedElement.track.id,
-				elementId: selectedElement.element.id,
+				trackId: selectedClip.track.id,
+				clipId: selectedClip.clip.id,
 			});
 		},
 		undefined,
@@ -375,18 +375,18 @@ export function useEditorActions() {
 	useActionHandler(
 		"select-all",
 		() => {
-			const scene = editor.scenes.getActiveScene();
-			const allElements = [
-				...scene.tracks.overlay,
-				scene.tracks.main,
-				...scene.tracks.audio,
+			const sequence = editor.sequences.getActiveSequence();
+			const allClips = [
+				...sequence.tracks.overlay,
+				sequence.tracks.main,
+				...sequence.tracks.audio,
 			].flatMap((track) =>
-				track.elements.map((element) => ({
+				track.clips.map((clip) => ({
 					trackId: track.id,
-					elementId: element.id,
+					clipId: clip.id,
 				})),
 			);
-			setElementSelection({ elements: allElements });
+			setClipSelection({ clips: allClips });
 		},
 		undefined,
 	);
@@ -414,33 +414,33 @@ export function useEditorActions() {
 	useActionHandler(
 		"duplicate-selected",
 		() => {
-			editor.timeline.duplicateElements({
-				elements: selectedElements,
+			editor.timeline.duplicateClips({
+				clips: selectedClips,
 			});
 		},
 		undefined,
 	);
 
 	useActionHandler(
-		"toggle-elements-muted-selected",
+		"toggle-clips-muted-selected",
 		() => {
-			editor.timeline.toggleElementsMuted({ elements: selectedElements });
+			editor.timeline.toggleClipsMuted({ clips: selectedClips });
 		},
 		undefined,
 	);
 
 	useActionHandler(
-		"toggle-elements-visibility-selected",
+		"toggle-clips-visibility-selected",
 		() => {
-			editor.timeline.toggleElementsVisibility({ elements: selectedElements });
+			editor.timeline.toggleClipsVisibility({ clips: selectedClips });
 		},
 		undefined,
 	);
 
 	useActionHandler(
-		"toggle-bookmark",
+		"toggle-marker",
 		() => {
-			editor.scenes.toggleBookmark({ time: editor.playback.getCurrentTime() });
+			editor.sequences.toggleMarker({ time: editor.playback.getCurrentTime() });
 		},
 		undefined,
 	);
@@ -495,24 +495,24 @@ export function useEditorActions() {
 
 	// todo: potnetially unify these two actions:
 	useActionHandler(
-		"remove-media-asset",
+		"remove-project-item",
 		(args) => {
 			if (!args) return;
-			editor.media.removeMediaAsset({
+			editor.media.removeProjectItem({
 				projectId: args.projectId,
-				id: args.assetId,
+				id: args.projectItemId,
 			});
 		},
 		undefined,
 	);
 
 	useActionHandler(
-		"remove-media-assets",
+		"remove-project-items",
 		(args) => {
 			if (!args) return;
-			editor.media.removeMediaAssets({
+			editor.media.removeProjectItems({
 				projectId: args.projectId,
-				ids: args.assetIds,
+				ids: args.projectItemIds,
 			});
 		},
 		undefined,

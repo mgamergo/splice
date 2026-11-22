@@ -28,9 +28,9 @@ import {
 import { usePreviewStore } from "@/preview/preview-store";
 import { getGuidePreviewOverlaySource } from "@/guides";
 import {
-	bookmarkNotesPreviewOverlay,
-	getBookmarkPreviewOverlaySource,
-} from "@/timeline/bookmarks/index";
+	markerNotesPreviewOverlay,
+	getMarkerPreviewOverlaySource,
+} from "@/timeline/markers/index";
 
 export default function Editor() {
 	const params = useParams();
@@ -75,8 +75,8 @@ function DegradedRendererBanner() {
 function EditorLayout() {
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
-	const activeScene = useEditor((editor) =>
-		editor.scenes.getActiveSceneOrNull(),
+	const activeSequence = useEditor((editor) =>
+		editor.sequences.getActiveSequenceOrNull(),
 	);
 	const currentTime = useEditor((editor) => editor.playback.getCurrentTime());
 	const activeGuide = usePreviewStore((state) => state.activeGuide);
@@ -84,8 +84,8 @@ function EditorLayout() {
 	const setOverlayVisibility = usePreviewStore(
 		(state) => state.setOverlayVisibility,
 	);
-	const showBookmarkNotes = isPreviewOverlayVisible({
-		overlay: bookmarkNotesPreviewOverlay,
+	const showMarkerNotes = isPreviewOverlayVisible({
+		overlay: markerNotesPreviewOverlay,
 		overlays,
 	});
 
@@ -96,19 +96,19 @@ function EditorLayout() {
 					getGuidePreviewOverlaySource({
 						guideId: activeGuide,
 					}),
-					activeScene
-						? getBookmarkPreviewOverlaySource({
-								bookmarks: activeScene.bookmarks,
+					activeSequence
+						? getMarkerPreviewOverlaySource({
+								markers: activeSequence.markers,
 								time: currentTime,
-								isVisible: showBookmarkNotes,
+								isVisible: showMarkerNotes,
 							})
 						: {
-								definitions: [bookmarkNotesPreviewOverlay],
+								definitions: [markerNotesPreviewOverlay],
 								instances: [],
 							},
 				],
 			}),
-		[activeGuide, activeScene, currentTime, showBookmarkNotes],
+		[activeGuide, activeSequence, currentTime, showMarkerNotes],
 	);
 
 	const overlayControls = useMemo(

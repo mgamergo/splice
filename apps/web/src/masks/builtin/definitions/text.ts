@@ -13,7 +13,7 @@ import {
 	measureTextLayout,
 	strokeMeasuredTextLayout,
 } from "@/text/primitives";
-import { getTextMeasurementContext } from "@/text/measure-element";
+import { getTextMeasurementContext } from "@/text/measure-clip";
 import { getTextVisualRect } from "@/text/layout";
 import {
 	getBoxMaskHandlePositions,
@@ -274,7 +274,7 @@ export const textMaskDefinition: MaskDefinition<"text"> = {
 				const { snappedPosition, activeLines } = snapPosition({
 					proposedPosition: position,
 					canvasSize: bounds,
-					elementSize: {
+					clipSize: {
 						width: intrinsicWidth * proposedParams.scale,
 						height: intrinsicHeight * proposedParams.scale,
 					},

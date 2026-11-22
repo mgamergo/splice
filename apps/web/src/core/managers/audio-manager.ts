@@ -2,7 +2,7 @@ import type { EditorCore } from "@/core";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
 import type { AudioClipSource } from "@/media/audio";
-import { createAudioContext, collectAudioClips } from "@/media/audio";
+import { createAudioContext, collectAudioClipSources } from "@/media/audio";
 import {
 	buildAudioGainAutomation,
 	hasAnimatedVolume,
@@ -154,8 +154,8 @@ export class AudioManager {
 		this.playbackSessionId++;
 		this.playbackLatencyCompensationSeconds = 0;
 
-		const tracks = this.editor.scenes.getActiveScene().tracks;
-		const mediaAssets = this.editor.media.getAssets();
+		const tracks = this.editor.sequences.getActiveSequence().tracks;
+		const projectItems = this.editor.media.getProjectItems();
 		const duration = this.editor.timeline.getTotalDuration();
 
 		if (duration <= 0) return;
@@ -164,7 +164,7 @@ export class AudioManager {
 			await audioContext.resume();
 		}
 
-		this.clips = await collectAudioClips({ tracks, mediaAssets });
+		this.clips = await collectAudioClipSources({ tracks, projectItems });
 		if (!this.editor.playback.getIsPlaying()) return;
 
 		this.playbackStartTime = time;
@@ -461,7 +461,7 @@ export class AudioManager {
 	}): boolean {
 		return (
 			this.hasCurveRetime({ clip }) ||
-			hasAnimatedVolume({ element: clip.timelineElement }) ||
+			hasAnimatedVolume({ clip: clip.timelineClip }) ||
 			shouldMaintainPitch({
 				rate: clip.retime?.rate ?? 1,
 				maintainPitch: clip.retime?.maintainPitch,
@@ -490,12 +490,12 @@ export class AudioManager {
 		clipGain.gain.cancelScheduledValues(startTimestamp);
 		clipGain.gain.setValueAtTime(clip.volume, startTimestamp);
 
-		if (!hasAnimatedVolume({ element: clip.timelineElement })) {
+		if (!hasAnimatedVolume({ clip: clip.timelineClip })) {
 			return;
 		}
 
 		const points = buildAudioGainAutomation({
-			element: clip.timelineElement,
+			clip: clip.timelineClip,
 			fromLocalTime: startLocalTime,
 			toLocalTime: clip.duration,
 		});

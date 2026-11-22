@@ -3,7 +3,7 @@ import { buildDefaultParamValues } from "@/params/registry";
 import { effectsRegistry } from "./registry";
 import type { ParamValues } from "@/params";
 import type { Effect, EffectDefinition, EffectPass } from "@/effects/types";
-import { VISUAL_ELEMENT_TYPES } from "@/timeline";
+import { VISUAL_CLIP_TYPES } from "@/timeline";
 
 export { effectsRegistry } from "./registry";
 export { registerDefaultEffects } from "./definitions";
@@ -28,7 +28,7 @@ export function resolveEffectPasses({
 	}));
 }
 
-export const EFFECT_TARGET_ELEMENT_TYPES = VISUAL_ELEMENT_TYPES;
+export const EFFECT_TARGET_CLIP_TYPES = VISUAL_CLIP_TYPES;
 
 export function buildDefaultEffectInstance({
 	effectType,

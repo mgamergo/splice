@@ -95,9 +95,9 @@ export function PreviewPanel({
 function RenderTreeController() {
 	const editor = useEditor();
 	const tracks = useEditor(
-		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
+		(e) => e.timeline.getPreviewTracks() ?? e.sequences.getActiveSequence().tracks,
 	);
-	const mediaAssets = useEditor((e) => e.media.getAssets());
+	const projectItems = useEditor((e) => e.media.getProjectItems());
 	const activeProject = useEditor((e) => e.project.getActive());
 
 	const { width, height } = usePreviewSize();
@@ -108,7 +108,7 @@ function RenderTreeController() {
 		const duration = editor.timeline.getTotalDuration();
 		const renderTree = buildScene({
 			tracks,
-			mediaAssets,
+			projectItems,
 			duration,
 			canvasSize: { width, height },
 			background: activeProject.settings.background,
@@ -116,7 +116,7 @@ function RenderTreeController() {
 		});
 
 		editor.renderer.setRenderTree({ renderTree });
-	}, [tracks, mediaAssets, activeProject?.settings.background, width, height]);
+	}, [tracks, projectItems, activeProject?.settings.background, width, height]);
 
 	return null;
 }
@@ -140,7 +140,7 @@ function PreviewCanvas({
 	const canvasMountRef = useRef<HTMLDivElement>(null);
 	const viewportRef = useRef<HTMLDivElement>(null);
 	const lastFrameRef = useRef(-1);
-	const lastSceneRef = useRef<RootNode | null>(null);
+	const lastSequenceRef = useRef<RootNode | null>(null);
 	const renderingRef = useRef(false);
 	const { width: nativeWidth, height: nativeHeight } = usePreviewSize();
 	const viewportSize = useContainerSize({ containerRef: viewportRef });
@@ -165,7 +165,7 @@ function PreviewCanvas({
 	}, [nativeWidth, nativeHeight, activeProject.settings.fps]);
 
 	// Mount the compositor's output canvas directly into the preview. wgpu
-	// renders straight into this element, so there is no intermediate copy —
+	// renders straight into this clip, so there is no intermediate copy —
 	// the container div owns positioning/styling, the canvas itself fills it.
 	useEffect(() => {
 		const mount = canvasMountRef.current;
@@ -196,13 +196,13 @@ function PreviewCanvas({
 
 		if (
 			frame === lastFrameRef.current &&
-			renderTree === lastSceneRef.current
+			renderTree === lastSequenceRef.current
 		) {
 			return;
 		}
 
 		renderingRef.current = true;
-		lastSceneRef.current = renderTree;
+		lastSequenceRef.current = renderTree;
 		lastFrameRef.current = frame;
 		renderer
 			.render({ node: renderTree, time: renderTime })

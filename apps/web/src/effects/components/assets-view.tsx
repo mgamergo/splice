@@ -3,10 +3,10 @@
 import { useEffect, useRef, useCallback } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
-import { effectsRegistry, EFFECT_TARGET_ELEMENT_TYPES } from "@/effects";
+import { effectsRegistry, EFFECT_TARGET_CLIP_TYPES } from "@/effects";
 import { effectPreviewService } from "@/services/renderer/effect-preview";
 import { useEditor } from "@/editor/use-editor";
-import { buildEffectElement } from "@/timeline/element-utils";
+import { buildEffectClip } from "@/timeline/clip-utils";
 import type { EffectDefinition } from "@/effects/types";
 
 export function EffectsView() {
@@ -58,14 +58,14 @@ function EffectItem({ effect }: { effect: EffectDefinition }) {
 
 	const handleAddToTimeline = useCallback(() => {
 		const currentTime = editor.playback.getCurrentTime();
-		const element = buildEffectElement({
+		const clip = buildEffectClip({
 			effectType: effect.type,
 			startTime: currentTime,
 		});
 
-		editor.timeline.insertElement({
+		editor.timeline.insertClip({
 			placement: { mode: "auto", trackType: "effect" },
-			element,
+			clip,
 		});
 	}, [editor, effect.type]);
 
@@ -80,7 +80,7 @@ function EffectItem({ effect }: { effect: EffectDefinition }) {
 				name: effect.name,
 				type: "effect",
 				effectType: effect.type,
-				targetElementTypes: EFFECT_TARGET_ELEMENT_TYPES,
+				targetClipTypes: EFFECT_TARGET_CLIP_TYPES,
 			}}
 			onAddToTimeline={handleAddToTimeline}
 			aspectRatio={1}

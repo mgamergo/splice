@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SelectionBox } from "@/selection/selection-box";
 import { SelectionContext } from "@/selection/context";
 import { SELECTABLE_ITEM_ATTRIBUTE } from "@/selection/attributes";
-import { resolveElementIntersections } from "@/selection/hit-testing";
+import { resolveClipIntersections } from "@/selection/hit-testing";
 import {
 	applyBoxSelection,
 	clearSelection,
@@ -38,9 +38,9 @@ export function SelectableSurface({
 	const itemElementsRef = useRef<Map<string, HTMLElement>>(new Map());
 
 	const registerItem = useCallback(
-		(id: string, element: HTMLElement | null) => {
-			if (element) {
-				itemElementsRef.current.set(id, element);
+		(id: string, clip: HTMLElement | null) => {
+			if (clip) {
+				itemElementsRef.current.set(id, clip);
 			} else {
 				itemElementsRef.current.delete(id);
 			}
@@ -48,7 +48,7 @@ export function SelectableSurface({
 		[],
 	);
 
-	const getSelectableElements = useCallback(() => {
+	const getSelectableClips = useCallback(() => {
 		return itemElementsRef.current;
 	}, []);
 
@@ -72,13 +72,13 @@ export function SelectableSurface({
 			startPos: { x: number; y: number };
 			currentPos: { x: number; y: number };
 		}) => {
-			return resolveElementIntersections({
+			return resolveClipIntersections({
 				startPos,
 				currentPos,
-				elements: getSelectableElements(),
+				clips: getSelectableClips(),
 			});
 		},
-		[getSelectableElements],
+		[getSelectableClips],
 	);
 
 	const clearSelectionState = useCallback(() => {

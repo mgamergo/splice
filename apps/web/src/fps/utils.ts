@@ -1,7 +1,7 @@
 import type { FrameRate } from "opencut-wasm";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 
-type MediaAssetFpsInput = Pick<MediaAsset, "type" | "fps">;
+type ProjectItemFpsInput = Pick<ProjectItem, "type" | "fps">;
 
 const STANDARD_FRAME_RATES: Array<{ value: number; rate: FrameRate }> = [
 	{ value: 24_000 / 1_001, rate: { numerator: 24_000, denominator: 1_001 } },
@@ -66,15 +66,15 @@ function gcd({ left, right }: { left: number; right: number }): number {
 }
 
 export function getHighestImportedVideoFps({
-	mediaAssets,
+	projectItems,
 }: {
-	mediaAssets: MediaAssetFpsInput[];
+	projectItems: ProjectItemFpsInput[];
 }): number | null {
 	let highestFps: number | null = null;
 
-	for (const asset of mediaAssets) {
-		const fps = asset.fps ?? Number.NaN;
-		if (asset.type !== "video") continue;
+	for (const projectItem of projectItems) {
+		const fps = projectItem.fps ?? Number.NaN;
+		if (projectItem.type !== "video") continue;
 		if (!Number.isFinite(fps) || fps <= 0) continue;
 
 		highestFps = highestFps === null ? fps : Math.max(highestFps, fps);
@@ -85,13 +85,13 @@ export function getHighestImportedVideoFps({
 
 export function getRaisedProjectFpsForImportedMedia({
 	currentFps,
-	importedAssets,
+	importedProjectItems,
 }: {
 	currentFps: FrameRate;
-	importedAssets: MediaAssetFpsInput[];
+	importedProjectItems: ProjectItemFpsInput[];
 }): FrameRate | null {
 	const highestImportedVideoFps = getHighestImportedVideoFps({
-		mediaAssets: importedAssets,
+		projectItems: importedProjectItems,
 	});
 
 	const currentFpsFloat = frameRateToFloat(currentFps);

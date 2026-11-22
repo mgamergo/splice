@@ -1,43 +1,43 @@
 import type { EditorCore } from "@/core";
 import { toast } from "sonner";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 import { storageService } from "@/services/storage/service";
 import { generateUUID } from "@/utils/id";
 import { videoCache } from "@/services/video-cache/service";
 import { waveformCache } from "@/services/waveform-cache/service";
-import { BatchCommand, RemoveMediaAssetCommand } from "@/commands";
+import { BatchCommand, RemoveProjectItemCommand } from "@/commands";
 
 export class MediaManager {
-	private assets: MediaAsset[] = [];
+	private projectItems: ProjectItem[] = [];
 	private isLoading = false;
 	private listeners = new Set<() => void>();
 
 	constructor(private editor: EditorCore) {}
 
-	async addMediaAsset({
+	async addProjectItem({
 		projectId,
-		asset,
+		projectItem,
 	}: {
 		projectId: string;
-		asset: Omit<MediaAsset, "id">;
-	}): Promise<MediaAsset | null> {
-		const newAsset: MediaAsset = {
-			...asset,
+		projectItem: Omit<ProjectItem, "id">;
+	}): Promise<ProjectItem | null> {
+		const newProjectItem: ProjectItem = {
+			...projectItem,
 			id: generateUUID(),
 		};
 
-		this.assets = [...this.assets, newAsset];
+		this.projectItems = [...this.projectItems, newProjectItem];
 		this.notify();
 
 		try {
-			await storageService.saveMediaAsset({ projectId, mediaAsset: newAsset });
+			await storageService.saveProjectItem({ projectId, projectItem: newProjectItem });
 			this.editor.project.ratchetFpsForImportedMedia({
-				importedAssets: [newAsset],
+				importedProjectItems: [newProjectItem],
 			});
-			return newAsset;
+			return newProjectItem;
 		} catch (error) {
-			console.error("Failed to save media asset:", error);
-			this.assets = this.assets.filter((asset) => asset.id !== newAsset.id);
+			console.error("Failed to save project item:", error);
+			this.projectItems = this.projectItems.filter((projectItem) => projectItem.id !== newProjectItem.id);
 			this.notify();
 
 			if (storageService.isQuotaExceededError({ error })) {
@@ -50,11 +50,11 @@ export class MediaManager {
 		}
 	}
 
-	removeMediaAsset({ projectId, id }: { projectId: string; id: string }): void {
-		this.removeMediaAssets({ projectId, ids: [id] });
+	removeProjectItem({ projectId, id }: { projectId: string; id: string }): void {
+		this.removeProjectItems({ projectId, ids: [id] });
 	}
 
-	removeMediaAssets({
+	removeProjectItems({
 		projectId,
 		ids,
 	}: {
@@ -68,15 +68,15 @@ export class MediaManager {
 
 		const command =
 			uniqueIds.length === 1
-				? new RemoveMediaAssetCommand({
+				? new RemoveProjectItemCommand({
 						projectId,
-						assetId: uniqueIds[0],
+						projectItemId: uniqueIds[0],
 					})
 				: new BatchCommand(
 						uniqueIds.map((id) =>
-							new RemoveMediaAssetCommand({
+							new RemoveProjectItemCommand({
 								projectId,
-								assetId: id,
+								projectItemId: id,
 							}),
 						),
 					);
@@ -89,13 +89,13 @@ export class MediaManager {
 		this.notify();
 
 		try {
-			const mediaAssets = await storageService.loadAllMediaAssets({
+			const projectItems = await storageService.loadAllProjectItems({
 				projectId,
 			});
-			this.assets = mediaAssets;
+			this.projectItems = projectItems;
 			this.notify();
 		} catch (error) {
-			console.error("Failed to load media assets:", error);
+			console.error("Failed to load project items:", error);
 		} finally {
 			this.isLoading = false;
 			this.notify();
@@ -105,53 +105,53 @@ export class MediaManager {
 	async clearProjectMedia({ projectId }: { projectId: string }): Promise<void> {
 		waveformCache.clearAll();
 
-		this.assets.forEach((asset) => {
-			if (asset.url) {
-				URL.revokeObjectURL(asset.url);
+		this.projectItems.forEach((projectItem) => {
+			if (projectItem.url) {
+				URL.revokeObjectURL(projectItem.url);
 			}
-			if (asset.thumbnailUrl) {
-				URL.revokeObjectURL(asset.thumbnailUrl);
+			if (projectItem.thumbnailUrl) {
+				URL.revokeObjectURL(projectItem.thumbnailUrl);
 			}
 		});
 
-		const mediaIds = this.assets.map((asset) => asset.id);
-		this.assets = [];
+		const mediaIds = this.projectItems.map((projectItem) => projectItem.id);
+		this.projectItems = [];
 		this.notify();
 
 		try {
 			await Promise.all(
 				mediaIds.map((id) =>
-					storageService.deleteMediaAsset({ projectId, id }),
+					storageService.deleteProjectItem({ projectId, id }),
 				),
 			);
 		} catch (error) {
-			console.error("Failed to clear media assets from storage:", error);
+			console.error("Failed to clear project items from storage:", error);
 		}
 	}
 
-	clearAllAssets(): void {
+	clearAllProjectItems(): void {
 		videoCache.clearAll();
 		waveformCache.clearAll();
 
-		this.assets.forEach((asset) => {
-			if (asset.url) {
-				URL.revokeObjectURL(asset.url);
+		this.projectItems.forEach((projectItem) => {
+			if (projectItem.url) {
+				URL.revokeObjectURL(projectItem.url);
 			}
-			if (asset.thumbnailUrl) {
-				URL.revokeObjectURL(asset.thumbnailUrl);
+			if (projectItem.thumbnailUrl) {
+				URL.revokeObjectURL(projectItem.thumbnailUrl);
 			}
 		});
 
-		this.assets = [];
+		this.projectItems = [];
 		this.notify();
 	}
 
-	getAssets(): MediaAsset[] {
-		return this.assets;
+	getProjectItems(): ProjectItem[] {
+		return this.projectItems;
 	}
 
-	setAssets({ assets }: { assets: MediaAsset[] }): void {
-		this.assets = assets;
+	setProjectItems({ projectItems }: { projectItems: ProjectItem[] }): void {
+		this.projectItems = projectItems;
 		this.notify();
 	}
 

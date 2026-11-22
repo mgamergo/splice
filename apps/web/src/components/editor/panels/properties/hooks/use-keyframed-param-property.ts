@@ -9,14 +9,14 @@ import {
 } from "@/animation";
 import type {
 	AnimationPath,
-	ElementAnimations,
+	ClipAnimations,
 } from "@/animation/types";
 import {
 	coerceParamValue,
 	getParamChannelLayout,
 	type ParamDefinition,
 } from "@/params";
-import type { TimelineElement } from "@/timeline";
+import type { TimelineClip } from "@/timeline";
 import type { MediaTime } from "@/wasm";
 
 export interface KeyframedParamPropertyResult {
@@ -31,27 +31,27 @@ export interface KeyframedParamPropertyResult {
 export function useKeyframedParamProperty({
 	param,
 	trackId,
-	elementId,
+	clipId,
 	animations,
 	propertyPath,
 	localTime,
-	isPlayheadWithinElementRange,
+	isPlayheadWithinClipRange,
 	resolvedValue,
 	buildBaseUpdates,
 }: {
 	param: ParamDefinition;
 	trackId: string;
-	elementId: string;
-	animations: ElementAnimations | undefined;
+	clipId: string;
+	animations: ClipAnimations | undefined;
 	propertyPath?: AnimationPath;
 	localTime: MediaTime;
-	isPlayheadWithinElementRange: boolean;
+	isPlayheadWithinClipRange: boolean;
 	resolvedValue: number | string | boolean;
 	buildBaseUpdates: ({
 		value,
 	}: {
 		value: number | string | boolean;
-	}) => Partial<TimelineElement>;
+	}) => Partial<TimelineClip>;
 }): KeyframedParamPropertyResult {
 	const editor = useEditor();
 	const resolvedPropertyPath =
@@ -60,7 +60,7 @@ export function useKeyframedParamProperty({
 		animations,
 		propertyPath: resolvedPropertyPath,
 	});
-	const keyframeAtTime = isPlayheadWithinElementRange
+	const keyframeAtTime = isPlayheadWithinClipRange
 		? getKeyframeAtTime({
 				animations,
 				propertyPath: resolvedPropertyPath,
@@ -70,15 +70,15 @@ export function useKeyframedParamProperty({
 	const keyframeIdAtTime = keyframeAtTime?.id ?? null;
 	const isKeyframedAtTime = keyframeAtTime !== null;
 	const shouldUseAnimatedChannel =
-		hasAnimatedKeyframes && isPlayheadWithinElementRange;
+		hasAnimatedKeyframes && isPlayheadWithinClipRange;
 
 	const previewValue: KeyframedParamPropertyResult["onPreview"] = (value) => {
 		if (shouldUseAnimatedChannel) {
-			editor.timeline.previewElements({
+			editor.timeline.previewClips({
 				updates: [
 					{
 						trackId,
-						elementId,
+						clipId,
 						updates: {
 							animations: upsertPathKeyframe({
 								animations,
@@ -99,11 +99,11 @@ export function useKeyframedParamProperty({
 			return;
 		}
 
-		editor.timeline.previewElements({
+		editor.timeline.previewClips({
 			updates: [
 				{
 					trackId,
-					elementId,
+					clipId,
 					updates: buildBaseUpdates({ value }),
 				},
 			],
@@ -111,7 +111,7 @@ export function useKeyframedParamProperty({
 	};
 
 	const toggleKeyframe = () => {
-		if (!isPlayheadWithinElementRange) {
+		if (!isPlayheadWithinClipRange) {
 			return;
 		}
 
@@ -120,7 +120,7 @@ export function useKeyframedParamProperty({
 				keyframes: [
 					{
 						trackId,
-						elementId,
+						clipId,
 						propertyPath: resolvedPropertyPath,
 						keyframeId: keyframeIdAtTime,
 					},
@@ -133,7 +133,7 @@ export function useKeyframedParamProperty({
 			keyframes: [
 				{
 					trackId,
-					elementId,
+					clipId,
 					propertyPath: resolvedPropertyPath,
 					time: localTime,
 					value: resolvedValue,

@@ -1,6 +1,6 @@
 import type { TProject, TProjectMetadata } from "@/project/types";
-import { getProjectDurationFromScenes } from "@/timeline/scenes";
-import type { MediaAsset } from "@/media/types";
+import { getProjectDurationFromSequences } from "@/timeline/sequences";
+import type { ProjectItem } from "@/media/types";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
 import { OPFSAdapter } from "./opfs-adapter";
 import {
@@ -11,20 +11,20 @@ import {
 	readStorageQuotaStatus,
 } from "./quota";
 import type {
-	MediaAssetData,
+	ProjectItemData,
 	StorageConfig,
 	SerializedProject,
-	SerializedScene,
+	SerializedSequence,
 } from "./types";
 import type { SavedSoundsData, SavedSound, SoundEffect } from "@/sounds/types";
 import { isSupportedProjectFormat } from "./format";
-import type { Bookmark, SceneTracks, TScene } from "@/timeline";
+import type { Marker, SequenceTracks, TSequence } from "@/timeline";
 import { roundMediaTime } from "@/wasm";
 
-function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
+function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
 	if (!Array.isArray(raw)) return [];
 	return raw
-		.map((item): Bookmark | null => {
+		.map((item): Marker | null => {
 			if (typeof item === "number") {
 				return { time: roundMediaTime({ time: item }) };
 			}
@@ -45,7 +45,7 @@ function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 				}),
 			};
 		})
-		.filter((b): b is Bookmark => b !== null);
+		.filter((b): b is Marker => b !== null);
 }
 
 class StorageService {
@@ -75,15 +75,15 @@ class StorageService {
 	}
 
 	private getProjectMediaAdapters({ projectId }: { projectId: string }) {
-		const mediaMetadataAdapter = new IndexedDBAdapter<MediaAssetData>({
+		const mediaMetadataAdapter = new IndexedDBAdapter<ProjectItemData>({
 			dbName: `${this.config.mediaDb}-${projectId}`,
 			storeName: "media-metadata",
 			version: this.config.version,
 		});
 
-		const mediaAssetsAdapter = new OPFSAdapter(`splice-media-files-${projectId}`);
+		const projectItemsAdapter = new OPFSAdapter(`splice-media-files-${projectId}`);
 
-		return { mediaMetadataAdapter, mediaAssetsAdapter };
+		return { mediaMetadataAdapter, projectItemsAdapter };
 	}
 
 	async canStoreFile({
@@ -102,13 +102,13 @@ class StorageService {
 		return isStorageQuotaExceededError({ error });
 	}
 
-	private stripAudioBuffers({ tracks }: { tracks: SceneTracks }): SceneTracks {
+	private stripAudioBuffers({ tracks }: { tracks: SequenceTracks }): SequenceTracks {
 		return {
 			...tracks,
 			audio: tracks.audio.map((track) => ({
 				...track,
-				elements: track.elements.map((element) => {
-					const { buffer: _buffer, ...rest } = element;
+				clips: track.clips.map((clip) => {
+					const { buffer: _buffer, ...rest } = clip;
 					return rest;
 				}),
 			})),
@@ -118,15 +118,15 @@ class StorageService {
 	async saveProject({ project }: { project: TProject }): Promise<void> {
 		const duration =
 			project.metadata.duration ??
-			getProjectDurationFromScenes({ scenes: project.scenes });
-		const serializedScenes: SerializedScene[] = project.scenes.map((scene) => ({
-			id: scene.id,
-			name: scene.name,
-			isMain: scene.isMain,
-			tracks: this.stripAudioBuffers({ tracks: scene.tracks }),
-			bookmarks: scene.bookmarks,
-			createdAt: scene.createdAt.toISOString(),
-			updatedAt: scene.updatedAt.toISOString(),
+			getProjectDurationFromSequences({ sequences: project.sequences });
+		const serializedSequences: SerializedSequence[] = project.sequences.map((sequence) => ({
+			id: sequence.id,
+			name: sequence.name,
+			isMain: sequence.isMain,
+			tracks: this.stripAudioBuffers({ tracks: sequence.tracks }),
+			markers: sequence.markers,
+			createdAt: sequence.createdAt.toISOString(),
+			updatedAt: sequence.updatedAt.toISOString(),
 		}));
 
 		const serializedProject: SerializedProject = {
@@ -138,8 +138,8 @@ class StorageService {
 				createdAt: project.metadata.createdAt.toISOString(),
 				updatedAt: project.metadata.updatedAt.toISOString(),
 			},
-			scenes: serializedScenes,
-			currentSceneId: project.currentSceneId,
+			sequences: serializedSequences,
+			currentSequenceId: project.currentSequenceId,
 			settings: project.settings,
 			version: project.version,
 			timelineViewState: project.timelineViewState,
@@ -181,15 +181,15 @@ class StorageService {
 			return null;
 		}
 
-		const scenes =
-			serializedProject.scenes?.map((scene) => ({
-				id: scene.id,
-				name: scene.name,
-				isMain: scene.isMain,
-				tracks: scene.tracks,
-				bookmarks: normalizeBookmarks({ raw: scene.bookmarks }),
-				createdAt: new Date(scene.createdAt),
-				updatedAt: new Date(scene.updatedAt),
+		const sequences =
+			serializedProject.sequences?.map((sequence) => ({
+				id: sequence.id,
+				name: sequence.name,
+				isMain: sequence.isMain,
+				tracks: sequence.tracks,
+				markers: normalizeMarkers({ raw: sequence.markers }),
+				createdAt: new Date(sequence.createdAt),
+				updatedAt: new Date(sequence.updatedAt),
 			})) ?? [];
 
 		const project: TProject = {
@@ -200,13 +200,13 @@ class StorageService {
 				duration: roundMediaTime({
 					time:
 						serializedProject.metadata.duration ??
-						getProjectDurationFromScenes({ scenes }),
+						getProjectDurationFromSequences({ sequences }),
 				}),
 				createdAt: new Date(serializedProject.metadata.createdAt),
 				updatedAt: new Date(serializedProject.metadata.updatedAt),
 			},
-			scenes,
-			currentSceneId: serializedProject.currentSceneId || "",
+			sequences,
+			currentSequenceId: serializedProject.currentSequenceId || "",
 			settings: serializedProject.settings,
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
@@ -261,8 +261,8 @@ class StorageService {
 				duration: roundMediaTime({
 					time:
 						serializedProject.metadata.duration ??
-						getProjectDurationFromScenes({
-							scenes: (serializedProject.scenes ?? []) as unknown as TScene[],
+						getProjectDurationFromSequences({
+							sequences: (serializedProject.sequences ?? []) as unknown as TSequence[],
 						}),
 				}),
 				createdAt: new Date(serializedProject.metadata.createdAt),
@@ -279,48 +279,48 @@ class StorageService {
 		await this.projectsAdapter.remove(id);
 	}
 
-	async saveMediaAsset({
+	async saveProjectItem({
 		projectId,
-		mediaAsset,
+		projectItem,
 	}: {
 		projectId: string;
-		mediaAsset: MediaAsset;
+		projectItem: ProjectItem;
 	}): Promise<void> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
+		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
-		const metadata: MediaAssetData = {
-			id: mediaAsset.id,
-			name: mediaAsset.name,
-			type: mediaAsset.type,
-			size: mediaAsset.file.size,
-			lastModified: mediaAsset.file.lastModified,
-			width: mediaAsset.width,
-			height: mediaAsset.height,
-			duration: mediaAsset.duration,
-			thumbnailUrl: mediaAsset.thumbnailUrl,
-			ephemeral: mediaAsset.ephemeral,
+		const metadata: ProjectItemData = {
+			id: projectItem.id,
+			name: projectItem.name,
+			type: projectItem.type,
+			size: projectItem.file.size,
+			lastModified: projectItem.file.lastModified,
+			width: projectItem.width,
+			height: projectItem.height,
+			duration: projectItem.duration,
+			thumbnailUrl: projectItem.thumbnailUrl,
+			ephemeral: projectItem.ephemeral,
 		};
 
 		try {
-			await mediaAssetsAdapter.set({
-				key: mediaAsset.id,
-				value: mediaAsset.file,
+			await projectItemsAdapter.set({
+				key: projectItem.id,
+				value: projectItem.file,
 			});
 			await mediaMetadataAdapter.set({
-				key: mediaAsset.id,
+				key: projectItem.id,
 				value: metadata,
 			});
 		} catch (error) {
 			try {
-				await mediaAssetsAdapter.remove(mediaAsset.id);
+				await projectItemsAdapter.remove(projectItem.id);
 			} catch {
 				// Ignore cleanup failures so the original storage error is preserved.
 			}
 
 			if (this.isQuotaExceededError({ error })) {
 				throw new StorageQuotaExceededError({
-					requiredBytes: mediaAsset.file.size,
+					requiredBytes: projectItem.file.size,
 				});
 			}
 
@@ -328,18 +328,18 @@ class StorageService {
 		}
 	}
 
-	async loadMediaAsset({
+	async loadProjectItem({
 		projectId,
 		id,
 	}: {
 		projectId: string;
 		id: string;
-	}): Promise<MediaAsset | null> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
+	}): Promise<ProjectItem | null> {
+		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
 		const [file, metadata] = await Promise.all([
-			mediaAssetsAdapter.get(id),
+			projectItemsAdapter.get(id),
 			mediaMetadataAdapter.get(id),
 		]);
 
@@ -376,20 +376,20 @@ class StorageService {
 		};
 	}
 
-	async loadAllMediaAssets({
+	async loadAllProjectItems({
 		projectId,
 	}: {
 		projectId: string;
-	}): Promise<MediaAsset[]> {
+	}): Promise<ProjectItem[]> {
 		const { mediaMetadataAdapter } = this.getProjectMediaAdapters({
 			projectId,
 		});
 
 		const mediaIds = await mediaMetadataAdapter.list();
-		const mediaItems: MediaAsset[] = [];
+		const mediaItems: ProjectItem[] = [];
 
 		for (const id of mediaIds) {
-			const item = await this.loadMediaAsset({ projectId, id });
+			const item = await this.loadProjectItem({ projectId, id });
 			if (item) {
 				mediaItems.push(item);
 			}
@@ -398,18 +398,18 @@ class StorageService {
 		return mediaItems;
 	}
 
-	async deleteMediaAsset({
+	async deleteProjectItem({
 		projectId,
 		id,
 	}: {
 		projectId: string;
 		id: string;
 	}): Promise<void> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
+		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
 		await Promise.all([
-			mediaAssetsAdapter.remove(id),
+			projectItemsAdapter.remove(id),
 			mediaMetadataAdapter.remove(id),
 		]);
 	}
@@ -419,12 +419,12 @@ class StorageService {
 	}: {
 		projectId: string;
 	}): Promise<void> {
-		const { mediaMetadataAdapter, mediaAssetsAdapter } =
+		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
 		await Promise.all([
 			mediaMetadataAdapter.clear(),
-			mediaAssetsAdapter.clear(),
+			projectItemsAdapter.clear(),
 		]);
 	}
 

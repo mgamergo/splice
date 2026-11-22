@@ -2,8 +2,8 @@ import type {
 	AnimationChannel,
 	AnimationPath,
 	ChannelData,
-	ElementAnimations,
-	ElementKeyframe,
+	ClipAnimations,
+	ClipKeyframe,
 } from "@/animation/types";
 import { formatLinearRgba } from "@/params";
 import {
@@ -177,7 +177,7 @@ function getKeyframeInterpolation({
 		: "hold";
 }
 
-function toElementKeyframe({
+function toClipKeyframe({
 	data,
 	propertyPath,
 	keyframeMatch,
@@ -185,7 +185,7 @@ function toElementKeyframe({
 	data: ChannelData | undefined;
 	propertyPath: AnimationPath;
 	keyframeMatch: ChannelKeyframeMatch;
-}): ElementKeyframe | null {
+}): ClipKeyframe | null {
 	const value = getComposedChannelDataValueAtTime({
 		data,
 		time: keyframeMatch.keyframe.time,
@@ -206,11 +206,11 @@ function toElementKeyframe({
 	};
 }
 
-export function getElementKeyframes({
+export function getClipKeyframes({
 	animations,
 }: {
-	animations: ElementAnimations | undefined;
-}): ElementKeyframe[] {
+	animations: ClipAnimations | undefined;
+}): ClipKeyframe[] {
 	if (!animations) {
 		return [];
 	}
@@ -226,7 +226,7 @@ export function getElementKeyframes({
 			return getUniqueChannelKeyframeMatches({
 				data,
 			}).flatMap((keyframeMatch) => {
-				const keyframe = toElementKeyframe({
+				const keyframe = toClipKeyframe({
 					data,
 					propertyPath,
 					keyframeMatch,
@@ -245,7 +245,7 @@ export function hasKeyframesForPath({
 	animations,
 	propertyPath,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 }): boolean {
 	return getChannelEntriesFromData({ data: animations?.[propertyPath] }).some(
@@ -258,10 +258,10 @@ export function getKeyframeAtTime({
 	propertyPath,
 	time,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	time: number;
-}): ElementKeyframe | null {
+}): ClipKeyframe | null {
 	const data = animations?.[propertyPath];
 	if (!data) {
 		return null;
@@ -276,7 +276,7 @@ export function getKeyframeAtTime({
 		return null;
 	}
 
-	return toElementKeyframe({
+	return toClipKeyframe({
 		data,
 		propertyPath,
 		keyframeMatch,
@@ -288,10 +288,10 @@ export function getKeyframeById({
 	propertyPath,
 	keyframeId,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	keyframeId: string;
-}): ElementKeyframe | null {
+}): ClipKeyframe | null {
 	const data = animations?.[propertyPath];
 	if (!data) {
 		return null;
@@ -306,7 +306,7 @@ export function getKeyframeById({
 		return null;
 	}
 
-	return toElementKeyframe({
+	return toClipKeyframe({
 		data,
 		propertyPath,
 		keyframeMatch,

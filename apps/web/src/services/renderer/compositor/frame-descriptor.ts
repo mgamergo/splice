@@ -411,7 +411,7 @@ function buildMaskArtifacts({
 	const { width: canvasWidth, height: canvasHeight } = renderer;
 	const maskContentHash = `mask:${mask.type}:${JSON.stringify(mask.params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:body=${body.kind}:fastPath=${usesOpaqueFastPath}`;
 	const drawMask: TextureCanvasDrawFn = (ctx) => {
-		const { canvas: elementMaskCanvas, context: elementMaskCtx } =
+		const { canvas: clipMaskCanvas, context: clipMaskCtx } =
 			createCanvasSurface({
 				width: Math.round(transform.width),
 				height: Math.round(transform.height),
@@ -424,14 +424,14 @@ function buildMaskArtifacts({
 					width: transform.width,
 					height: transform.height,
 				});
-				elementMaskCtx.fillStyle = "white";
-				elementMaskCtx.fill(path2d);
+				clipMaskCtx.fillStyle = "white";
+				clipMaskCtx.fill(path2d);
 				break;
 			}
 			case "drawOpaque":
 				body.drawOpaque({
 					resolvedParams: mask.params,
-					ctx: elementMaskCtx,
+					ctx: clipMaskCtx,
 					width: Math.round(transform.width),
 					height: Math.round(transform.height),
 				});
@@ -443,12 +443,12 @@ function buildMaskArtifacts({
 						width: transform.width,
 						height: transform.height,
 					});
-					elementMaskCtx.fillStyle = "white";
-					elementMaskCtx.fill(path2d);
+					clipMaskCtx.fillStyle = "white";
+					clipMaskCtx.fill(path2d);
 				} else {
 					body.drawWithFeather({
 						resolvedParams: mask.params,
-						ctx: elementMaskCtx,
+						ctx: clipMaskCtx,
 						width: Math.round(transform.width),
 						height: Math.round(transform.height),
 						feather: mask.params.feather,
@@ -457,7 +457,7 @@ function buildMaskArtifacts({
 				break;
 		}
 
-		drawTransformedCanvas({ ctx, source: elementMaskCanvas, transform });
+		drawTransformedCanvas({ ctx, source: clipMaskCanvas, transform });
 	};
 	textures.set(maskTextureId, {
 		kind: "rendered",

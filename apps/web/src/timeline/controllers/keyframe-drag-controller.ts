@@ -14,10 +14,10 @@ import {
 import { TIMELINE_DRAG_THRESHOLD_PX } from "@/timeline/components/interaction";
 import { timelineTimeToSnappedPixels } from "@/timeline";
 import { getKeyframeById } from "@/animation";
-import { RetimeKeyframeCommand } from "@/commands/timeline/element/keyframes/retime-keyframe";
+import { RetimeKeyframeCommand } from "@/commands/timeline/clip/keyframes/retime-keyframe";
 import { BatchCommand } from "@/commands";
 import type { SelectedKeyframeRef } from "@/animation/types";
-import type { TimelineElement } from "@/timeline";
+import type { TimelineClip } from "@/timeline";
 import type { Command } from "@/commands/base-command";
 
 // --- Session ---
@@ -56,7 +56,7 @@ const IDLE_DRAG_STATE: KeyframeDragState = {
 export interface KeyframeDragConfig {
 	zoomLevel: number;
 	getFps: () => FrameRate | null;
-	element: TimelineElement;
+	clip: TimelineClip;
 	displayedStartTime: MediaTime;
 	selectedKeyframes: SelectedKeyframeRef[];
 	isKeyframeSelected: (args: { keyframe: SelectedKeyframeRef }) => boolean;
@@ -217,13 +217,13 @@ export class KeyframeDragController {
 		indicatorOffsetPx,
 		isBeingDragged,
 		displayedStartTime,
-		elementLeft,
+		clipLeft,
 	}: {
 		indicatorTime: MediaTime;
 		indicatorOffsetPx: number;
 		isBeingDragged: boolean;
 		displayedStartTime: MediaTime;
-		elementLeft: number;
+		clipLeft: number;
 	}): number {
 		if (!isBeingDragged || this.session.kind !== "active")
 			return indicatorOffsetPx;
@@ -231,13 +231,13 @@ export class KeyframeDragController {
 		const clampedTime = clampMediaTime({
 			time: addMediaTime({ a: indicatorTime, b: deltaTime }),
 			min: ZERO_MEDIA_TIME,
-			max: this.config.element.duration,
+			max: this.config.clip.duration,
 		});
 		return (
 			timelineTimeToSnappedPixels({
 				time: addMediaTime({ a: displayedStartTime, b: clampedTime }),
 				zoomLevel: this.config.zoomLevel,
-			}) - elementLeft
+			}) - clipLeft
 		);
 	}
 
@@ -268,10 +268,10 @@ export class KeyframeDragController {
 		keyframeRefs: SelectedKeyframeRef[];
 		deltaTicks: number;
 	}): void {
-		const { element } = this.config;
+		const { clip } = this.config;
 		const commands: Command[] = keyframeRefs.flatMap((ref) => {
 			const keyframe = getKeyframeById({
-				animations: element.animations,
+				animations: clip.animations,
 				propertyPath: ref.propertyPath,
 				keyframeId: ref.keyframeId,
 			});
@@ -279,7 +279,7 @@ export class KeyframeDragController {
 			return [
 				new RetimeKeyframeCommand({
 					trackId: ref.trackId,
-					elementId: ref.elementId,
+					clipId: ref.clipId,
 					propertyPath: ref.propertyPath,
 					keyframeId: ref.keyframeId,
 				nextTime: clampMediaTime({
@@ -288,7 +288,7 @@ export class KeyframeDragController {
 						b: mediaTime({ ticks: deltaTicks }),
 					}),
 					min: ZERO_MEDIA_TIME,
-					max: element.duration,
+					max: clip.duration,
 				}),
 				}),
 			];
@@ -341,11 +341,11 @@ export class KeyframeDragController {
 
 		if (this.session.kind !== "active") return;
 
-		const { selectedKeyframes, element } = this.config;
+		const { selectedKeyframes, clip } = this.config;
 		const { keyframeRefs, deltaTicks } = this.session;
 		const draggingIds = new Set(keyframeRefs.map((r) => r.keyframeId));
 		const draggingRefs = selectedKeyframes.filter(
-			(kf) => kf.elementId === element.id && draggingIds.has(kf.keyframeId),
+			(kf) => kf.clipId === clip.id && draggingIds.has(kf.keyframeId),
 		);
 
 		if (draggingRefs.length > 0 && deltaTicks !== 0) {

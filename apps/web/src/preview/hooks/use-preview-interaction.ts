@@ -31,23 +31,23 @@ export function usePreviewInteraction({
 		input: {
 			isShiftHeld: () => isShiftHeldRef.current,
 		},
-		scene: {
-			getTracks: () => editor.scenes.getActiveScene().tracks,
+		sequence: {
+			getTracks: () => editor.sequences.getActiveSequence().tracks,
 			getCurrentTime: () => editor.playback.getCurrentTime(),
-			getMediaAssets: () => editor.media.getAssets(),
+			getProjectItems: () => editor.media.getProjectItems(),
 			getCanvasSize: () => editor.project.getActive().settings.canvasSize,
 		},
 		selection: {
-			getSelected: () => editor.selection.getSelectedElements(),
-			setSelected: (elements) =>
-				editor.selection.setSelectedElements({ elements: [...elements] }),
+			getSelected: () => editor.selection.getSelectedClips(),
+			setSelected: (clips) =>
+				editor.selection.setSelectedClips({ clips: [...clips] }),
 			clearSelection: () => editor.selection.clearSelection(),
 		},
 		timeline: {
-			getElementsWithTracks: ({ elements }) =>
-				editor.timeline.getElementsWithTracks({ elements: [...elements] }),
-			previewElements: (updates) =>
-				editor.timeline.previewElements({ updates: [...updates] }),
+			getClipsWithTracks: ({ clips }) =>
+				editor.timeline.getClipsWithTracks({ clips: [...clips] }),
+			previewClips: (updates) =>
+				editor.timeline.previewClips({ updates: [...updates] }),
 			commitPreview: () => editor.timeline.commitPreview(),
 			discardPreview: () => editor.timeline.discardPreview(),
 		},

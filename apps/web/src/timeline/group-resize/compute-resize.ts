@@ -81,14 +81,14 @@ export function computeGroupResize({
 	// Snap the drag delta to a frame exactly once, then derive every patch
 	// field from that single snapped value. This keeps the invariant
 	// `trimStart + duration*rate + trimEnd == sourceDuration` exact: the same
-	// delta is added on one side of the element and removed from the other,
+	// delta is added on one side of the clip and removed from the other,
 	// so the rounding cancels by construction. Per-field rounding (the old
 	// approach) couldn't preserve this because the individual rounds don't
 	// compose when `sourceDuration` isn't frame-aligned.
 	const snappedDeltaTime = mediaTime({
 		ticks: roundFrameTicks({ ticks: clampedDeltaTime, fps }),
 	});
-	// Re-clamp after rounding. Bounds derived from other elements are
+	// Re-clamp after rounding. Bounds derived from other clips are
 	// frame-aligned, so this is normally a no-op; at the source-extent limit
 	// the bound may not be frame-aligned, and honouring the bound takes
 	// precedence over frame alignment (you can't extend past real content).
@@ -130,7 +130,7 @@ function buildResizeUpdate({
 	if (side === "left") {
 		return {
 			trackId: member.trackId,
-			elementId: member.elementId,
+			clipId: member.clipId,
 		patch: {
 			trimStart: maxMediaTime({
 				a: ZERO_MEDIA_TIME,
@@ -145,7 +145,7 @@ function buildResizeUpdate({
 
 	return {
 		trackId: member.trackId,
-		elementId: member.elementId,
+		clipId: member.clipId,
 		patch: {
 			trimStart: member.trimStart,
 			trimEnd: maxMediaTime({

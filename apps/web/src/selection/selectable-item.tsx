@@ -59,9 +59,9 @@ export const SelectableItem = forwardRef<HTMLDivElement, SelectableItemProps>(
 		);
 
 		const handleRef = useCallback(
-			(element: HTMLDivElement | null) => {
-				registerItem(id, element);
-				setForwardedRef({ ref: forwardedRef, value: element });
+			(clip: HTMLDivElement | null) => {
+				registerItem(id, clip);
+				setForwardedRef({ ref: forwardedRef, value: clip });
 			},
 			[forwardedRef, id, registerItem],
 		);

@@ -3,28 +3,28 @@ import type {
 	EffectTrack,
 	GraphicTrack,
 	OverlayTrack,
-	SceneTracks,
+	SequenceTracks,
 	TextTrack,
-	TimelineElement,
+	TimelineClip,
 	TimelineTrack,
 	VideoTrack,
 } from "@/timeline";
 import { generateUUID } from "@/utils/id";
 import { buildEmptyTrack } from "./track-factory";
 import type { PlacementResult } from "./types";
-import { updateTrackInSceneTracks } from "@/timeline/track-element-update";
+import { updateTrackInSequenceTracks } from "@/timeline/track-clip-update";
 
 export function applyPlacement({
 	tracks,
 	placementResult,
-	elements,
+	clips,
 	newTrackInsertIndexOverride,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	placementResult: PlacementResult;
-	elements: TimelineElement[];
+	clips: TimelineClip[];
 	newTrackInsertIndexOverride?: number;
-}): { updatedTracks: SceneTracks; targetTrackId: string } | null {
+}): { updatedTracks: SequenceTracks; targetTrackId: string } | null {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	if (placementResult.kind === "existingTrack") {
 		const targetTrack = orderedTracks[placementResult.trackIndex];
@@ -32,12 +32,12 @@ export function applyPlacement({
 			return null;
 		}
 
-		const updatedTracks = updateTrackInSceneTracks({
+		const updatedTracks = updateTrackInSequenceTracks({
 			tracks,
 			trackId: targetTrack.id,
 			update: (track) => ({
 				...track,
-				elements: [...track.elements, ...elements],
+				clips: [...track.clips, ...clips],
 			}),
 		});
 
@@ -56,7 +56,7 @@ export function applyPlacement({
 						insertIndex,
 						track: buildPlacedAudioTrack({
 							id: newTrackId,
-							elements,
+							clips,
 						}),
 					}),
 				}
@@ -68,7 +68,7 @@ export function applyPlacement({
 						track: buildPlacedOverlayTrack({
 							id: newTrackId,
 							type: placementResult.trackType,
-							elements,
+							clips,
 						}),
 					}),
 				};
@@ -80,7 +80,7 @@ function insertIntoOverlayTracks({
 	insertIndex,
 	track,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	insertIndex: number;
 	track: OverlayTrack;
 }): OverlayTrack[] {
@@ -98,7 +98,7 @@ function insertIntoAudioTracks({
 	insertIndex,
 	track,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	insertIndex: number;
 	track: AudioTrack;
 }): AudioTrack[] {
@@ -113,46 +113,46 @@ function insertIntoAudioTracks({
 
 function buildPlacedAudioTrack({
 	id,
-	elements,
+	clips,
 }: {
 	id: string;
-	elements: TimelineElement[];
+	clips: TimelineClip[];
 }): AudioTrack {
 	return {
 		...buildEmptyTrack({ id, type: "audio" }),
-		elements: elements as AudioTrack["elements"],
+		clips: clips as AudioTrack["clips"],
 	};
 }
 
 function buildPlacedOverlayTrack({
 	id,
 	type,
-	elements,
+	clips,
 }: {
 	id: string;
 	type: Exclude<OverlayTrack["type"], "audio">;
-	elements: TimelineElement[];
+	clips: TimelineClip[];
 }): OverlayTrack {
 	switch (type) {
 		case "video":
 			return {
 				...buildEmptyTrack({ id, type: "video" }),
-				elements: elements as VideoTrack["elements"],
+				clips: clips as VideoTrack["clips"],
 			};
 		case "text":
 			return {
 				...buildEmptyTrack({ id, type: "text" }),
-				elements: elements as TextTrack["elements"],
+				clips: clips as TextTrack["clips"],
 			};
 		case "graphic":
 			return {
 				...buildEmptyTrack({ id, type: "graphic" }),
-				elements: elements as GraphicTrack["elements"],
+				clips: clips as GraphicTrack["clips"],
 			};
 		case "effect":
 			return {
 				...buildEmptyTrack({ id, type: "effect" }),
-				elements: elements as EffectTrack["elements"],
+				clips: clips as EffectTrack["clips"],
 			};
 	}
 }

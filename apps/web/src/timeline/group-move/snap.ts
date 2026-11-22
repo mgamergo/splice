@@ -1,11 +1,11 @@
-import type { SceneTracks } from "@/timeline";
+import type { SequenceTracks } from "@/timeline";
 import {
 	buildTimelineSnapPoints,
 	getTimelineSnapThresholdInTicks,
 	resolveTimelineSnap,
 	type SnapPoint,
 } from "@/timeline/snapping";
-import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
+import { getClipEdgeSnapPoints } from "@/timeline/clip-snap-source";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import type { MoveGroup } from "./types";
@@ -20,24 +20,24 @@ export function snapGroupEdges({
 }: {
 	group: MoveGroup;
 	anchorStartTime: MediaTime;
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	playheadTime: MediaTime;
 	zoomLevel: number;
 }): {
 	snappedAnchorStartTime: MediaTime;
 	snapPoint: SnapPoint | null;
 } {
-	const excludeElementIds = new Set(
-		group.members.map((member) => member.elementId),
+	const excludeClipIds = new Set(
+		group.members.map((member) => member.clipId),
 	);
 	const snapPoints = buildTimelineSnapPoints({
 		sources: [
-			() => getElementEdgeSnapPoints({ tracks, excludeElementIds }),
+			() => getClipEdgeSnapPoints({ tracks, excludeClipIds }),
 			() => getPlayheadSnapPoints({ playheadTime }),
 			() =>
 				getAnimationKeyframeSnapPointsForTimeline({
 					tracks,
-					excludeElementIds,
+					excludeClipIds,
 				}),
 		],
 	});

@@ -13,10 +13,10 @@ import {
 } from "../box-like";
 
 function getDefaultCinematicBarsMaskParams({
-	elementSize,
+	clipSize,
 }: MaskDefaultContext): RectangleMaskParams {
-	const absWidth = Math.abs(elementSize?.width ?? 0);
-	const absHeight = Math.abs(elementSize?.height ?? 0);
+	const absWidth = Math.abs(clipSize?.width ?? 0);
+	const absHeight = Math.abs(clipSize?.height ?? 0);
 	const diagonal =
 		absWidth > 0 && absHeight > 0
 			? Math.sqrt(absWidth ** 2 + absHeight ** 2)

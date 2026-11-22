@@ -60,7 +60,7 @@ export class ClipboardManager {
 	private getCopyContext(): CopyContext {
 		return {
 			editor: this.editor,
-			selectedElements: this.editor.selection.getSelectedElements(),
+			selectedClips: this.editor.selection.getSelectedClips(),
 			selectedKeyframes: this.editor.selection.getSelectedKeyframes(),
 		};
 	}
@@ -68,7 +68,7 @@ export class ClipboardManager {
 	private getPasteContext({ time }: { time?: MediaTime }): PasteContext {
 		return {
 			editor: this.editor,
-			selectedElements: this.editor.selection.getSelectedElements(),
+			selectedClips: this.editor.selection.getSelectedClips(),
 			selectedKeyframes: this.editor.selection.getSelectedKeyframes(),
 			time: time ?? this.editor.playback.getCurrentTime(),
 		};

@@ -2,12 +2,12 @@ import { toast } from "sonner";
 import { getMediaTypeFromFile } from "@/media/media-utils";
 import { formatStorageBytes } from "@/services/storage/quota";
 import { storageService } from "@/services/storage/service";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 import { readVideoFile } from "./mediabunny";
 import type { VideoFileData } from "./mediabunny";
 import { renderThumbnailDataUrl } from "./thumbnail";
 
-export interface ProcessedMediaAsset extends Omit<MediaAsset, "id"> {}
+export interface ProcessedProjectItem extends Omit<ProjectItem, "id"> {}
 
 const getUnsupportedVideoDescription = ({
 	codec,
@@ -82,15 +82,15 @@ async function generateImageThumbnail({
 	});
 }
 
-export async function processMediaAssets({
+export async function processProjectItems({
 	files,
 	onProgress,
 }: {
 	files: FileList | File[];
 	onProgress?: ({ progress }: { progress: number }) => void;
-}): Promise<ProcessedMediaAsset[]> {
+}): Promise<ProcessedProjectItem[]> {
 	const fileArray = Array.from(files);
-	const processedAssets: ProcessedMediaAsset[] = [];
+	const processedProjectItems: ProcessedProjectItem[] = [];
 
 	const total = fileArray.length;
 	let completed = 0;
@@ -164,7 +164,7 @@ export async function processMediaAssets({
 				duration = await getMediaDuration({ file });
 			}
 
-			processedAssets.push({
+			processedProjectItems.push({
 				name: file.name,
 				type: fileType,
 				file,
@@ -191,29 +191,29 @@ export async function processMediaAssets({
 		}
 	}
 
-	return processedAssets;
+	return processedProjectItems;
 }
 
 const getMediaDuration = ({ file }: { file: File }): Promise<number> => {
 	return new Promise((resolve, reject) => {
-		const element = document.createElement(
+		const clip = document.createElement(
 			file.type.startsWith("video/") ? "video" : "audio",
 		) as HTMLVideoElement;
 		const objectUrl = URL.createObjectURL(file);
 
-		element.addEventListener("loadedmetadata", () => {
-			resolve(element.duration);
+		clip.addEventListener("loadedmetadata", () => {
+			resolve(clip.duration);
 			URL.revokeObjectURL(objectUrl);
-			element.remove();
+			clip.remove();
 		});
 
-		element.addEventListener("error", () => {
+		clip.addEventListener("error", () => {
 			reject(new Error("Could not load media"));
 			URL.revokeObjectURL(objectUrl);
-			element.remove();
+			clip.remove();
 		});
 
-		element.src = objectUrl;
-		element.load();
+		clip.src = objectUrl;
+		clip.load();
 	});
 };
