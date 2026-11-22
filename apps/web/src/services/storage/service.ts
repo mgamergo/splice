@@ -17,10 +17,7 @@ import type {
 	SerializedScene,
 } from "./types";
 import type { SavedSoundsData, SavedSound, SoundEffect } from "@/sounds/types";
-import {
-	migrations,
-	runStorageMigrations,
-} from "@/services/storage/migrations";
+import { PROJECT_FORMAT_VERSION } from "./format";
 import type { Bookmark, SceneTracks, TScene } from "@/timeline";
 import { roundMediaTime } from "@/wasm";
 
@@ -55,13 +52,12 @@ class StorageService {
 	private projectsAdapter: IndexedDBAdapter<SerializedProject>;
 	private savedSoundsAdapter: IndexedDBAdapter<SavedSoundsData>;
 	private config: StorageConfig;
-	private migrationsPromise: Promise<void> | null = null;
 
 	constructor() {
 		this.config = {
-			projectsDb: "video-editor-projects",
-			mediaDb: "video-editor-media",
-			savedSoundsDb: "video-editor-saved-sounds",
+			projectsDb: "splice-projects",
+			mediaDb: "splice-media",
+			savedSoundsDb: "splice-saved-sounds",
 			version: 1,
 		};
 
@@ -78,18 +74,6 @@ class StorageService {
 		});
 	}
 
-	private async ensureMigrations(): Promise<void> {
-		if (this.migrationsPromise) {
-			await this.migrationsPromise;
-			return;
-		}
-
-		this.migrationsPromise = runStorageMigrations({ migrations }).then(
-			() => undefined,
-		);
-		await this.migrationsPromise;
-	}
-
 	private getProjectMediaAdapters({ projectId }: { projectId: string }) {
 		const mediaMetadataAdapter = new IndexedDBAdapter<MediaAssetData>({
 			dbName: `${this.config.mediaDb}-${projectId}`,
@@ -97,7 +81,7 @@ class StorageService {
 			version: this.config.version,
 		});
 
-		const mediaAssetsAdapter = new OPFSAdapter(`media-files-${projectId}`);
+		const mediaAssetsAdapter = new OPFSAdapter(`splice-media-files-${projectId}`);
 
 		return { mediaMetadataAdapter, mediaAssetsAdapter };
 	}
@@ -172,10 +156,17 @@ class StorageService {
 	}: {
 		id: string;
 	}): Promise<{ project: TProject } | null> {
-		await this.ensureMigrations();
 		const serializedProject = await this.projectsAdapter.get(id);
 
 		if (!serializedProject) return null;
+
+		if (serializedProject.version !== PROJECT_FORMAT_VERSION) {
+			console.warn("[storage] Skipping project with unsupported format:", {
+				id,
+				version: serializedProject.version,
+			});
+			return null;
+		}
 
 		if (
 			typeof serializedProject !== "object" ||
@@ -241,7 +232,6 @@ class StorageService {
 	}
 
 	async loadAllProjectsMetadata(): Promise<TProjectMetadata[]> {
-		await this.ensureMigrations();
 		const serializedProjects = await this.projectsAdapter.getAll();
 
 		const metadata: TProjectMetadata[] = [];
