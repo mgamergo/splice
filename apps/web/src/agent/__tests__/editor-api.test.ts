@@ -119,6 +119,20 @@ describe("EditorApi undo and redo", () => {
 		expect(spans()).toEqual(afterApply);
 	});
 
+	test("redo keeps clip ids, so later batches that use them redo too", () => {
+		api.apply({ expectedRevision: 0, label: "Cut", ops: [{ op: "razor", at: { seconds: 10 } }] });
+		const rightId = mainClips()[1].id;
+		api.apply({ expectedRevision: 1, label: "Drop right", ops: [{ op: "delete", clipIds: [rightId] }] });
+		const afterBoth = mainClips().map((clip) => clip.id);
+
+		editor.command.undo();
+		editor.command.undo();
+		editor.command.redo();
+		expect(mainClips()[1].id).toBe(rightId);
+		editor.command.redo();
+		expect(mainClips().map((clip) => clip.id)).toEqual(afterBoth);
+	});
+
 	test("redo ignores the creator's ripple toggle, like apply does", () => {
 		editor.command.isRippleEnabled = true;
 		api.apply({

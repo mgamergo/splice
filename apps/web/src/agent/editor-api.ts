@@ -8,7 +8,7 @@ import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ran
 import { DeleteClipsCommand } from "@/commands/timeline/clip/delete-clips";
 import { RazorClipsCommand } from "@/commands/timeline/clip/razor-clips";
 import type { EditorCore } from "@/core";
-import type { ClipRef, SequenceTracks, TimelineClip } from "@/timeline";
+import type { ClipRef, SequenceTracks, TimelineClip, TSequence } from "@/timeline";
 import { addMediaTime } from "@/wasm";
 
 export type ApplyErrorCode = "INVALID_REQUEST" | "REVISION_CONFLICT" | "INVALID_OP" | "NO_PROJECT";
@@ -93,7 +93,7 @@ export class EditorApi {
 					return command;
 				}),
 		);
-		const batch = new AgentBatchCommand(commands);
+		const batch = new AgentBatchCommand({ editor: this.editor, commands });
 
 		try {
 			this.editor.command.execute({ command: batch });
@@ -197,16 +197,37 @@ export class EditorApi {
 	}
 }
 
-/** The creator's ripple toggle must not change what the agent asked for. */
+/**
+ * An agent batch. The creator's ripple toggle never changes it, and redo
+ * restores exactly the sequences the batch produced, with the same clip ids,
+ * so later batches that reference those ids still redo correctly. That is
+ * sound because undo and redo are a linear stack: before a redo, the state is
+ * the one the batch originally ran on.
+ */
 class AgentBatchCommand extends BatchCommand {
 	readonly ignoresRippleToggle = true;
+	private readonly editor: EditorCore;
+	private sequencesAfter: TSequence[] | null = null;
+
+	constructor({ editor, commands }: { editor: EditorCore; commands: Command[] }) {
+		super(commands);
+		this.editor = editor;
+	}
+
+	execute() {
+		const result = super.execute();
+		this.sequencesAfter = this.editor.sequences.getSequences();
+		return result;
+	}
+
+	redo() {
+		if (!this.sequencesAfter) return this.execute();
+		this.editor.sequences.setSequences({ sequences: this.sequencesAfter });
+		return undefined;
+	}
 }
 
-/**
- * Builds its real command when executed, against the state left by the ops
- * before it. Redo builds it again, because earlier ops may have created clips
- * with new ids.
- */
+/** Builds its real command when executed, against the state left by the ops before it. */
 class DeferredOpCommand extends Command {
 	private command: Command | null = null;
 
@@ -221,9 +242,5 @@ class DeferredOpCommand extends Command {
 
 	undo(): void {
 		this.command?.undo();
-	}
-
-	redo() {
-		return this.execute();
 	}
 }
