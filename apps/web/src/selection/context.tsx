@@ -23,7 +23,7 @@ interface SelectionContextValue {
 		event: React.MouseEvent<HTMLDivElement>;
 		id: string;
 	}) => void;
-	registerItem: (id: string, element: HTMLElement | null) => void;
+	registerItem: (id: string, clip: HTMLElement | null) => void;
 }
 
 export const SelectionContext = createContext<SelectionContextValue | null>(null);

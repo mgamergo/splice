@@ -9,7 +9,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useEditor } from "@/editor/use-editor";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
 import { usePropertiesStore } from "./stores/properties-store";
 import { getPropertiesConfig } from "./registry";
 import { cn } from "@/utils/ui";
@@ -17,12 +17,12 @@ import { EmptyView } from "./empty-view";
 
 export function PropertiesPanel() {
 	const editor = useEditor();
-	useEditor((e) => e.scenes.getActiveSceneOrNull());
-	useEditor((e) => e.media.getAssets());
-	const { selectedElements } = useElementSelection();
+	useEditor((e) => e.sequences.getActiveSequenceOrNull());
+	useEditor((e) => e.media.getProjectItems());
+	const { selectedClips } = useClipSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
 
-	if (selectedElements.length === 0) {
+	if (selectedClips.length === 0) {
 		return (
 			<div className="panel bg-background flex h-full flex-col items-center justify-center overflow-hidden rounded-sm border">
 				<EmptyView />
@@ -30,30 +30,30 @@ export function PropertiesPanel() {
 		);
 	}
 
-	if (selectedElements.length > 1) {
+	if (selectedClips.length > 1) {
 		return (
 			<div className="panel bg-background flex h-full flex-col items-center justify-center overflow-hidden rounded-sm border">
 				<p className="text-muted-foreground text-sm">
-					{selectedElements.length} elements selected.0
+					{selectedClips.length} clips selected.0
 				</p>
 			</div>
 		);
 	}
 
-	const mediaAssets = editor.media.getAssets();
+	const projectItems = editor.media.getProjectItems();
 
-	const elementsWithTracks = editor.timeline.getElementsWithTracks({
-		elements: selectedElements,
+	const clipsWithTracks = editor.timeline.getClipsWithTracks({
+		clips: selectedClips,
 	});
-	const elementWithTrack = elementsWithTracks[0];
+	const clipWithTrack = clipsWithTracks[0];
 
-	if (!elementWithTrack) return null;
+	if (!clipWithTrack) return null;
 
-	const { element, track } = elementWithTrack;
-	const config = getPropertiesConfig({ element, mediaAssets });
+	const { clip, track } = clipWithTrack;
+	const config = getPropertiesConfig({ clip, projectItems });
 	const visibleTabs = config.tabs;
 
-	const storedTabId = activeTabPerType[element.type];
+	const storedTabId = activeTabPerType[clip.type];
 	const isStoredTabVisible = visibleTabs.some((t) => t.id === storedTabId);
 	const activeTabId = isStoredTabVisible ? storedTabId : config.defaultTab;
 	const activeTab =
@@ -73,7 +73,7 @@ export function PropertiesPanel() {
 									size="icon"
 									onClick={() =>
 										setActiveTab({
-											elementType: element.type,
+											clipType: clip.type,
 											tabId: tab.id,
 										})
 									}

@@ -34,7 +34,7 @@ export class PlaybackManager {
 			this.reconcileTimelineScope();
 		};
 		this.editor.timeline.subscribe(reconcile);
-		this.editor.scenes.subscribe(reconcile);
+		this.editor.sequences.subscribe(reconcile);
 		this.timelineScopeBound = true;
 		this.reconcileTimelineScope();
 	}

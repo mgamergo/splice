@@ -5,7 +5,7 @@ import {
 } from "./layout";
 import { getCumulativeHeightBefore, getTrackHeight } from "./track-layout";
 
-type TimelineElementRef = { trackId: string; elementId: string };
+type TimelineClipRef = { trackId: string; clipId: string };
 
 interface SelectionRectangle {
 	left: number;
@@ -61,21 +61,21 @@ function getSelectionRectangleInContent({
 }
 
 function isRectangleIntersecting({
-	elementRectangle,
+	clipRectangle,
 	selectionRectangle,
 }: {
-	elementRectangle: SelectionRectangle;
+	clipRectangle: SelectionRectangle;
 	selectionRectangle: SelectionRectangle;
 }): boolean {
 	return !(
-		elementRectangle.right < selectionRectangle.left ||
-		elementRectangle.left > selectionRectangle.right ||
-		elementRectangle.bottom < selectionRectangle.top ||
-		elementRectangle.top > selectionRectangle.bottom
+		clipRectangle.right < selectionRectangle.left ||
+		clipRectangle.left > selectionRectangle.right ||
+		clipRectangle.bottom < selectionRectangle.top ||
+		clipRectangle.top > selectionRectangle.bottom
 	);
 }
 
-export function resolveTimelineElementIntersections({
+export function resolveTimelineClipIntersections({
 	container,
 	scrollContainer,
 	tracks,
@@ -89,14 +89,14 @@ export function resolveTimelineElementIntersections({
 	zoomLevel: number;
 	startPos: { x: number; y: number };
 	currentPos: { x: number; y: number };
-}): TimelineElementRef[] {
+}): TimelineClipRef[] {
 	const selectionRectangle = getSelectionRectangleInContent({
 		container,
 		scrollContainer,
 		startPos,
 		endPos: currentPos,
 	});
-	const selectedElements: TimelineElementRef[] = [];
+	const selectedClips: TimelineClipRef[] = [];
 
 	for (const [trackIndex, track] of tracks.entries()) {
 		const trackTop = getCumulativeHeightBefore({
@@ -104,32 +104,32 @@ export function resolveTimelineElementIntersections({
 			trackIndex,
 		});
 		const trackHeight = getTrackHeight({ type: track.type });
-		const elementTop = TIMELINE_CONTENT_TOP_PADDING_PX + trackTop;
-		const elementBottom = elementTop + trackHeight;
+		const clipTop = TIMELINE_CONTENT_TOP_PADDING_PX + trackTop;
+		const clipBottom = clipTop + trackHeight;
 
-		for (const element of track.elements) {
-			const elementLeft = timelineTimeToPixels({ time: element.startTime, zoomLevel });
-			const elementRight = timelineTimeToPixels({ time: element.startTime + element.duration, zoomLevel });
-			const elementRectangle = {
-				left: elementLeft,
-				top: elementTop,
-				right: elementRight,
-				bottom: elementBottom,
+		for (const clip of track.clips) {
+			const clipLeft = timelineTimeToPixels({ time: clip.startTime, zoomLevel });
+			const clipRight = timelineTimeToPixels({ time: clip.startTime + clip.duration, zoomLevel });
+			const clipRectangle = {
+				left: clipLeft,
+				top: clipTop,
+				right: clipRight,
+				bottom: clipBottom,
 			};
 
 			if (
 				isRectangleIntersecting({
-					elementRectangle,
+					clipRectangle,
 					selectionRectangle,
 				})
 			) {
-				selectedElements.push({
+				selectedClips.push({
 					trackId: track.id,
-					elementId: element.id,
+					clipId: clip.id,
 				});
 			}
 		}
 	}
 
-	return selectedElements;
+	return selectedClips;
 }

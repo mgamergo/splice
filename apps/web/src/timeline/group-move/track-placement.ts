@@ -1,4 +1,4 @@
-import type { SceneTracks, TimelineTrack } from "@/timeline";
+import type { SequenceTracks, TimelineTrack } from "@/timeline";
 import type { GroupTrackSection } from "./types";
 
 export interface TrackPlacement {
@@ -12,7 +12,7 @@ export interface TrackPlacement {
 export function getDisplayTracks({
 	tracks,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 }): TimelineTrack[] {
 	return [...tracks.overlay, tracks.main, ...tracks.audio];
 }
@@ -21,7 +21,7 @@ export function getTrackPlacementById({
 	tracks,
 	trackId,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	trackId: string;
 }): TrackPlacement | null {
 	if (tracks.main.id === trackId) {
@@ -67,7 +67,7 @@ export function getTrackPlacementByDisplayIndex({
 	tracks,
 	displayIndex,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	displayIndex: number;
 }): TrackPlacement | null {
 	const displayTracks = getDisplayTracks({ tracks });

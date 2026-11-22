@@ -1,12 +1,12 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { MediaAsset } from "@/media/types";
+import type { ProjectItem } from "@/media/types";
 import {
-	getVisibleElementsWithBounds,
+	getVisibleClipsWithBounds,
 	type Corner,
 	type Edge,
-	type ElementBounds,
-	type ElementWithBounds,
-} from "@/preview/element-bounds";
+	type ClipBounds,
+	type ClipWithBounds,
+} from "@/preview/clip-bounds";
 import {
 	MIN_SCALE,
 	SNAP_THRESHOLD_SCREEN_PIXELS,
@@ -16,21 +16,21 @@ import {
 	type ScaleEdgePreference,
 	type SnapLine,
 } from "@/preview/preview-snap";
-import { isVisualElement } from "@/timeline/element-utils";
+import { isVisualClip } from "@/timeline/clip-utils";
 import {
-	getElementLocalTime,
+	getClipLocalTime,
 	hasKeyframesForPath,
 	setChannel,
 } from "@/animation";
-import type { ElementAnimations } from "@/animation/types";
+import type { ClipAnimations } from "@/animation/types";
 import type { ParamValues } from "@/params";
 import { buildTransformFromParams, type Transform } from "@/rendering";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
 import type {
-	ElementRef,
-	SceneTracks,
-	TimelineElement,
-	VisualElement,
+	ClipRef,
+	SequenceTracks,
+	TimelineClip,
+	VisualClip,
 } from "@/timeline";
 
 type Point = { readonly x: number; readonly y: number };
@@ -46,7 +46,7 @@ interface CornerScaleSession extends CapturedPointerState {
 	readonly kind: "corner-scale";
 	readonly corner: Corner;
 	readonly trackId: string;
-	readonly elementId: string;
+	readonly clipId: string;
 	readonly initialTransform: Transform;
 	readonly initialParams: ParamValues;
 	readonly initialDistance: number;
@@ -55,14 +55,14 @@ interface CornerScaleSession extends CapturedPointerState {
 	readonly baseWidth: number;
 	readonly baseHeight: number;
 	readonly shouldClearScaleAnimation: boolean;
-	readonly animationsWithoutScale: ElementAnimations | undefined;
+	readonly animationsWithoutScale: ClipAnimations | undefined;
 }
 
 interface EdgeScaleSession extends CapturedPointerState {
 	readonly kind: "edge-scale";
 	readonly edge: Edge;
 	readonly trackId: string;
-	readonly elementId: string;
+	readonly clipId: string;
 	readonly initialTransform: Transform;
 	readonly initialParams: ParamValues;
 	readonly initialBoundsCx: number;
@@ -71,13 +71,13 @@ interface EdgeScaleSession extends CapturedPointerState {
 	readonly baseHeight: number;
 	readonly rotationRad: number;
 	readonly shouldClearScaleAnimation: boolean;
-	readonly animationsWithoutScale: ElementAnimations | undefined;
+	readonly animationsWithoutScale: ClipAnimations | undefined;
 }
 
 interface RotationSession extends CapturedPointerState {
 	readonly kind: "rotation";
 	readonly trackId: string;
-	readonly elementId: string;
+	readonly clipId: string;
 	readonly initialTransform: Transform;
 	readonly initialParams: ParamValues;
 	readonly initialAngle: number;
@@ -95,9 +95,9 @@ const IDLE_SESSION: TransformSession = { kind: "idle" };
 
 interface VisualSelectionContext {
 	readonly trackId: string;
-	readonly elementId: string;
-	readonly element: VisualElement;
-	readonly bounds: ElementBounds;
+	readonly clipId: string;
+	readonly clip: VisualClip;
+	readonly bounds: ClipBounds;
 	readonly resolvedTransform: Transform;
 }
 
@@ -120,22 +120,22 @@ export interface InputAdapter {
 	isShiftHeld: () => boolean;
 }
 
-export interface SceneReader {
-	getSelectedElements: () => readonly ElementRef[];
-	getTracks: () => SceneTracks;
+export interface SequenceReader {
+	getSelectedClips: () => readonly ClipRef[];
+	getTracks: () => SequenceTracks;
 	getCurrentTime: () => number;
-	getMediaAssets: () => MediaAsset[];
+	getProjectItems: () => ProjectItem[];
 	getCanvasSize: () => CanvasSize;
 }
 
 export interface TimelinePreviewUpdate {
 	readonly trackId: string;
-	readonly elementId: string;
-	readonly updates: Partial<TimelineElement>;
+	readonly clipId: string;
+	readonly updates: Partial<TimelineClip>;
 }
 
 export interface TimelineOps {
-	previewElements: (updates: readonly TimelinePreviewUpdate[]) => void;
+	previewClips: (updates: readonly TimelinePreviewUpdate[]) => void;
 	commitPreview: () => void;
 	discardPreview: () => void;
 }
@@ -147,7 +147,7 @@ export interface PreviewOptions {
 export interface TransformHandleDeps {
 	viewport: PreviewViewportAdapter;
 	input: InputAdapter;
-	scene: SceneReader;
+	sequence: SequenceReader;
 	timeline: TimelineOps;
 	preview: PreviewOptions;
 }
@@ -175,7 +175,7 @@ function getCornerDistance({
 	bounds,
 	corner,
 }: {
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	corner: Corner;
 }): number {
 	const halfWidth = bounds.width / 2;
@@ -195,19 +195,19 @@ function getCornerDistance({
 }
 
 function buildSelectedWithBounds({
-	selectedElements,
-	elementsWithBounds,
+	selectedClips,
+	clipsWithBounds,
 }: {
-	selectedElements: readonly ElementRef[];
-	elementsWithBounds: readonly ElementWithBounds[];
-}): ElementWithBounds | null {
-	if (selectedElements.length !== 1) return null;
+	selectedClips: readonly ClipRef[];
+	clipsWithBounds: readonly ClipWithBounds[];
+}): ClipWithBounds | null {
+	if (selectedClips.length !== 1) return null;
 
 	return (
-		elementsWithBounds.find(
+		clipsWithBounds.find(
 			(entry) =>
-				entry.trackId === selectedElements[0].trackId &&
-				entry.elementId === selectedElements[0].elementId,
+				entry.trackId === selectedClips[0].trackId &&
+				entry.clipId === selectedClips[0].clipId,
 		) ?? null
 	);
 }
@@ -215,10 +215,10 @@ function buildSelectedWithBounds({
 function buildCornerScaleAnimationReset({
 	animations,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 }): {
 	shouldClearScaleAnimation: boolean;
-	animationsWithoutScale: ElementAnimations | undefined;
+	animationsWithoutScale: ClipAnimations | undefined;
 } {
 	const shouldClearScaleAnimation =
 		hasKeyframesForPath({
@@ -250,11 +250,11 @@ function buildEdgeScaleAnimationReset({
 	animations,
 	edge,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	edge: Edge;
 }): {
 	shouldClearScaleAnimation: boolean;
-	animationsWithoutScale: ElementAnimations | undefined;
+	animationsWithoutScale: ClipAnimations | undefined;
 } {
 	const propertyPath =
 		edge === "right" || edge === "left"
@@ -298,10 +298,10 @@ export class TransformHandleController {
 		return this.depsRef.current;
 	}
 
-	get selectedWithBounds(): ElementWithBounds | null {
+	get selectedWithBounds(): ClipWithBounds | null {
 		return buildSelectedWithBounds({
-			selectedElements: this.deps.scene.getSelectedElements(),
-			elementsWithBounds: this.getVisibleElementsWithBounds(),
+			selectedClips: this.deps.sequence.getSelectedClips(),
+			clipsWithBounds: this.getVisibleClipsWithBounds(),
 		});
 	}
 
@@ -364,16 +364,16 @@ export class TransformHandleController {
 
 		const { shouldClearScaleAnimation, animationsWithoutScale } =
 			buildCornerScaleAnimationReset({
-				animations: context.element.animations,
+				animations: context.clip.animations,
 			});
 
 		this.session = {
 			kind: "corner-scale",
 			corner,
 			trackId: context.trackId,
-			elementId: context.elementId,
+			clipId: context.clipId,
 			initialTransform: context.resolvedTransform,
-			initialParams: context.element.params,
+			initialParams: context.clip.params,
 			initialDistance: getCornerDistance({
 				bounds: context.bounds,
 				corner,
@@ -413,9 +413,9 @@ export class TransformHandleController {
 		this.session = {
 			kind: "rotation",
 			trackId: context.trackId,
-			elementId: context.elementId,
+			clipId: context.clipId,
 			initialTransform: context.resolvedTransform,
-			initialParams: context.element.params,
+			initialParams: context.clip.params,
 			initialAngle,
 			initialBoundsCx: context.bounds.cx,
 			initialBoundsCy: context.bounds.cy,
@@ -443,7 +443,7 @@ export class TransformHandleController {
 
 		const { shouldClearScaleAnimation, animationsWithoutScale } =
 			buildEdgeScaleAnimationReset({
-				animations: context.element.animations,
+				animations: context.clip.animations,
 				edge,
 			});
 
@@ -451,9 +451,9 @@ export class TransformHandleController {
 			kind: "edge-scale",
 			edge,
 			trackId: context.trackId,
-			elementId: context.elementId,
+			clipId: context.clipId,
 			initialTransform: context.resolvedTransform,
-			initialParams: context.element.params,
+			initialParams: context.clip.params,
 			initialBoundsCx: context.bounds.cx,
 			initialBoundsCy: context.bounds.cy,
 			baseWidth: context.bounds.width / context.resolvedTransform.scaleX,
@@ -542,36 +542,36 @@ export class TransformHandleController {
 		pointerState.captureTarget.releasePointerCapture(pointerState.pointerId);
 	}
 
-	private getVisibleElementsWithBounds(): ElementWithBounds[] {
-		return getVisibleElementsWithBounds({
-			tracks: this.deps.scene.getTracks(),
-			currentTime: this.deps.scene.getCurrentTime(),
-			canvasSize: this.deps.scene.getCanvasSize(),
-			mediaAssets: this.deps.scene.getMediaAssets(),
+	private getVisibleClipsWithBounds(): ClipWithBounds[] {
+		return getVisibleClipsWithBounds({
+			tracks: this.deps.sequence.getTracks(),
+			currentTime: this.deps.sequence.getCurrentTime(),
+			canvasSize: this.deps.sequence.getCanvasSize(),
+			projectItems: this.deps.sequence.getProjectItems(),
 		});
 	}
 
 	private getSelectedVisualContext(): VisualSelectionContext | null {
 		const selectedWithBounds = this.selectedWithBounds;
 		if (!selectedWithBounds) return null;
-		if (!isVisualElement(selectedWithBounds.element)) return null;
+		if (!isVisualClip(selectedWithBounds.clip)) return null;
 
-		const localTime = getElementLocalTime({
-			timelineTime: this.deps.scene.getCurrentTime(),
-			elementStartTime: selectedWithBounds.element.startTime,
-			elementDuration: selectedWithBounds.element.duration,
+		const localTime = getClipLocalTime({
+			timelineTime: this.deps.sequence.getCurrentTime(),
+			clipStartTime: selectedWithBounds.clip.startTime,
+			clipDuration: selectedWithBounds.clip.duration,
 		});
 
 		return {
 			trackId: selectedWithBounds.trackId,
-			elementId: selectedWithBounds.elementId,
-			element: selectedWithBounds.element,
+			clipId: selectedWithBounds.clipId,
+			clip: selectedWithBounds.clip,
 			bounds: selectedWithBounds.bounds,
 			resolvedTransform: resolveTransformAtTime({
 				baseTransform: buildTransformFromParams({
-					params: selectedWithBounds.element.params,
+					params: selectedWithBounds.clip.params,
 				}),
-				animations: selectedWithBounds.element.animations,
+				animations: selectedWithBounds.clip.animations,
 				localTime,
 			}),
 		};
@@ -589,7 +589,7 @@ export class TransformHandleController {
 		const currentDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY) || 1;
 		const scaleFactor = currentDistance / session.initialDistance;
 
-		// Use actual element dimensions (base * current scale) so snapping is
+		// Use actual clip dimensions (base * current scale) so snapping is
 		// computed from the rendered geometry when scaleX != scaleY.
 		const effectiveWidth = session.baseWidth * session.initialTransform.scaleX;
 		const effectiveHeight =
@@ -606,16 +606,16 @@ export class TransformHandleController {
 					baseWidth: effectiveWidth,
 					baseHeight: effectiveHeight,
 					rotation: session.initialTransform.rotate,
-					canvasSize: this.deps.scene.getCanvasSize(),
+					canvasSize: this.deps.sequence.getCanvasSize(),
 					snapThreshold,
 				});
 
 		this.deps.preview.onSnapLinesChange?.(activeLines);
 
-		this.deps.timeline.previewElements([
+		this.deps.timeline.previewClips([
 			{
 				trackId: session.trackId,
-				elementId: session.elementId,
+				clipId: session.clipId,
 				updates: {
 					params: buildParamsWithTransform({
 						params: session.initialParams,
@@ -697,7 +697,7 @@ export class TransformHandleController {
 					baseWidth: session.baseWidth,
 					baseHeight: session.baseHeight,
 					rotation: session.initialTransform.rotate,
-					canvasSize: this.deps.scene.getCanvasSize(),
+					canvasSize: this.deps.sequence.getCanvasSize(),
 					snapThreshold,
 					preferredEdges: getPreferredEdge({ edge: session.edge }),
 				});
@@ -706,10 +706,10 @@ export class TransformHandleController {
 			session.edge === "right" || session.edge === "left" ? xSnap : ySnap;
 		this.deps.preview.onSnapLinesChange?.(relevantSnap.activeLines);
 
-		this.deps.timeline.previewElements([
+		this.deps.timeline.previewClips([
 			{
 				trackId: session.trackId,
-				elementId: session.elementId,
+				clipId: session.clipId,
 				updates: {
 					params: buildParamsWithTransform({
 						params: session.initialParams,
@@ -752,10 +752,10 @@ export class TransformHandleController {
 			? { snappedRotation: newRotate }
 			: snapRotation({ proposedRotation: newRotate });
 
-		this.deps.timeline.previewElements([
+		this.deps.timeline.previewClips([
 			{
 				trackId: session.trackId,
-				elementId: session.elementId,
+				clipId: session.clipId,
 				updates: {
 					params: buildParamsWithTransform({
 						params: session.initialParams,

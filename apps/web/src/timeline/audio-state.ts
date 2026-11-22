@@ -1,11 +1,11 @@
 import { hasKeyframesForPath } from "@/animation/keyframe-query";
 import { resolveNumberAtTime } from "@/animation/values";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "./audio-constants";
-import type { TimelineElement } from "./types";
+import type { TimelineClip } from "./types";
 const DEFAULT_STEP_SECONDS = 1 / 60;
 
-export type AudioCapableElement = Extract<
-	TimelineElement,
+export type AudioCapableClip = Extract<
+	TimelineClip,
 	{ type: "audio" | "video" }
 >;
 
@@ -21,30 +21,30 @@ export function dBToLinear(db: number): number {
 	return 10 ** (clampDb(db) / 20);
 }
 
-export function getElementVolume({
-	element,
+export function getClipVolume({
+	clip,
 }: {
-	element: AudioCapableElement;
+	clip: AudioCapableClip;
 }): number {
-	const value = element.params.volume;
+	const value = clip.params.volume;
 	return typeof value === "number" ? value : 0;
 }
 
-export function isElementMuted({
-	element,
+export function isClipMuted({
+	clip,
 }: {
-	element: AudioCapableElement;
+	clip: AudioCapableClip;
 }): boolean {
-	return element.params.muted === true;
+	return clip.params.muted === true;
 }
 
 export function hasAnimatedVolume({
-	element,
+	clip,
 }: {
-	element: AudioCapableElement;
+	clip: AudioCapableClip;
 }): boolean {
 	return hasKeyframesForPath({
-		animations: element.animations,
+		animations: clip.animations,
 		propertyPath: "volume",
 	});
 }
@@ -52,21 +52,21 @@ export function hasAnimatedVolume({
 import { TICKS_PER_SECOND } from "@/wasm";
 
 export function resolveEffectiveAudioGain({
-	element,
+	clip,
 	trackMuted = false,
 	localTime,
 }: {
-	element: AudioCapableElement;
+	clip: AudioCapableClip;
 	trackMuted?: boolean;
 	localTime: number;
 }): number {
-	if (trackMuted || isElementMuted({ element })) {
+	if (trackMuted || isClipMuted({ clip })) {
 		return 0;
 	}
 
 	const resolvedDb = resolveNumberAtTime({
-		baseValue: getElementVolume({ element }),
-		animations: element.animations,
+		baseValue: getClipVolume({ clip }),
+		animations: clip.animations,
 		propertyPath: "volume",
 		localTime: Math.round(localTime * TICKS_PER_SECOND),
 	});
@@ -75,27 +75,27 @@ export function resolveEffectiveAudioGain({
 }
 
 export function buildWaveformGainSamples({
-	element,
+	clip,
 	count,
 }: {
-	element: AudioCapableElement;
+	clip: AudioCapableClip;
 	count: number;
 }): number[] {
-	const durationSeconds = element.duration / TICKS_PER_SECOND;
+	const durationSeconds = clip.duration / TICKS_PER_SECOND;
 	return Array.from({ length: count }, (_, i) => {
 		const localTime = ((i + 0.5) / count) * durationSeconds;
-		return resolveEffectiveAudioGain({ element, localTime });
+		return resolveEffectiveAudioGain({ clip, localTime });
 	});
 }
 
 export function buildAudioGainAutomation({
-	element,
+	clip,
 	trackMuted = false,
 	fromLocalTime,
 	toLocalTime,
 	stepSeconds = DEFAULT_STEP_SECONDS,
 }: {
-	element: AudioCapableElement;
+	clip: AudioCapableClip;
 	trackMuted?: boolean;
 	fromLocalTime: number;
 	toLocalTime: number;
@@ -113,7 +113,7 @@ export function buildAudioGainAutomation({
 		points.push({
 			localTime,
 			gain: resolveEffectiveAudioGain({
-				element,
+				clip,
 				trackMuted,
 				localTime,
 			}),
@@ -123,7 +123,7 @@ export function buildAudioGainAutomation({
 	points.push({
 		localTime: endTime,
 		gain: resolveEffectiveAudioGain({
-			element,
+			clip,
 			trackMuted,
 			localTime: endTime,
 		}),

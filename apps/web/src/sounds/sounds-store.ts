@@ -3,7 +3,7 @@ import type { SoundEffect, SavedSound } from "@/sounds/types";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
 import { EditorCore } from "@/core";
-import { buildLibraryAudioElement } from "@/timeline/element-utils";
+import { buildLibraryAudioClip } from "@/timeline/clip-utils";
 import { mediaTimeFromSeconds } from "@/wasm";
 
 interface SoundsStore {
@@ -225,7 +225,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 			const audioContext = new AudioContext();
 			const buffer = await audioContext.decodeAudioData(arrayBuffer);
 
-			const element = buildLibraryAudioElement({
+			const clip = buildLibraryAudioClip({
 				sourceUrl: audioUrl,
 				name: sound.name,
 				duration: mediaTimeFromSeconds({ seconds: sound.duration }),
@@ -233,9 +233,9 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 				buffer,
 			});
 
-			editor.timeline.insertElement({
+			editor.timeline.insertClip({
 				placement: { mode: "auto", trackType: "audio" },
-				element,
+				clip,
 			});
 			return true;
 		} catch (error) {

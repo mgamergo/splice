@@ -1,27 +1,27 @@
-import type { ElementAnimations } from "@/animation/types";
+import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
 import type { MediaTime } from "@/wasm";
 
-export type ElementRef = {
+export type ClipRef = {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 };
 
-export interface Bookmark {
+export interface Marker {
 	time: MediaTime;
 	note?: string;
 	color?: string;
 	duration?: MediaTime;
 }
 
-export interface TScene {
+export interface TSequence {
 	id: string;
 	name: string;
 	isMain: boolean;
-	tracks: SceneTracks;
-	bookmarks: Bookmark[];
+	tracks: SequenceTracks;
+	markers: Marker[];
 	createdAt: Date;
 	updatedAt: Date;
 }
@@ -35,32 +35,32 @@ interface BaseTrack {
 
 export interface VideoTrack extends BaseTrack {
 	type: "video";
-	elements: (VideoElement | ImageElement)[];
+	clips: (VideoClip | ImageClip)[];
 	muted: boolean;
 	hidden: boolean;
 }
 
 export interface TextTrack extends BaseTrack {
 	type: "text";
-	elements: TextElement[];
+	clips: TextClip[];
 	hidden: boolean;
 }
 
 export interface AudioTrack extends BaseTrack {
 	type: "audio";
-	elements: AudioElement[];
+	clips: AudioClip[];
 	muted: boolean;
 }
 
 export interface GraphicTrack extends BaseTrack {
 	type: "graphic";
-	elements: (StickerElement | GraphicElement)[];
+	clips: (StickerClip | GraphicClip)[];
 	hidden: boolean;
 }
 
 export interface EffectTrack extends BaseTrack {
 	type: "effect";
-	elements: EffectElement[];
+	clips: EffectClip[];
 	hidden: boolean;
 }
 
@@ -73,7 +73,7 @@ export type TimelineTrack =
 
 export type OverlayTrack = VideoTrack | TextTrack | GraphicTrack | EffectTrack;
 
-export interface SceneTracks {
+export interface SequenceTracks {
 	overlay: OverlayTrack[];
 	main: VideoTrack;
 	audio: AudioTrack[];
@@ -84,25 +84,25 @@ export interface RetimeConfig {
 	maintainPitch?: boolean;
 }
 
-interface BaseAudioElement extends BaseTimelineElement {
+interface BaseAudioClip extends BaseTimelineClip {
 	type: "audio";
 	buffer?: AudioBuffer;
 	retime?: RetimeConfig;
 }
 
-export interface UploadAudioElement extends BaseAudioElement {
+export interface UploadAudioClip extends BaseAudioClip {
 	sourceType: "upload";
 	mediaId: string;
 }
 
-export interface LibraryAudioElement extends BaseAudioElement {
+export interface LibraryAudioClip extends BaseAudioClip {
 	sourceType: "library";
 	sourceUrl: string;
 }
 
-export type AudioElement = UploadAudioElement | LibraryAudioElement;
+export type AudioClip = UploadAudioClip | LibraryAudioClip;
 
-interface BaseTimelineElement {
+interface BaseTimelineClip {
 	id: string;
 	name: string;
 	duration: MediaTime;
@@ -110,11 +110,11 @@ interface BaseTimelineElement {
 	trimStart: MediaTime;
 	trimEnd: MediaTime;
 	sourceDuration?: MediaTime;
-	animations?: ElementAnimations;
+	animations?: ClipAnimations;
 	params: ParamValues;
 }
 
-export interface VideoElement extends BaseTimelineElement {
+export interface VideoClip extends BaseTimelineClip {
 	type: "video";
 	mediaId: string;
 	isSourceAudioEnabled?: boolean;
@@ -124,7 +124,7 @@ export interface VideoElement extends BaseTimelineElement {
 	masks?: Mask[];
 }
 
-export interface ImageElement extends BaseTimelineElement {
+export interface ImageClip extends BaseTimelineClip {
 	type: "image";
 	mediaId: string;
 	hidden?: boolean;
@@ -132,23 +132,23 @@ export interface ImageElement extends BaseTimelineElement {
 	masks?: Mask[];
 }
 
-export interface TextElement extends BaseTimelineElement {
+export interface TextClip extends BaseTimelineClip {
 	type: "text";
 	hidden?: boolean;
 	effects?: Effect[];
 }
 
-export interface StickerElement extends BaseTimelineElement {
+export interface StickerClip extends BaseTimelineClip {
 	type: "sticker";
 	stickerId: string;
-	/** Natural dimensions of the sticker asset, stored at insert time. Used by renderer and preview bounds to avoid split-brain geometry. */
+	/** Natural dimensions of the sticker projectItem, stored at insert time. Used by renderer and preview bounds to avoid split-brain geometry. */
 	intrinsicWidth?: number;
 	intrinsicHeight?: number;
 	hidden?: boolean;
 	effects?: Effect[];
 }
 
-export interface GraphicElement extends BaseTimelineElement {
+export interface GraphicClip extends BaseTimelineClip {
 	type: "graphic";
 	definitionId: string;
 	hidden?: boolean;
@@ -156,43 +156,43 @@ export interface GraphicElement extends BaseTimelineElement {
 	masks?: Mask[];
 }
 
-export interface EffectElement extends BaseTimelineElement {
+export interface EffectClip extends BaseTimelineClip {
 	type: "effect";
 	effectType: string;
 }
 
-export type ElementUpdatePatch = { params?: Partial<ParamValues> };
+export type ClipUpdatePatch = { params?: Partial<ParamValues> };
 
-export type TimelineElement =
-	| AudioElement
-	| VideoElement
-	| ImageElement
-	| TextElement
-	| StickerElement
-	| GraphicElement
-	| EffectElement;
+export type TimelineClip =
+	| AudioClip
+	| VideoClip
+	| ImageClip
+	| TextClip
+	| StickerClip
+	| GraphicClip
+	| EffectClip;
 
-export type ElementType = TimelineElement["type"];
+export type ClipType = TimelineClip["type"];
 
-function elementTypes<T extends ElementType[]>(...types: T): T {
+function clipTypes<T extends ClipType[]>(...types: T): T {
 	return types;
 }
 
-export const MASKABLE_ELEMENT_TYPES = elementTypes("video", "image", "graphic");
+export const MASKABLE_CLIP_TYPES = clipTypes("video", "image", "graphic");
 
-export type MaskableElement = Extract<
-	TimelineElement,
-	{ type: (typeof MASKABLE_ELEMENT_TYPES)[number] }
+export type MaskableClip = Extract<
+	TimelineClip,
+	{ type: (typeof MASKABLE_CLIP_TYPES)[number] }
 >;
 
-export const RETIMABLE_ELEMENT_TYPES = elementTypes("video", "audio");
+export const RETIMABLE_CLIP_TYPES = clipTypes("video", "audio");
 
-export type RetimableElement = Extract<
-	TimelineElement,
-	{ type: (typeof RETIMABLE_ELEMENT_TYPES)[number] }
+export type RetimableClip = Extract<
+	TimelineClip,
+	{ type: (typeof RETIMABLE_CLIP_TYPES)[number] }
 >;
 
-export const VISUAL_ELEMENT_TYPES = elementTypes(
+export const VISUAL_CLIP_TYPES = clipTypes(
 	"video",
 	"image",
 	"text",
@@ -200,55 +200,55 @@ export const VISUAL_ELEMENT_TYPES = elementTypes(
 	"graphic",
 );
 
-export type VisualElement = Extract<
-	TimelineElement,
-	{ type: (typeof VISUAL_ELEMENT_TYPES)[number] }
+export type VisualClip = Extract<
+	TimelineClip,
+	{ type: (typeof VISUAL_CLIP_TYPES)[number] }
 >;
 
-export type CreateUploadAudioElement = Omit<UploadAudioElement, "id">;
-export type CreateLibraryAudioElement = Omit<LibraryAudioElement, "id">;
-export type CreateAudioElement =
-	| CreateUploadAudioElement
-	| CreateLibraryAudioElement;
-export type CreateVideoElement = Omit<VideoElement, "id">;
-export type CreateImageElement = Omit<ImageElement, "id">;
-export type CreateTextElement = Omit<TextElement, "id">;
-export type CreateStickerElement = Omit<StickerElement, "id">;
-export type CreateGraphicElement = Omit<GraphicElement, "id">;
-export type CreateEffectElement = Omit<EffectElement, "id">;
-export type CreateTimelineElement =
-	| CreateAudioElement
-	| CreateVideoElement
-	| CreateImageElement
-	| CreateTextElement
-	| CreateStickerElement
-	| CreateGraphicElement
-	| CreateEffectElement;
+export type CreateUploadAudioClip = Omit<UploadAudioClip, "id">;
+export type CreateLibraryAudioClip = Omit<LibraryAudioClip, "id">;
+export type CreateAudioClip =
+	| CreateUploadAudioClip
+	| CreateLibraryAudioClip;
+export type CreateVideoClip = Omit<VideoClip, "id">;
+export type CreateImageClip = Omit<ImageClip, "id">;
+export type CreateTextClip = Omit<TextClip, "id">;
+export type CreateStickerClip = Omit<StickerClip, "id">;
+export type CreateGraphicClip = Omit<GraphicClip, "id">;
+export type CreateEffectClip = Omit<EffectClip, "id">;
+export type CreateTimelineClip =
+	| CreateAudioClip
+	| CreateVideoClip
+	| CreateImageClip
+	| CreateTextClip
+	| CreateStickerClip
+	| CreateGraphicClip
+	| CreateEffectClip;
 
-export interface ElementDragState {
+export interface ClipDragState {
 	isDragging: boolean;
-	elementId: string | null;
-	dragElementIds: string[];
+	clipId: string | null;
+	dragClipIds: string[];
 	dragTimeOffsets: Record<string, MediaTime>;
 	trackId: string | null;
 	startMouseX: number;
 	startMouseY: number;
-	startElementTime: MediaTime;
+	startClipTime: MediaTime;
 	clickOffsetTime: MediaTime;
 	currentTime: MediaTime;
 	currentMouseY: number;
 }
 
-export type ElementDragView =
+export type ClipDragView =
 	| { readonly kind: "idle" }
 	| {
 			readonly kind: "dragging";
-			readonly anchorElementId: string;
+			readonly anchorClipId: string;
 			readonly trackId: string;
 			readonly memberTimeOffsets: ReadonlyMap<string, MediaTime>;
 			readonly startMouseX: number;
 			readonly startMouseY: number;
-			readonly startElementTime: MediaTime;
+			readonly startClipTime: MediaTime;
 			readonly clickOffsetTime: MediaTime;
 			readonly currentTime: MediaTime;
 			readonly currentMouseX: number;
@@ -261,27 +261,27 @@ export interface DropTarget {
 	isNewTrack: boolean;
 	insertPosition: "above" | "below" | null;
 	xPosition: MediaTime;
-	targetElement: { elementId: string; trackId: string } | null;
+	targetClip: { clipId: string; trackId: string } | null;
 }
 
 export interface ComputeDropTargetParams {
-	elementType: ElementType;
+	clipType: ClipType;
 	mouseX: number;
 	mouseY: number;
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	playheadTime: MediaTime;
 	isExternalDrop: boolean;
-	elementDuration: MediaTime;
+	clipDuration: MediaTime;
 	pixelsPerSecond: number;
 	zoomLevel: number;
 	verticalDragDirection?: "up" | "down" | null;
 	startTimeOverride?: MediaTime;
-	excludeElementId?: string;
-	targetElementTypes?: string[];
+	excludeClipId?: string;
+	targetClipTypes?: string[];
 }
 
 export interface ClipboardItem {
 	trackId: string;
 	trackType: TrackType;
-	element: CreateTimelineElement;
+	clip: CreateTimelineClip;
 }

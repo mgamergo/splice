@@ -1,6 +1,6 @@
 import type {
 	AnimationPath,
-	ElementAnimations,
+	ClipAnimations,
 	ChannelData,
 	ScalarAnimationChannel,
 	ScalarGraphChannel,
@@ -36,7 +36,7 @@ export function getEditableScalarChannels({
 	animations,
 	propertyPath,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 }): EditableScalarChannels | null {
 	const data = animations?.[propertyPath];
@@ -69,7 +69,7 @@ export function getEditableScalarChannel({
 	propertyPath,
 	componentKey,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	componentKey: string;
 }): ScalarGraphChannel | null {
@@ -83,7 +83,7 @@ export function getScalarKeyframeContext({
 	componentKey,
 	keyframeId,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	componentKey: string;
 	keyframeId: string;

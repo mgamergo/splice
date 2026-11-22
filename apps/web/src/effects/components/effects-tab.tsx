@@ -3,10 +3,10 @@
 import { useState } from "react";
 import type { ParamValues } from "@/params";
 import type { Effect } from "@/effects/types";
-import type { EffectElement, VisualElement } from "@/timeline";
+import type { EffectClip, VisualClip } from "@/timeline";
 import { effectsRegistry } from "@/effects";
 import { useEditor } from "@/editor/use-editor";
-import { useElementPreview } from "@/timeline/hooks/use-element-preview";
+import { useClipPreview } from "@/timeline/hooks/use-clip-preview";
 import {
 	Section,
 	SectionContent,
@@ -28,28 +28,28 @@ import { Separator } from "@/components/ui/separator";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 
 export function StandaloneEffectTab({
-	element,
+	clip,
 	trackId,
 }: {
-	element: EffectElement;
+	clip: EffectClip;
 	trackId: string;
 }) {
-	const { renderElement, previewUpdates, commit } = useElementPreview({
+	const { renderClip, previewUpdates, commit } = useClipPreview({
 		trackId,
-		elementId: element.id,
-		fallback: element,
+		clipId: clip.id,
+		fallback: clip,
 	});
 
 	const effect: Effect = {
-		id: element.id,
-		type: element.effectType,
-		params: element.params,
+		id: clip.id,
+		type: clip.effectType,
+		params: clip.params,
 		enabled: true,
 	};
 
 	const previewParam = (key: string) => (value: number | string | boolean) => {
 		previewUpdates({
-			params: { ...(renderElement as EffectElement).params, [key]: value },
+			params: { ...(renderClip as EffectClip).params, [key]: value },
 		});
 	};
 
@@ -60,7 +60,7 @@ export function StandaloneEffectTab({
 			</div>
 			<EffectSection
 				effect={effect}
-				renderParams={(renderElement as EffectElement).params}
+				renderParams={(renderClip as EffectClip).params}
 				previewParam={previewParam}
 				onCommit={commit}
 			/>
@@ -69,26 +69,26 @@ export function StandaloneEffectTab({
 }
 
 export function ClipEffectsTab({
-	element,
+	clip,
 	trackId,
 }: {
-	element: VisualElement;
+	clip: VisualClip;
 	trackId: string;
 }) {
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [dropIndex, setDropIndex] = useState<number | null>(null);
 	const editor = useEditor();
-	const { renderElement, previewUpdates, commit } = useElementPreview({
+	const { renderClip, previewUpdates, commit } = useClipPreview({
 		trackId,
-		elementId: element.id,
-		fallback: element,
+		clipId: clip.id,
+		fallback: clip,
 	});
 
-	const effects: Effect[] = element.effects ?? [];
+	const effects: Effect[] = clip.effects ?? [];
 
 	const getRenderParams = ({ effectId }: { effectId: string }): ParamValues => {
 		return (
-			(renderElement as VisualElement).effects?.find((ef) => ef.id === effectId)
+			(renderClip as VisualClip).effects?.find((ef) => ef.id === effectId)
 				?.params ??
 			effects.find((ef) => ef.id === effectId)?.params ??
 			{}
@@ -100,7 +100,7 @@ export function ClipEffectsTab({
 		(key: string) =>
 		(value: number | string | boolean) => {
 			const updatedEffects = (
-				(renderElement as VisualElement).effects ?? []
+				(renderClip as VisualClip).effects ?? []
 			).map((existing) =>
 				existing.id !== effectId
 					? existing
@@ -126,7 +126,7 @@ export function ClipEffectsTab({
 		if (dragIndex !== null && dragIndex !== toIndex) {
 			editor.timeline.reorderClipEffects({
 				trackId,
-				elementId: element.id,
+				clipId: clip.id,
 				fromIndex: dragIndex,
 				toIndex,
 			});
@@ -182,14 +182,14 @@ export function ClipEffectsTab({
 									onToggle={() =>
 										editor.timeline.toggleClipEffect({
 											trackId,
-											elementId: element.id,
+											clipId: clip.id,
 											effectId: effect.id,
 										})
 									}
 									onRemove={() =>
 										editor.timeline.removeClipEffect({
 											trackId,
-											elementId: element.id,
+											clipId: clip.id,
 											effectId: effect.id,
 										})
 									}

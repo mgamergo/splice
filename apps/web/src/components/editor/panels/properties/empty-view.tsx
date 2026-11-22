@@ -12,7 +12,7 @@ export function EmptyView() {
 			<div className="flex flex-col gap-2 text-center">
 				<p className="text-lg font-medium ">It&apos;s empty here</p>
 				<p className="text-muted-foreground text-sm text-balance">
-					Click an element on the timeline to edit its properties
+					Click an clip on the timeline to edit its properties
 				</p>
 			</div>
 		</div>

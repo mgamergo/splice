@@ -1,5 +1,5 @@
 import { Command, type CommandResult } from "@/commands/base-command";
-import type { SceneTracks } from "@/timeline";
+import type { SequenceTracks } from "@/timeline";
 import { EditorCore } from "@/core";
 
 export class TracksSnapshotCommand extends Command {
@@ -7,16 +7,16 @@ export class TracksSnapshotCommand extends Command {
 		before,
 		after,
 	}: {
-		before: SceneTracks;
-		after: SceneTracks;
+		before: SequenceTracks;
+		after: SequenceTracks;
 	}) {
 		super();
 		this.before = before;
 		this.after = after;
 	}
 
-	private before: SceneTracks;
-	private after: SceneTracks;
+	private before: SequenceTracks;
+	private after: SequenceTracks;
 
 	execute(): CommandResult | undefined {
 		EditorCore.getInstance().timeline.updateTracks(this.after);

@@ -1,10 +1,10 @@
-import type { SceneTracks, TrackType, TimelineTrack } from "@/timeline";
+import type { SequenceTracks, TrackType, TimelineTrack } from "@/timeline";
 import {
 	getDefaultInsertIndexForTrack,
 	getHighestInsertIndexForTrack,
 	resolvePreferredNewTrackPlacement,
 } from "./insert-index";
-import { getTrackTypeForElementType } from "./compatibility";
+import { getTrackTypeForClipType } from "./compatibility";
 import { enforceMainTrackStart } from "./main-track";
 import { canPlaceTimeSpansOnTrack } from "./overlap";
 import type {
@@ -16,7 +16,7 @@ import type {
 import { ZERO_MEDIA_TIME } from "@/wasm";
 
 type ResolveTrackPlacementParams = PlacementSubject & {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	timeSpans: PlacementTimeSpan[];
 	strategy: PlacementStrategy;
 };
@@ -29,7 +29,7 @@ function buildExistingTrackResult({
 }: {
 	track: TimelineTrack;
 	trackIndex: number;
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	timeSpans: PlacementTimeSpan[];
 }): PlacementResult {
 	const firstSpan = timeSpans[0];
@@ -38,7 +38,7 @@ function buildExistingTrackResult({
 		tracks,
 		targetTrackId: track.id,
 		requestedStartTime,
-		excludeElementId: firstSpan?.excludeElementId,
+		excludeClipId: firstSpan?.excludeClipId,
 	});
 	return {
 		kind: "existingTrack",
@@ -91,7 +91,7 @@ function resolveAlwaysNewTrack({
 	trackType,
 	position,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	trackType: TrackType;
 	position: "highest" | "default";
 }): PlacementResult {
@@ -139,8 +139,8 @@ export function resolveTrackPlacement({
 	const trackType =
 		"trackType" in placement
 			? placement.trackType
-			: getTrackTypeForElementType({
-					elementType: placement.elementType,
+			: getTrackTypeForClipType({
+					clipType: placement.clipType,
 				});
 	const { timeSpans, strategy } = placement;
 

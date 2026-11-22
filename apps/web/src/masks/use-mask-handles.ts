@@ -5,22 +5,22 @@ import { useShiftKey } from "@/hooks/use-shift-key";
 import { getMaskDefinition } from "@/masks";
 import { appendPointToFreeformPathMask } from "@/masks/freeform/definition";
 import {
-	getVisibleElementsWithBounds,
-	type ElementBounds,
-} from "@/preview/element-bounds";
+	getVisibleClipsWithBounds,
+	type ClipBounds,
+} from "@/preview/clip-bounds";
 import {
 	SNAP_THRESHOLD_SCREEN_PIXELS,
 	type SnapLine,
 } from "@/preview/preview-snap";
 import type { SelectedMaskPointSelection } from "@/selection/editor-selection";
 import type { Mask, MaskHandleId, MaskInteractionResult } from "@/masks/types";
-import type { MaskableElement } from "@/timeline";
-import { isMaskableElement } from "@/timeline/element-utils";
+import type { MaskableClip } from "@/timeline";
+import { isMaskableClip } from "@/timeline/clip-utils";
 import { registerCanceller } from "@/editor/cancel-interaction";
 
 interface DragState {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 	handleId: MaskHandleId;
 	startCanvasX: number;
 	startCanvasY: number;
@@ -29,7 +29,7 @@ interface DragState {
 
 interface PendingSegmentInsertState {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 	maskId: string;
 	segmentIndex: number;
 	startClientX: number;
@@ -37,19 +37,19 @@ interface PendingSegmentInsertState {
 	startCanvasX: number;
 	startCanvasY: number;
 	startParams: Mask["params"];
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }
 
 const SEGMENT_CLICK_DRAG_THRESHOLD_PX = 4;
 
-function isMaskSelectionForElement({
+function isMaskSelectionForClip({
 	trackId,
-	elementId,
+	clipId,
 	maskId,
 	selection,
 }: {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 	maskId: string;
 	selection: SelectedMaskPointSelection | null;
 }): boolean {
@@ -58,16 +58,16 @@ function isMaskSelectionForElement({
 	}
 	return (
 		selection.trackId === trackId &&
-		selection.elementId === elementId &&
+		selection.clipId === clipId &&
 		selection.maskId === maskId
 	);
 }
 
-function replaceElementMask({
+function replaceClipMask({
 	masks,
 	updatedMask,
 }: {
-	masks: MaskableElement["masks"];
+	masks: MaskableClip["masks"];
 	updatedMask: Mask;
 }): Mask[] {
 	return (masks ?? []).map((mask) =>
@@ -101,47 +101,47 @@ export function useMaskHandles({
 	const pendingSegmentInsertRef = useRef<PendingSegmentInsertState | null>(
 		null,
 	);
-	const captureRef = useRef<{ element: Element; pointerId: number } | null>(
+	const captureRef = useRef<{ clip: Element; pointerId: number } | null>(
 		null,
 	);
 
 	const tracks = useEditor(
-		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
+		(e) => e.timeline.getPreviewTracks() ?? e.sequences.getActiveSequence().tracks,
 	);
 	const currentTime = useEditor((e) => e.playback.getCurrentTime());
-	const mediaAssets = useEditor((e) => e.media.getAssets());
+	const projectItems = useEditor((e) => e.media.getProjectItems());
 	const canvasSize = useEditor(
 		(e) => e.project.getActive().settings.canvasSize,
 	);
-	const selectedElements = useEditor((e) => e.selection.getSelectedElements());
+	const selectedClips = useEditor((e) => e.selection.getSelectedClips());
 	const selectedMaskPointSelection = useEditor((e) =>
 		e.selection.getSelectedMaskPointSelection(),
 	);
 
-	const elementsWithBounds = getVisibleElementsWithBounds({
+	const clipsWithBounds = getVisibleClipsWithBounds({
 		tracks,
 		currentTime,
 		canvasSize,
-		mediaAssets,
+		projectItems,
 	});
 
 	const selectedWithMask =
-		selectedElements.length === 1
+		selectedClips.length === 1
 			? (() => {
-					const sel = selectedElements[0];
-					const entry = elementsWithBounds.find(
+					const sel = selectedClips[0];
+					const entry = clipsWithBounds.find(
 						(item) =>
-							item.trackId === sel.trackId && item.elementId === sel.elementId,
+							item.trackId === sel.trackId && item.clipId === sel.clipId,
 					);
 					if (!entry) return null;
-					if (!isMaskableElement(entry.element)) return null;
-					const element = entry.element;
-					const masks = element.masks ?? [];
+					if (!isMaskableClip(entry.clip)) return null;
+					const clip = entry.clip;
+					const masks = clip.masks ?? [];
 					if (masks.length === 0) return null;
 					const activeMaskId = masks.some((mask) =>
-						isMaskSelectionForElement({
+						isMaskSelectionForClip({
 							trackId: entry.trackId,
-							elementId: entry.elementId,
+							clipId: entry.clipId,
 							maskId: mask.id,
 							selection: selectedMaskPointSelection,
 						}),
@@ -151,7 +151,7 @@ export function useMaskHandles({
 					const mask =
 						masks.find((candidate) => candidate.id === activeMaskId) ??
 						masks[0];
-					return { ...entry, element, mask };
+					return { ...entry, clip, mask };
 				})()
 			: null;
 
@@ -173,9 +173,9 @@ export function useMaskHandles({
 
 	const selectedPointIds = new Set(
 		selectedWithMask &&
-			isMaskSelectionForElement({
+			isMaskSelectionForClip({
 				trackId: selectedWithMask.trackId,
-				elementId: selectedWithMask.elementId,
+				clipId: selectedWithMask.clipId,
 				maskId: selectedWithMask.mask.id,
 				selection: selectedMaskPointSelection,
 			})
@@ -216,9 +216,9 @@ export function useMaskHandles({
 		if (
 			!selectedWithMask ||
 			selectedWithMask.mask.type !== "freeform" ||
-			!isMaskSelectionForElement({
+			!isMaskSelectionForClip({
 				trackId: selectedWithMask.trackId,
-				elementId: selectedWithMask.elementId,
+				clipId: selectedWithMask.clipId,
 				maskId: selectedWithMask.mask.id,
 				selection: selectedMaskPointSelection,
 			})
@@ -266,9 +266,9 @@ export function useMaskHandles({
 				return;
 			}
 
-			const isSelectionForCurrentMask = isMaskSelectionForElement({
+			const isSelectionForCurrentMask = isMaskSelectionForClip({
 				trackId: selectedWithMask.trackId,
-				elementId: selectedWithMask.elementId,
+				clipId: selectedWithMask.clipId,
 				maskId: selectedWithMask.mask.id,
 				selection: selectedMaskPointSelection,
 			});
@@ -291,7 +291,7 @@ export function useMaskHandles({
 			editor.selection.setSelectedMaskPoints({
 				selection: {
 					trackId: selectedWithMask.trackId,
-					elementId: selectedWithMask.elementId,
+					clipId: selectedWithMask.clipId,
 					maskId: selectedWithMask.mask.id,
 					pointIds: nextPointIds,
 				},
@@ -311,8 +311,8 @@ export function useMaskHandles({
 		const capture = captureRef.current;
 		if (!capture) return;
 
-		if (capture.element.hasPointerCapture(capture.pointerId)) {
-			capture.element.releasePointerCapture(capture.pointerId);
+		if (capture.clip.hasPointerCapture(capture.pointerId)) {
+			capture.clip.releasePointerCapture(capture.pointerId);
 		}
 
 		captureRef.current = null;
@@ -370,17 +370,17 @@ export function useMaskHandles({
 							closed: true,
 						},
 					});
-					editor.timeline.updateElements({
+					editor.timeline.updateClips({
 						updates: [
 							{
 								trackId: selectedWithMask.trackId,
-								elementId: selectedWithMask.elementId,
+								clipId: selectedWithMask.clipId,
 								patch: {
-									masks: replaceElementMask({
-										masks: selectedWithMask.element.masks,
+									masks: replaceClipMask({
+										masks: selectedWithMask.clip.masks,
 										updatedMask,
 									}),
-								} as Partial<MaskableElement>,
+								} as Partial<MaskableClip>,
 							},
 						],
 					});
@@ -398,7 +398,7 @@ export function useMaskHandles({
 				setActiveHandleId(handleId);
 				pendingSegmentInsertRef.current = {
 					trackId: selectedWithMask.trackId,
-					elementId: selectedWithMask.elementId,
+					clipId: selectedWithMask.clipId,
 					maskId: selectedWithMask.mask.id,
 					segmentIndex: segmentHandle.index,
 					startClientX: event.clientX,
@@ -411,7 +411,7 @@ export function useMaskHandles({
 				const captureTarget = event.currentTarget;
 				captureTarget.setPointerCapture(event.pointerId);
 				captureRef.current = {
-					element: captureTarget,
+					clip: captureTarget,
 					pointerId: event.pointerId,
 				};
 				return;
@@ -431,7 +431,7 @@ export function useMaskHandles({
 
 			dragStateRef.current = {
 				trackId: selectedWithMask.trackId,
-				elementId: selectedWithMask.elementId,
+				clipId: selectedWithMask.clipId,
 				handleId,
 				startCanvasX: pos.x,
 				startCanvasY: pos.y,
@@ -441,7 +441,7 @@ export function useMaskHandles({
 			const captureTarget = event.currentTarget;
 			captureTarget.setPointerCapture(event.pointerId);
 			captureRef.current = {
-				element: captureTarget,
+				clip: captureTarget,
 				pointerId: event.pointerId,
 			};
 		},
@@ -487,17 +487,17 @@ export function useMaskHandles({
 				params: nextParams,
 			});
 
-			editor.timeline.updateElements({
+			editor.timeline.updateClips({
 				updates: [
 					{
 						trackId: selectedWithMask.trackId,
-						elementId: selectedWithMask.elementId,
+						clipId: selectedWithMask.clipId,
 						patch: {
-							masks: replaceElementMask({
-								masks: selectedWithMask.element.masks,
+							masks: replaceClipMask({
+								masks: selectedWithMask.clip.masks,
 								updatedMask,
 							}),
-						} as Partial<MaskableElement>,
+						} as Partial<MaskableClip>,
 					},
 				],
 			});
@@ -516,7 +516,7 @@ export function useMaskHandles({
 				if (distance >= SEGMENT_CLICK_DRAG_THRESHOLD_PX) {
 					dragStateRef.current = {
 						trackId: pendingSegmentInsert.trackId,
-						elementId: pendingSegmentInsert.elementId,
+						clipId: pendingSegmentInsert.clipId,
 						handleId: { kind: "position" },
 						startCanvasX: pendingSegmentInsert.startCanvasX,
 						startCanvasY: pendingSegmentInsert.startCanvasY,
@@ -572,17 +572,17 @@ export function useMaskHandles({
 				mask: selectedWithMask.mask,
 				params: nextParams as typeof selectedWithMask.mask.params,
 			});
-			editor.timeline.previewElements({
+			editor.timeline.previewClips({
 				updates: [
 					{
 						trackId: drag.trackId,
-						elementId: drag.elementId,
+						clipId: drag.clipId,
 						updates: {
-							masks: replaceElementMask({
-								masks: selectedWithMask.element.masks,
+							masks: replaceClipMask({
+								masks: selectedWithMask.clip.masks,
 								updatedMask,
 							}),
-						} as Partial<MaskableElement>,
+						} as Partial<MaskableClip>,
 					},
 				],
 			});
@@ -602,7 +602,7 @@ export function useMaskHandles({
 		if (pendingSegmentInsert && !dragStateRef.current) {
 			editor.timeline.insertFreeformPathMaskPoint({
 				trackId: pendingSegmentInsert.trackId,
-				elementId: pendingSegmentInsert.elementId,
+				clipId: pendingSegmentInsert.clipId,
 				maskId: pendingSegmentInsert.maskId,
 				segmentIndex: pendingSegmentInsert.segmentIndex,
 				canvasPoint: {

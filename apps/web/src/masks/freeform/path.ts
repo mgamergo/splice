@@ -1,4 +1,4 @@
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 
 export interface FreeformPathPoint {
 	id: string;
@@ -107,7 +107,7 @@ export function getFreeformCenterCanvasPoint({
 }: {
 	centerX: number;
 	centerY: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): { x: number; y: number } {
 	return {
 		x: bounds.cx + centerX * bounds.width,
@@ -128,7 +128,7 @@ export function freeformLocalPointToCanvas({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): { x: number; y: number } {
 	const center = getFreeformCenterCanvasPoint({ centerX, centerY, bounds });
 	const scaledLocal = {
@@ -160,7 +160,7 @@ export function freeformCanvasPointToLocal({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): { x: number; y: number } {
 	const center = getFreeformCenterCanvasPoint({ centerX, centerY, bounds });
 	const translated = {
@@ -192,7 +192,7 @@ export function getFreeformCanvasGeometry({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }) {
 	const anchors = points.map((point) => ({
 		id: point.id,
@@ -405,7 +405,7 @@ export function getFreeformCanvasSegments({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	closed: boolean;
 }): FreeformCanvasSegment[] {
 	const geometry = getFreeformCanvasGeometry({
@@ -452,7 +452,7 @@ export function findClosestPointOnFreeformSegment({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	closed: boolean;
 }): { t: number; point: CanvasPoint } | null {
 	const segment = getFreeformCanvasSegments({
@@ -601,7 +601,7 @@ export function getFreeformLocalBounds({
 	bounds,
 }: {
 	points: FreeformPathPoint[];
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }) {
 	if (points.length === 0) {
 		return null;
@@ -645,7 +645,7 @@ export function recenterFreeformPath({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }) {
 	if (points.length === 0) {
 		return { centerX, centerY, points };
@@ -733,7 +733,7 @@ export function buildFreeformPath2D({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	closed: boolean;
 }): Path2D {
 	const path = new Path2D();
@@ -796,7 +796,7 @@ export function buildFreeformSvgPath({
 	centerY: number;
 	rotation: number;
 	scale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	closed: boolean;
 }): string {
 	if (points.length === 0) {

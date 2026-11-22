@@ -1,5 +1,5 @@
 import type {
-	ElementAnimations,
+	ClipAnimations,
 	GraphicParamPath,
 } from "@/animation/types";
 import type { ParamDefinition, ParamValues } from "@/params";
@@ -42,7 +42,7 @@ export function resolveGraphicParamsAtTime({
 }: {
 	params: ParamValues;
 	definitions: ParamDefinition[];
-	animations?: ElementAnimations;
+	animations?: ClipAnimations;
 	localTime: number;
 }): ParamValues {
 	const resolved: ParamValues = { ...params };

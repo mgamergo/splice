@@ -1,8 +1,8 @@
-import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
+import { DEFAULT_NEW_CLIP_DURATION } from "@/timeline/creation";
 import type { TTimelineViewState } from "@/project/types";
 import type { BlendMode, Transform } from "@/rendering";
 import { ZERO_MEDIA_TIME } from "@/wasm";
-import type { TextElement } from "./types";
+import type { TextClip } from "./types";
 
 const defaultTransform: Transform = {
 	scaleX: 1,
@@ -28,10 +28,10 @@ const defaultTextBackground = {
 	offsetY: 0,
 };
 
-const defaultTextElement: Omit<TextElement, "id"> = {
+const defaultTextClip: Omit<TextClip, "id"> = {
 	type: "text",
 	name: "Text",
-	duration: DEFAULT_NEW_ELEMENT_DURATION,
+	duration: DEFAULT_NEW_CLIP_DURATION,
 	startTime: ZERO_MEDIA_TIME,
 	trimStart: ZERO_MEDIA_TIME,
 	trimEnd: ZERO_MEDIA_TIME,
@@ -70,7 +70,7 @@ const defaultTimelineViewState: TTimelineViewState = {
 };
 
 export const DEFAULTS = {
-	element: {
+	clip: {
 		transform: defaultTransform,
 		opacity: defaultOpacity,
 		blendMode: defaultBlendMode,
@@ -80,7 +80,7 @@ export const DEFAULTS = {
 		letterSpacing: defaultTextLetterSpacing,
 		lineHeight: defaultTextLineHeight,
 		background: defaultTextBackground,
-		element: defaultTextElement,
+		clip: defaultTextClip,
 	},
 	timeline: {
 		viewState: defaultTimelineViewState,

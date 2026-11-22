@@ -1,5 +1,5 @@
 import { FEATHER_HANDLE_SCALE } from "@/masks/feather";
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import type {
 	MaskFeatures,
 	MaskHandleId,
@@ -26,7 +26,7 @@ const CURSOR = {
  * The renderer defines the split line as:
  *   - normal direction: (cos(rotation), sin(rotation))
  *   - line direction (parallel to cut): (-sin(rotation), cos(rotation))
- *   - reference point: (centerX * width, centerY * height) from element centre
+ *   - reference point: (centerX * width, centerY * height) from clip centre
  *
  * So rotation=0 → normal points right → line runs vertically.
  */
@@ -39,7 +39,7 @@ export function getLineMaskLinePoints({
 	centerX: number;
 	centerY: number;
 	rotation: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): { start: { x: number; y: number }; end: { x: number; y: number } } {
 	const angleRad = (rotation * Math.PI) / 180;
 	const normalX = Math.cos(angleRad);
@@ -75,7 +75,7 @@ export function getLineMaskOverlay({
 	centerX: number;
 	centerY: number;
 	rotation: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	handleId?: MaskHandleId;
 	cursor?: string;
 }): MaskLineOverlay {
@@ -108,7 +108,7 @@ export function getLineMaskHandlePositions({
 	centerY: number;
 	rotation: number;
 	feather: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	displayScale: number;
 }): MaskHandlePosition[] {
 	const angleRad = (rotation * Math.PI) / 180;
@@ -182,7 +182,7 @@ export function getBoxMaskHandlePositions({
 	feather: number;
 	sizeMode: MaskFeatures["sizeMode"];
 	showScaleHandle?: boolean;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	displayScale: number;
 }): MaskHandlePosition[] {
 	const cx = bounds.cx + centerX * bounds.width;
@@ -413,7 +413,7 @@ export function getBoxMaskRectOverlay({
 	width: number;
 	height: number;
 	rotation: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	handleId?: MaskHandleId;
 	cursor?: string;
 	dashed?: boolean;
@@ -450,7 +450,7 @@ export function getBoxMaskShapeOverlay({
 	width: number;
 	height: number;
 	rotation: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	pathData: string;
 	handleId?: MaskHandleId;
 	cursor?: string;
@@ -481,7 +481,7 @@ export function getBoxMaskOverlays({
 		RectangleMaskParams,
 		"centerX" | "centerY" | "width" | "height" | "rotation"
 	>;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	pathData?: string;
 	showBoundingBox?: boolean;
 }): MaskOverlay[] {

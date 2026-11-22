@@ -16,11 +16,11 @@ export function downloadBlob({
 }
 
 export function findScrollParent({
-	element,
+	clip,
 }: {
-	element: HTMLElement;
+	clip: HTMLElement;
 }): HTMLElement | null {
-	let parent = element.parentElement;
+	let parent = clip.parentElement;
 	while (parent) {
 		const { overflow, overflowX } = window.getComputedStyle(parent);
 		if (/auto|scroll/.test(overflow + overflowX)) return parent;
@@ -30,18 +30,18 @@ export function findScrollParent({
 }
 
 export function isTypableDOMElement({
-	element,
+	clip,
 }: {
-	element: HTMLElement;
+	clip: HTMLElement;
 }): boolean {
-	if (element.isContentEditable) return true;
+	if (clip.isContentEditable) return true;
 
-	if (element.tagName === "INPUT") {
-		return !(element as HTMLInputElement).disabled;
+	if (clip.tagName === "INPUT") {
+		return !(clip as HTMLInputElement).disabled;
 	}
 
-	if (element.tagName === "TEXTAREA") {
-		return !(element as HTMLTextAreaElement).disabled;
+	if (clip.tagName === "TEXTAREA") {
+		return !(clip as HTMLTextAreaElement).disabled;
 	}
 
 	return false;

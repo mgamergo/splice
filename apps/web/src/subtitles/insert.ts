@@ -2,9 +2,9 @@ import type { EditorCore } from "@/core";
 import {
 	AddTrackCommand,
 	BatchCommand,
-	InsertElementCommand,
+	InsertClipCommand,
 } from "@/commands";
-import { buildSubtitleTextElement } from "./build-subtitle-text-element";
+import { buildSubtitleTextClip } from "./build-subtitle-text-clip";
 import type { SubtitleCue } from "./types";
 
 export function insertCaptionChunksAsTextTrack({
@@ -23,9 +23,9 @@ export function insertCaptionChunksAsTextTrack({
 	const canvasSize = editor.project.getActive().settings.canvasSize;
 	const insertCommands = captions.map(
 		(caption, index) =>
-			new InsertElementCommand({
+			new InsertClipCommand({
 				placement: { mode: "explicit", trackId },
-				element: buildSubtitleTextElement({
+				clip: buildSubtitleTextClip({
 					index,
 					caption,
 					canvasSize,

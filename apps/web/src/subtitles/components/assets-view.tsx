@@ -121,8 +121,8 @@ export function Captions() {
 		dispatch({ type: "start", step: "Extracting audio..." });
 		try {
 			const audioBlob = await extractTimelineAudio({
-				tracks: editor.scenes.getActiveScene().tracks,
-				mediaAssets: editor.media.getAssets(),
+				tracks: editor.sequences.getActiveSequence().tracks,
+				projectItems: editor.media.getProjectItems(),
 				totalDuration: editor.timeline.getTotalDuration(),
 			});
 

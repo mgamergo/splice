@@ -24,7 +24,7 @@ export interface SeekConfig {
 	getRulerScrollEl: () => HTMLDivElement | null;
 	getTracksScrollEl: () => HTMLDivElement | null;
 	getActiveProjectFps: () => FrameRate | null;
-	clearSelectedElements: () => void;
+	clearSelectedClips: () => void;
 	seek: (time: MediaTime) => void;
 	setTimelineViewState: (viewState: {
 		zoomLevel: number;
@@ -143,7 +143,7 @@ export class SeekController {
 
 		if (!shouldProcess) return;
 
-		this.config.clearSelectedElements();
+		this.config.clearSelectedClips();
 		this.seekFromEvent({ event, source });
 	}
 
@@ -163,7 +163,7 @@ export class SeekController {
 		if (this.config.getPlayheadEl()?.contains(target)) return false;
 
 		if (this.config.getTrackLabelsEl()?.contains(target)) {
-			this.config.clearSelectedElements();
+			this.config.clearSelectedClips();
 			return false;
 		}
 

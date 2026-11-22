@@ -120,10 +120,10 @@ export function getStrokeOffset({
 }
 
 export function getDefaultSquareMaskParams({
-	elementSize,
+	clipSize,
 }: MaskDefaultContext): RectangleMaskParams {
-	const absWidth = Math.abs(elementSize?.width ?? 0);
-	const absHeight = Math.abs(elementSize?.height ?? 0);
+	const absWidth = Math.abs(clipSize?.width ?? 0);
+	const absHeight = Math.abs(clipSize?.height ?? 0);
 	const shortSide = Math.min(absWidth, absHeight);
 	const squareSide =
 		shortSide > 0 ? shortSide * DEFAULT_SHAPE_MASK_SHORT_SIDE_RATIO : 0;

@@ -1,12 +1,12 @@
 import { useEffect } from "react";
 import { useEditor } from "@/editor/use-editor";
-import { processMediaAssets } from "@/media/processing";
+import { processProjectItems } from "@/media/processing";
 import { showMediaUploadToast } from "@/media/upload-toast";
-import { buildElementFromMedia } from "@/timeline/element-utils";
-import { AddMediaAssetCommand } from "@/commands/media";
-import { InsertElementCommand } from "@/commands/timeline";
+import { buildClipFromMedia } from "@/timeline/clip-utils";
+import { AddProjectItemCommand } from "@/commands/media";
+import { InsertClipCommand } from "@/commands/timeline";
 import { BatchCommand } from "@/commands";
-import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
+import { DEFAULT_NEW_CLIP_DURATION } from "@/timeline/creation";
 import { mediaTimeFromSeconds } from "@/wasm";
 import { isTypableDOMElement } from "@/utils/browser";
 import type { MediaType } from "@/media/types";
@@ -42,7 +42,7 @@ export function usePasteMedia() {
 		const handlePaste = async (event: ClipboardEvent) => {
 			const activeElement = document.activeElement as HTMLElement;
 
-			if (activeElement && isTypableDOMElement({ element: activeElement })) {
+			if (activeElement && isTypableDOMElement({ clip: activeElement })) {
 				return;
 			}
 
@@ -64,35 +64,35 @@ export function usePasteMedia() {
 				await showMediaUploadToast({
 					filesCount: files.length,
 					promise: async () => {
-						const processedAssets = await processMediaAssets({ files });
+						const processedProjectItems = await processProjectItems({ files });
 						const startTime = editor.playback.getCurrentTime();
 
-						for (const asset of processedAssets) {
-							const addMediaCmd = new AddMediaAssetCommand({
+						for (const projectItem of processedProjectItems) {
+							const addMediaCmd = new AddProjectItemCommand({
 								projectId: activeProject.metadata.id,
-								asset,
+								projectItem,
 							});
-							const assetId = addMediaCmd.getAssetId();
+							const projectItemId = addMediaCmd.getProjectItemId();
 							const duration =
-								asset.duration != null
-									? mediaTimeFromSeconds({ seconds: asset.duration })
-									: DEFAULT_NEW_ELEMENT_DURATION;
-							const trackType = asset.type === "audio" ? "audio" : "video";
+								projectItem.duration != null
+									? mediaTimeFromSeconds({ seconds: projectItem.duration })
+									: DEFAULT_NEW_CLIP_DURATION;
+							const trackType = projectItem.type === "audio" ? "audio" : "video";
 
-							const element = buildElementFromMedia({
-								mediaId: assetId,
-								mediaType: asset.type,
-								name: asset.name,
+							const clip = buildClipFromMedia({
+								mediaId: projectItemId,
+								mediaType: projectItem.type,
+								name: projectItem.name,
 								duration,
 								startTime,
 								buffer:
-									asset.type === "audio"
+									projectItem.type === "audio"
 										? new AudioBuffer({ length: 1, sampleRate: 44100 })
 										: undefined,
 							});
 
-							const insertCmd = new InsertElementCommand({
-								element,
+							const insertCmd = new InsertClipCommand({
+								clip,
 								placement: { mode: "auto", trackType },
 							});
 							const batchCmd = new BatchCommand([addMediaCmd, insertCmd]);
@@ -100,8 +100,8 @@ export function usePasteMedia() {
 						}
 
 						return {
-							uploadedCount: processedAssets.length,
-							assetNames: processedAssets.map((asset) => asset.name),
+							uploadedCount: processedProjectItems.length,
+							projectItemNames: processedProjectItems.map((projectItem) => projectItem.name),
 						};
 					},
 				});

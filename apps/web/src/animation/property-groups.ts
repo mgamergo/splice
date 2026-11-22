@@ -1,7 +1,7 @@
 import type {
 	AnimationPropertyGroup,
 	AnimationPropertyPath,
-	ElementAnimations,
+	ClipAnimations,
 } from "@/animation/types";
 import { ANIMATION_PROPERTY_GROUPS } from "@/animation/types";
 import { getKeyframeAtTime } from "./keyframe-query";
@@ -16,7 +16,7 @@ export function getGroupKeyframesAtTime({
 	group,
 	time,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	group: AnimationPropertyGroup;
 	time: number;
 }): GroupKeyframeRef[] {
@@ -31,7 +31,7 @@ export function hasGroupKeyframeAtTime({
 	group,
 	time,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	group: AnimationPropertyGroup;
 	time: number;
 }): boolean {

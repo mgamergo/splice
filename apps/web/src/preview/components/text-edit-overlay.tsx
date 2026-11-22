@@ -3,28 +3,28 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePreviewViewport } from "@/preview/components/preview-viewport";
 import { useEditor } from "@/editor/use-editor";
-import type { TextElement } from "@/timeline";
+import type { TextClip } from "@/timeline";
 import { DEFAULTS } from "@/timeline/defaults";
 import {
-	getElementLocalTime,
+	getClipLocalTime,
 } from "@/animation";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
 import { buildTransformFromParams } from "@/rendering";
 import { resolveTextLayout } from "@/text/primitives";
 import {
-	buildTextBackgroundFromElement,
-	buildTextLayoutParamsFromElement,
-} from "@/text/measure-element";
+	buildTextBackgroundFromClip,
+	buildTextLayoutParamsFromClip,
+} from "@/text/measure-clip";
 
 export function TextEditOverlay({
 	trackId,
-	elementId,
-	element,
+	clipId,
+	clip,
 	onCommit,
 }: {
 	trackId: string;
-	elementId: string;
-	element: TextElement;
+	clipId: string;
+	clip: TextClip;
 	onCommit: () => void;
 }) {
 	const editor = useEditor();
@@ -46,10 +46,10 @@ export function TextEditOverlay({
 		const div = divRef.current;
 		if (!div) return;
 		const text = div.innerText;
-		editor.timeline.previewElements({
-			updates: [{ trackId, elementId, updates: { params: { content: text } } }],
+		editor.timeline.previewClips({
+			updates: [{ trackId, clipId, updates: { params: { content: text } } }],
 		});
-	}, [editor.timeline, trackId, elementId]);
+	}, [editor.timeline, trackId, clipId]);
 
 	const handleKeyDown = useCallback(
 		({ event }: { event: React.KeyboardEvent }) => {
@@ -68,14 +68,14 @@ export function TextEditOverlay({
 	if (!canvasSize) return null;
 
 	const currentTime = editor.playback.getCurrentTime();
-	const localTime = getElementLocalTime({
+	const localTime = getClipLocalTime({
 		timelineTime: currentTime,
-		elementStartTime: element.startTime,
-		elementDuration: element.duration,
+		clipStartTime: clip.startTime,
+		clipDuration: clip.duration,
 	});
 	const transform = resolveTransformAtTime({
-		baseTransform: buildTransformFromParams({ params: element.params }),
-		animations: element.animations,
+		baseTransform: buildTransformFromParams({ params: clip.params }),
+		animations: clip.animations,
 		localTime,
 	});
 
@@ -85,7 +85,7 @@ export function TextEditOverlay({
 	});
 
 	const { x: displayScaleX } = viewport.getDisplayScale();
-	const textParams = buildTextLayoutParamsFromElement({ element });
+	const textParams = buildTextLayoutParamsFromClip({ clip });
 	const resolvedTextLayout = resolveTextLayout({
 		text: textParams,
 		canvasHeight: canvasSize.height,
@@ -95,7 +95,7 @@ export function TextEditOverlay({
 	const canvasLetterSpacing = textParams.letterSpacing ?? 0;
 	const lineHeightPx = resolvedTextLayout.lineHeightPx;
 
-	const bg = buildTextBackgroundFromElement({ element });
+	const bg = buildTextBackgroundFromClip({ clip });
 	const shouldShowBackground =
 		bg.enabled && bg.color && bg.color !== "transparent";
 	const fontSizeRatio = resolvedTextLayout.fontSizeRatio;
@@ -134,8 +134,8 @@ export function TextEditOverlay({
 					lineHeight,
 					color: "transparent",
 					caretColor:
-						typeof element.params.color === "string"
-							? element.params.color
+						typeof clip.params.color === "string"
+							? clip.params.color
 							: "#ffffff",
 					backgroundColor: shouldShowBackground ? bg.color : "transparent",
 					minHeight: lineHeightPx,

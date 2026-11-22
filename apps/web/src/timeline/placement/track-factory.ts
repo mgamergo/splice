@@ -81,7 +81,7 @@ export function buildEmptyTrack({
 				id,
 				name: trackName,
 				type: "video",
-				elements: [],
+				clips: [],
 				hidden: false,
 				muted: false,
 			};
@@ -90,7 +90,7 @@ export function buildEmptyTrack({
 				id,
 				name: trackName,
 				type: "text",
-				elements: [],
+				clips: [],
 				hidden: false,
 			};
 		case "graphic":
@@ -98,7 +98,7 @@ export function buildEmptyTrack({
 				id,
 				name: trackName,
 				type: "graphic",
-				elements: [],
+				clips: [],
 				hidden: false,
 			};
 		case "audio":
@@ -106,7 +106,7 @@ export function buildEmptyTrack({
 				id,
 				name: trackName,
 				type: "audio",
-				elements: [],
+				clips: [],
 				muted: false,
 			};
 		case "effect":
@@ -114,7 +114,7 @@ export function buildEmptyTrack({
 				id,
 				name: trackName,
 				type: "effect",
-				elements: [],
+				clips: [],
 				hidden: false,
 			};
 		default:

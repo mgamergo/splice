@@ -44,13 +44,13 @@ export function getMaskDefinitionsForMenu() {
 
 export function buildDefaultMaskInstance({
 	maskType,
-	elementSize,
+	clipSize,
 }: {
 	maskType: MaskType;
-	elementSize?: { width: number; height: number };
+	clipSize?: { width: number; height: number };
 }): Mask {
 	const definition = masksRegistry.get(maskType);
-	const context: MaskDefaultContext = { elementSize };
+	const context: MaskDefaultContext = { clipSize };
 	return withMaskId({
 		mask: definition.buildDefault(context),
 		id: generateUUID(),

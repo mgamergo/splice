@@ -18,12 +18,12 @@ export function useTransformHandles({
 	const viewport = usePreviewViewport();
 	const editor = useEditor();
 	const isShiftHeldRef = useShiftKey();
-	const selectedElements = useEditor((e) => e.selection.getSelectedElements());
+	const selectedClips = useEditor((e) => e.selection.getSelectedClips());
 	const tracks = useEditor(
-		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
+		(e) => e.timeline.getPreviewTracks() ?? e.sequences.getActiveSequence().tracks,
 	);
 	const currentTime = useEditor((e) => e.playback.getCurrentTime());
-	const mediaAssets = useEditor((e) => e.media.getAssets());
+	const projectItems = useEditor((e) => e.media.getProjectItems());
 	const canvasSize = useEditor(
 		(e) => e.project.getActive().settings.canvasSize,
 	);
@@ -32,16 +32,16 @@ export function useTransformHandles({
 		input: {
 			isShiftHeld: () => isShiftHeldRef.current,
 		},
-		scene: {
-			getSelectedElements: () => selectedElements,
+		sequence: {
+			getSelectedClips: () => selectedClips,
 			getTracks: () => tracks,
 			getCurrentTime: () => currentTime,
-			getMediaAssets: () => mediaAssets,
+			getProjectItems: () => projectItems,
 			getCanvasSize: () => canvasSize,
 		},
 		timeline: {
-			previewElements: (updates) =>
-				editor.timeline.previewElements({ updates }),
+			previewClips: (updates) =>
+				editor.timeline.previewClips({ updates }),
 			commitPreview: () => editor.timeline.commitPreview(),
 			discardPreview: () => editor.timeline.discardPreview(),
 		},

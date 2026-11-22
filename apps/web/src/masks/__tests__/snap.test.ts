@@ -14,7 +14,7 @@ import { getSplitMaskStrokeSegment } from "@/masks/builtin/definitions/split";
 import { textMaskDefinition } from "@/masks/builtin/definitions/text";
 import { getMaskSnapGeometry } from "@/masks/geometry";
 import { snapBoxMaskInteraction, snapSplitMaskInteraction } from "@/masks/snap";
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import type {
 	FreeformPathMaskParams,
 	RectangleMaskParams,
@@ -22,7 +22,7 @@ import type {
 	TextMaskParams,
 } from "@/masks/types";
 
-const bounds: ElementBounds = {
+const bounds: ClipBounds = {
 	cx: 200,
 	cy: 150,
 	width: 200,
@@ -253,7 +253,7 @@ describe("mask snapping", () => {
 		]);
 	});
 
-	test("snaps box mask movement against element center and edges", () => {
+	test("snaps box mask movement against clip center and edges", () => {
 		const result = snapBoxMaskInteraction({
 			handleId: { kind: "position" },
 			startParams: buildRectangleParams(),

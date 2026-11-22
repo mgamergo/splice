@@ -1,4 +1,4 @@
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import { MIN_MASK_DIMENSION } from "@/masks/dimensions";
 import {
 	snapPosition,
@@ -65,7 +65,7 @@ function snapMaskPosition({
 	snapThreshold,
 }: {
 	proposedParams: RectangleMaskParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 	snapThreshold: { x: number; y: number };
 }): MaskSnapResult<RectangleMaskParams>;
@@ -76,7 +76,7 @@ function snapMaskPosition({
 	snapThreshold,
 }: {
 	proposedParams: SplitMaskParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 	snapThreshold: { x: number; y: number };
 }): MaskSnapResult<SplitMaskParams>;
@@ -87,7 +87,7 @@ function snapMaskPosition({
 	snapThreshold,
 }: {
 	proposedParams: RectangleMaskParams | SplitMaskParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 	snapThreshold: { x: number; y: number };
 }): MaskSnapResult<RectangleMaskParams | SplitMaskParams> {
@@ -102,7 +102,7 @@ function snapMaskPosition({
 	const { snappedPosition, activeLines } = snapPosition({
 		proposedPosition: geometry.position,
 		canvasSize: bounds,
-		elementSize: geometry.size,
+		clipSize: geometry.size,
 		rotation: geometry.rotation,
 		snapThreshold,
 	});
@@ -162,7 +162,7 @@ function snapBoxMaskSize({
 	handleId: MaskHandleId;
 	startParams: RectangleMaskParams;
 	proposedParams: RectangleMaskParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 	snapThreshold: { x: number; y: number };
 }): MaskSnapResult<RectangleMaskParams> {
@@ -324,7 +324,7 @@ export function snapBoxMaskInteraction({
 	handleId: MaskHandleId;
 	startParams: RectangleMaskParams;
 	proposedParams: RectangleMaskParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 	snapThreshold: { x: number; y: number };
 }): MaskSnapResult<RectangleMaskParams> {

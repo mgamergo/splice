@@ -1,28 +1,28 @@
-import type { TimelineElement } from "@/timeline";
+import type { TimelineClip } from "@/timeline";
 import type { PlacementTimeSpan } from "./types";
 
-interface TrackWithElements {
-	elements: TimelineElement[];
+interface TrackWithClips {
+	clips: TimelineClip[];
 }
 
-function wouldElementOverlap({
-	elements,
+function wouldClipOverlap({
+	clips,
 	startTime,
 	endTime,
-	excludeElementId,
+	excludeClipId,
 }: {
-	elements: TimelineElement[];
+	clips: TimelineClip[];
 	startTime: number;
 	endTime: number;
-	excludeElementId?: string;
+	excludeClipId?: string;
 }): boolean {
-	return elements.some((element) => {
-		if (excludeElementId && element.id === excludeElementId) {
+	return clips.some((clip) => {
+		if (excludeClipId && clip.id === excludeClipId) {
 			return false;
 		}
 
-		const elementEnd = element.startTime + element.duration;
-		return startTime < elementEnd && endTime > element.startTime;
+		const clipEnd = clip.startTime + clip.duration;
+		return startTime < clipEnd && endTime > clip.startTime;
 	});
 }
 
@@ -30,15 +30,15 @@ export function canPlaceTimeSpansOnTrack({
 	track,
 	timeSpans,
 }: {
-	track: TrackWithElements;
+	track: TrackWithClips;
 	timeSpans: PlacementTimeSpan[];
 }): boolean {
-	return timeSpans.every(({ startTime, duration, excludeElementId }) => {
-		return !wouldElementOverlap({
-			elements: track.elements,
+	return timeSpans.every(({ startTime, duration, excludeClipId }) => {
+		return !wouldClipOverlap({
+			clips: track.clips,
 			startTime,
 			endTime: startTime + duration,
-			excludeElementId,
+			excludeClipId,
 		});
 	});
 }

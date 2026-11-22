@@ -1,25 +1,25 @@
 import type { SelectedKeyframeRef } from "@/animation/types";
-import type { ElementRef } from "@/timeline/types";
+import type { ClipRef } from "@/timeline/types";
 
 export interface SelectedMaskPointSelection {
 	trackId: string;
-	elementId: string;
+	clipId: string;
 	maskId: string;
 	pointIds: string[];
 }
 
 export interface EditorSelectionSnapshot {
-	selectedElements: ElementRef[];
+	selectedClips: ClipRef[];
 	selectedKeyframes: SelectedKeyframeRef[];
 	keyframeSelectionAnchor: SelectedKeyframeRef | null;
 	selectedMaskPoints: SelectedMaskPointSelection | null;
 }
 
 export interface EditorSelectionPatch {
-	selectedElements?: ElementRef[];
+	selectedClips?: ClipRef[];
 	selectedKeyframes?: SelectedKeyframeRef[];
 	keyframeSelectionAnchor?: SelectedKeyframeRef | null;
 	selectedMaskPoints?: SelectedMaskPointSelection | null;
 }
 
-export type EditorSelectionKind = "mask-points" | "keyframes" | "elements";
+export type EditorSelectionKind = "mask-points" | "keyframes" | "clips";

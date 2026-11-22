@@ -1,6 +1,6 @@
 import { PlaybackManager } from "./managers/playback-manager";
 import { TimelineManager } from "./managers/timeline-manager";
-import { ScenesManager } from "./managers/scenes-manager";
+import { SequencesManager } from "./managers/sequences-manager";
 import { ProjectManager } from "./managers/project-manager";
 import { MediaManager } from "./managers/media-manager";
 import { RendererManager } from "./managers/renderer-manager";
@@ -19,7 +19,7 @@ export class EditorCore {
 	public readonly timeline: TimelineManager;
 	public readonly command: CommandManager;
 	public readonly playback: PlaybackManager;
-	public readonly scenes: ScenesManager;
+	public readonly sequences: SequencesManager;
 	public readonly project: ProjectManager;
 	public readonly media: MediaManager;
 	public readonly renderer: RendererManager;
@@ -35,7 +35,7 @@ export class EditorCore {
 		this.command = new CommandManager(this);
 		this.timeline = new TimelineManager(this);
 		this.playback = new PlaybackManager(this);
-		this.scenes = new ScenesManager(this);
+		this.sequences = new SequencesManager(this);
 		this.project = new ProjectManager(this);
 		this.media = new MediaManager(this);
 		this.renderer = new RendererManager(this);
@@ -47,16 +47,16 @@ export class EditorCore {
 		registerTranscriptionDiagnostics({ diagnostics: this.diagnostics });
 		this.playback.bindTimelineScope();
 		this.command.registerReactor(() => {
-			const activeScene = this.scenes.getActiveSceneOrNull();
-			if (!activeScene) {
+			const activeSequence = this.sequences.getActiveSequenceOrNull();
+			if (!activeSequence) {
 				return;
 			}
 
-			const tracks = activeScene.tracks;
+			const tracks = activeSequence.tracks;
 			const prunedTracks = {
 				...tracks,
-				overlay: tracks.overlay.filter((track) => track.elements.length > 0),
-				audio: tracks.audio.filter((track) => track.elements.length > 0),
+				overlay: tracks.overlay.filter((track) => track.clips.length > 0),
+				audio: tracks.audio.filter((track) => track.clips.length > 0),
 			};
 			if (
 				prunedTracks.overlay.length !== tracks.overlay.length ||

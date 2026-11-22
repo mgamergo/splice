@@ -1,4 +1,4 @@
-import type { MaskableElement, VisualElement } from "./types";
+import type { MaskableClip, VisualClip } from "./types";
 import type { ParamValues } from "@/params";
 
 interface BaseDragData {
@@ -9,7 +9,7 @@ interface BaseDragData {
 export interface MediaDragData extends BaseDragData {
 	type: "media";
 	mediaType: "image" | "video" | "audio";
-	targetElementTypes?: MaskableElement["type"][];
+	targetClipTypes?: MaskableClip["type"][];
 }
 
 export interface TextDragData extends BaseDragData {
@@ -31,7 +31,7 @@ export interface GraphicDragData extends BaseDragData {
 export interface EffectDragData extends BaseDragData {
 	type: "effect";
 	effectType: string;
-	targetElementTypes: VisualElement["type"][];
+	targetClipTypes: VisualClip["type"][];
 }
 
 export type TimelineDragData =

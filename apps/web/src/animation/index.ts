@@ -10,8 +10,8 @@ export {
 	clampAnimationsToDuration,
 	cloneAnimations,
 	getChannel,
-	removeElementKeyframe,
-	retimeElementKeyframe,
+	removeClipKeyframe,
+	retimeClipKeyframe,
 	setBindingComponentChannel,
 	setChannel,
 	splitAnimationsAtTime,
@@ -20,12 +20,12 @@ export {
 } from "./keyframes";
 
 export {
-	getElementLocalTime,
+	getClipLocalTime,
 	resolveAnimationPathValueAtTime,
 } from "./resolve";
 
 export {
-	getElementKeyframes,
+	getClipKeyframes,
 	getKeyframeById,
 	getKeyframeAtTime,
 	hasKeyframesForPath,

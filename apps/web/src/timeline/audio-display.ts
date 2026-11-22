@@ -47,7 +47,7 @@ export function getDbFromLinePos({ percent }: { percent: number }): number {
  * curve is the same either way.
  *
  * The log scale keeps quiet content visible while reserving the top of the
- * element for amplitudes that approach 0 dBFS.
+ * clip for amplitudes that approach 0 dBFS.
  */
 export function getBarFractionFromOutputAmplitude({
 	outputAmplitude,

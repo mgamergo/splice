@@ -12,9 +12,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEditor } from "@/editor/use-editor";
 import { resolveStickerIntrinsicSize } from "@/stickers";
 import {
-	buildGraphicElement,
-	buildStickerElement,
-} from "@/timeline/element-utils";
+	buildGraphicClip,
+	buildStickerClip,
+} from "@/timeline/clip-utils";
 import { STICKER_CATEGORIES } from "@/stickers/categories";
 import { getRegionLabel, resolveQueryToRegions } from "@/stickers";
 import { parseShapeStickerId } from "@/stickers/providers/shapes";
@@ -350,11 +350,11 @@ function StickerItem({
 		try {
 			const currentTime = editor.playback.getCurrentTime();
 
-			let element:
-				| ReturnType<typeof buildGraphicElement>
-				| ReturnType<typeof buildStickerElement>;
+			let clip:
+				| ReturnType<typeof buildGraphicClip>
+				| ReturnType<typeof buildStickerClip>;
 			if (shapePreset) {
-				element = buildGraphicElement({
+				clip = buildGraphicClip({
 					definitionId: shapePreset.definitionId,
 					name: shapePreset.name,
 					startTime: currentTime,
@@ -363,7 +363,7 @@ function StickerItem({
 			} else {
 				const { width: intrinsicWidth, height: intrinsicHeight } =
 					await resolveStickerIntrinsicSize({ stickerId: item.id });
-				element = buildStickerElement({
+				clip = buildStickerClip({
 					stickerId: item.id,
 					name: item.name,
 					startTime: currentTime,
@@ -372,9 +372,9 @@ function StickerItem({
 				});
 			}
 
-			editor.timeline.insertElement({
+			editor.timeline.insertClip({
 				placement: { mode: "auto" },
-				element,
+				clip,
 			});
 
 			addToRecentStickers({ stickerId: item.id });

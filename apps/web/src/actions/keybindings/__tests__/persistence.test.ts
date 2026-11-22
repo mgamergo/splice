@@ -44,7 +44,7 @@ describe("keybinding persistence", () => {
 		if (!decoded) throw new Error("Expected migrated keybindings to decode");
 
 		expect(decoded.isCustomized).toBe(true);
-		expect(decoded.keybindings.get("s")).toBe("split");
+		expect(decoded.keybindings.get("s")).toBe("razor");
 		expect(decoded.keybindings.get("ctrl+v")).toBe("paste-copied");
 		expect(decoded.keybindings.get("escape")).toBe("cancel-interaction");
 		expect(warnSpy).not.toHaveBeenCalled();
@@ -84,7 +84,7 @@ describe("keybinding persistence", () => {
 			keybindings: new Map([
 				["space", "toggle-play"],
 				["x", "stop-playback"],
-				["b", "toggle-bookmark"],
+				["b", "toggle-marker"],
 			]),
 			isCustomized: true,
 		});
@@ -95,7 +95,7 @@ describe("keybinding persistence", () => {
 
 		expect(decoded.keybindings.get("space")).toBe("toggle-play");
 		expect(decoded.keybindings.get("x")).toBe("stop-playback");
-		expect(decoded.keybindings.get("b")).toBe("toggle-bookmark");
+		expect(decoded.keybindings.get("b")).toBe("toggle-marker");
 		expect(warnSpy).not.toHaveBeenCalled();
 	});
 });

@@ -21,26 +21,26 @@ export function TabBar() {
 	const scrollRef = useRef<HTMLDivElement>(null);
 
 	const checkScrollPosition = useCallback(() => {
-		const element = scrollRef.current;
-		if (!element) return;
+		const clip = scrollRef.current;
+		if (!clip) return;
 
-		const { scrollTop, scrollHeight, clientHeight } = element;
+		const { scrollTop, scrollHeight, clientHeight } = clip;
 		setShowTopFade(scrollTop > 0);
 		setShowBottomFade(scrollTop < scrollHeight - clientHeight - 1);
 	}, []);
 
 	useEffect(() => {
-		const element = scrollRef.current;
-		if (!element) return;
+		const clip = scrollRef.current;
+		if (!clip) return;
 
 		checkScrollPosition();
-		element.addEventListener("scroll", checkScrollPosition);
+		clip.addEventListener("scroll", checkScrollPosition);
 
 		const resizeObserver = new ResizeObserver(checkScrollPosition);
-		resizeObserver.observe(element);
+		resizeObserver.observe(clip);
 
 		return () => {
-			element.removeEventListener("scroll", checkScrollPosition);
+			clip.removeEventListener("scroll", checkScrollPosition);
 			resizeObserver.disconnect();
 		};
 	}, [checkScrollPosition]);

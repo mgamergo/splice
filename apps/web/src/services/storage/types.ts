@@ -4,7 +4,7 @@ import type {
 	TProjectMetadata,
 	TTimelineViewState,
 } from "@/project/types";
-import type { TScene } from "@/timeline";
+import type { TSequence } from "@/timeline";
 
 export interface StorageAdapter<T> {
 	get(key: string): Promise<T | null>;
@@ -14,7 +14,7 @@ export interface StorageAdapter<T> {
 	clear(): Promise<void>;
 }
 
-export interface MediaAssetData {
+export interface ProjectItemData {
 	id: string;
 	name: string;
 	type: MediaType;
@@ -29,7 +29,7 @@ export interface MediaAssetData {
 	thumbnailUrl?: string;
 }
 
-export type SerializedScene = Omit<TScene, "createdAt" | "updatedAt"> & {
+export type SerializedSequence = Omit<TSequence, "createdAt" | "updatedAt"> & {
 	createdAt: string;
 	updatedAt: string;
 };
@@ -42,9 +42,9 @@ export type SerializedProjectMetadata = Omit<
 	updatedAt: string;
 };
 
-export type SerializedProject = Omit<TProject, "metadata" | "scenes"> & {
+export type SerializedProject = Omit<TProject, "metadata" | "sequences"> & {
 	metadata: SerializedProjectMetadata;
-	scenes: SerializedScene[];
+	sequences: SerializedSequence[];
 	timelineViewState?: TTimelineViewState;
 };
 

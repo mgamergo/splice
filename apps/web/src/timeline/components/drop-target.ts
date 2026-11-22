@@ -1,4 +1,4 @@
-import type { TimelineTrack, TimelineElement } from "@/timeline";
+import type { TimelineTrack, TimelineClip } from "@/timeline";
 import type { ComputeDropTargetParams, DropTarget } from "@/timeline";
 import { resolveTrackPlacement } from "@/timeline/placement";
 import { TIMELINE_TRACK_GAP_PX } from "./layout";
@@ -10,37 +10,37 @@ import {
 	TICKS_PER_SECOND,
 } from "@/wasm";
 
-function findElementAtPosition({
+function findClipAtPosition({
 	mouseX,
 	tracks,
 	trackIndex,
-	targetElementTypes,
+	targetClipTypes,
 	pixelsPerSecond,
 	zoomLevel,
 }: {
 	mouseX: number;
 	tracks: TimelineTrack[];
 	trackIndex: number;
-	targetElementTypes: string[];
+	targetClipTypes: string[];
 	pixelsPerSecond: number;
 	zoomLevel: number;
-}): { elementId: string; trackId: string } | null {
+}): { clipId: string; trackId: string } | null {
 	const time = mediaTime({
 		ticks: Math.round(
 			(mouseX / (pixelsPerSecond * zoomLevel)) * TICKS_PER_SECOND,
 		),
 	});
 	const track = tracks[trackIndex];
-	if (!track || !("elements" in track)) return null;
+	if (!track || !("clips" in track)) return null;
 
-	const hit = track.elements.find(
-		(element: TimelineElement) =>
-			targetElementTypes.includes(element.type) &&
-			element.startTime <= time &&
-			time < element.startTime + element.duration,
+	const hit = track.clips.find(
+		(clip: TimelineClip) =>
+			targetClipTypes.includes(clip.type) &&
+			clip.startTime <= time &&
+			time < clip.startTime + clip.duration,
 	);
 	if (!hit) return null;
-	return { elementId: hit.id, trackId: track.id };
+	return { clipId: hit.id, trackId: track.id };
 }
 
 function getTrackAtY({
@@ -84,7 +84,7 @@ function getTrackAtY({
 	return null;
 }
 
-const EMPTY_TARGET_ELEMENT = null;
+const EMPTY_TARGET_CLIP = null;
 
 function fallbackNewTrackDropTarget({
 	xPosition,
@@ -96,24 +96,24 @@ function fallbackNewTrackDropTarget({
 		isNewTrack: true,
 		insertPosition: null,
 		xPosition,
-		targetElement: EMPTY_TARGET_ELEMENT,
+		targetClip: EMPTY_TARGET_CLIP,
 	};
 }
 
 export function computeDropTarget({
-	elementType,
+	clipType,
 	mouseX,
 	mouseY,
 	tracks,
 	playheadTime,
 	isExternalDrop,
-	elementDuration,
+	clipDuration,
 	pixelsPerSecond,
 	zoomLevel,
 	verticalDragDirection,
 	startTimeOverride,
-	excludeElementId,
-	targetElementTypes,
+	excludeClipId,
+	targetClipTypes,
 }: ComputeDropTargetParams): DropTarget {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const mainTrackIndex = tracks.overlay.length;
@@ -132,8 +132,8 @@ export function computeDropTarget({
 	if (orderedTracks.length === 0) {
 		const placementResult = resolveTrackPlacement({
 			tracks,
-			elementType,
-			timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+			clipType,
+			timeSpans: [{ startTime: xPosition, duration: clipDuration, excludeClipId }],
 			strategy: {
 				type: "preferIndex",
 				trackIndex: 0,
@@ -152,7 +152,7 @@ export function computeDropTarget({
 			isNewTrack: true,
 			insertPosition: emptyTimelineResult.insertPosition,
 			xPosition,
-			targetElement: EMPTY_TARGET_ELEMENT,
+			targetClip: EMPTY_TARGET_CLIP,
 		};
 	}
 
@@ -167,8 +167,8 @@ export function computeDropTarget({
 
 		const placementResult = resolveTrackPlacement({
 			tracks,
-			elementType,
-			timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+			clipType,
+			timeSpans: [{ startTime: xPosition, duration: clipDuration, excludeClipId }],
 			strategy: {
 				type: "preferIndex",
 				trackIndex: isAboveAllTracks ? 0 : orderedTracks.length - 1,
@@ -187,29 +187,29 @@ export function computeDropTarget({
 			isNewTrack: true,
 			insertPosition: outOfBoundsResult.insertPosition,
 			xPosition,
-			targetElement: EMPTY_TARGET_ELEMENT,
+			targetClip: EMPTY_TARGET_CLIP,
 		};
 	}
 
 	const { trackIndex, relativeY } = trackAtMouse;
 	const track = orderedTracks[trackIndex];
 
-	if (targetElementTypes && targetElementTypes.length > 0) {
-		const targetElement = findElementAtPosition({
+	if (targetClipTypes && targetClipTypes.length > 0) {
+		const targetClip = findClipAtPosition({
 			mouseX,
 			tracks: orderedTracks,
 			trackIndex,
-			targetElementTypes,
+			targetClipTypes,
 			pixelsPerSecond,
 			zoomLevel,
 		});
-		if (targetElement) {
+		if (targetClip) {
 			return {
 				trackIndex,
 				isNewTrack: false,
 				insertPosition: null,
 				xPosition,
-				targetElement,
+				targetClip,
 			};
 		}
 	}
@@ -217,8 +217,8 @@ export function computeDropTarget({
 	const trackHeight = getTrackHeight({ type: track.type });
 	const placementResult = resolveTrackPlacement({
 		tracks,
-		elementType,
-		timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+		clipType,
+		timeSpans: [{ startTime: xPosition, duration: clipDuration, excludeClipId }],
 		strategy: {
 			type: "preferIndex",
 			trackIndex,
@@ -241,7 +241,7 @@ export function computeDropTarget({
 			isNewTrack: false,
 			insertPosition: null,
 			xPosition: adjustedXPosition,
-			targetElement: EMPTY_TARGET_ELEMENT,
+			targetClip: EMPTY_TARGET_CLIP,
 		};
 	}
 
@@ -250,7 +250,7 @@ export function computeDropTarget({
 		isNewTrack: true,
 		insertPosition: placementResult.insertPosition,
 		xPosition,
-		targetElement: EMPTY_TARGET_ELEMENT,
+		targetClip: EMPTY_TARGET_CLIP,
 	};
 }
 

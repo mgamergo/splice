@@ -16,7 +16,7 @@ export interface SubtitlePlacementStyle {
 
 export interface SubtitleStyleOverrides {
 	/**
-	 * Font size in app units (same coordinate space as TextElement.fontSize).
+	 * Font size in app units (same coordinate space as TextClip.fontSize).
 	 * Use fontSizeRatioOfPlayHeight when the source coordinate space is unknown
 	 * (e.g. ASS files, where font size is relative to the script's play resolution).
 	 */

@@ -9,7 +9,7 @@ const PREVIEW_IMAGE_PATH = "/effects/preview.jpg";
 
 class EffectPreviewService {
 	private testSourceCanvas: OffscreenCanvas | null = null;
-	private previewImageElement: HTMLImageElement | null = null;
+	private previewImageClip: HTMLImageElement | null = null;
 	private onReadyCallbacks = new Set<() => void>();
 
 	readonly PREVIEW_SIZE = PREVIEW_SIZE;
@@ -89,7 +89,7 @@ class EffectPreviewService {
 			}
 		};
 		image.src = PREVIEW_IMAGE_PATH;
-		this.previewImageElement = image;
+		this.previewImageClip = image;
 	}
 
 	private createTestSource({
@@ -100,14 +100,14 @@ class EffectPreviewService {
 		height: number;
 	}): OffscreenCanvas | null {
 		const isImageReady =
-			this.previewImageElement?.complete &&
-			(this.previewImageElement.naturalWidth ?? 0) > 0;
-		if (!isImageReady || !this.previewImageElement) {
+			this.previewImageClip?.complete &&
+			(this.previewImageClip.naturalWidth ?? 0) > 0;
+		if (!isImageReady || !this.previewImageClip) {
 			return null;
 		}
 
 		const { canvas, context } = createCanvasSurface({ width, height });
-		context.drawImage(this.previewImageElement, 0, 0, width, height);
+		context.drawImage(this.previewImageClip, 0, 0, width, height);
 		return canvas;
 	}
 

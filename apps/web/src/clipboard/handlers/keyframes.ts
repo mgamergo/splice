@@ -2,7 +2,7 @@ import { getKeyframeById } from "@/animation";
 import { getChannelEntriesFromData } from "@/animation/channel-data";
 import { isScalarChannel } from "@/animation/interpolation";
 import type { SelectedKeyframeRef } from "@/animation/types";
-import type { TimelineElement } from "@/timeline";
+import type { TimelineClip } from "@/timeline";
 import { PasteKeyframesCommand } from "@/commands/timeline";
 import type {
 	ClipboardHandler,
@@ -11,7 +11,7 @@ import type {
 } from "../types";
 import { roundMediaTime, subMediaTime, type MediaTime } from "@/wasm";
 
-function resolveSingleSourceElement({
+function resolveSingleSourceClip({
 	selectedKeyframes,
 }: {
 	selectedKeyframes: SelectedKeyframeRef[];
@@ -21,29 +21,29 @@ function resolveSingleSourceElement({
 		return null;
 	}
 
-	const sourceElement = {
+	const sourceClip = {
 		trackId: firstKeyframe.trackId,
-		elementId: firstKeyframe.elementId,
+		clipId: firstKeyframe.clipId,
 	};
 	const isSingleSource = selectedKeyframes.every(
 		(keyframe) =>
-			keyframe.trackId === sourceElement.trackId &&
-			keyframe.elementId === sourceElement.elementId,
+			keyframe.trackId === sourceClip.trackId &&
+			keyframe.clipId === sourceClip.clipId,
 	);
 
-	return isSingleSource ? sourceElement : null;
+	return isSingleSource ? sourceClip : null;
 }
 
 function getCurvePatches({
-	element,
+	clip,
 	propertyPath,
 	keyframeId,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	propertyPath: KeyframeClipboardItem["propertyPath"];
 	keyframeId: string;
 }): KeyframeClipboardCurvePatch[] {
-	const data = element.animations?.[propertyPath];
+	const data = clip.animations?.[propertyPath];
 	if (!data) {
 		return [];
 	}
@@ -75,16 +75,16 @@ function getCurvePatches({
 }
 
 function buildClipboardItem({
-	element,
+	clip,
 	propertyPath,
 	keyframeId,
 }: {
-	element: TimelineElement;
+	clip: TimelineClip;
 	propertyPath: KeyframeClipboardItem["propertyPath"];
 	keyframeId: string;
 }): (Omit<KeyframeClipboardItem, "timeOffset"> & { time: MediaTime }) | null {
 	const keyframe = getKeyframeById({
-		animations: element.animations,
+		animations: clip.animations,
 		propertyPath,
 		keyframeId,
 	});
@@ -98,7 +98,7 @@ function buildClipboardItem({
 		value: keyframe.value,
 		interpolation: keyframe.interpolation,
 		curvePatches: getCurvePatches({
-			element,
+			clip,
 			propertyPath,
 			keyframeId,
 		}),
@@ -113,13 +113,13 @@ export const KeyframesClipboardHandler = {
 	},
 
 	copy({ editor, selectedKeyframes }) {
-		const sourceElement = resolveSingleSourceElement({ selectedKeyframes });
-		if (!sourceElement) {
+		const sourceClip = resolveSingleSourceClip({ selectedKeyframes });
+		if (!sourceClip) {
 			return null;
 		}
 
-		const [result] = editor.timeline.getElementsWithTracks({
-			elements: [sourceElement],
+		const [result] = editor.timeline.getClipsWithTracks({
+			clips: [sourceClip],
 		});
 		if (!result) {
 			return null;
@@ -127,7 +127,7 @@ export const KeyframesClipboardHandler = {
 
 		const rawItems = selectedKeyframes.flatMap((keyframeRef) => {
 			const item = buildClipboardItem({
-				element: result.element,
+				clip: result.clip,
 				propertyPath: keyframeRef.propertyPath,
 				keyframeId: keyframeRef.keyframeId,
 			});
@@ -152,23 +152,23 @@ export const KeyframesClipboardHandler = {
 
 		return {
 			type: "keyframes",
-			sourceElement,
+			sourceClip,
 			items,
 		};
 	},
 
 	paste({
 		entry,
-		context: { selectedElements, time },
+		context: { selectedClips, time },
 	}) {
-		const targetElement = selectedElements[0];
-		if (!targetElement || entry.items.length === 0) {
+		const targetClip = selectedClips[0];
+		if (!targetClip || entry.items.length === 0) {
 			return null;
 		}
 
 		return new PasteKeyframesCommand({
-			trackId: targetElement.trackId,
-			elementId: targetElement.elementId,
+			trackId: targetClip.trackId,
+			clipId: targetClip.clipId,
 			time,
 			clipboardItems: entry.items,
 		});

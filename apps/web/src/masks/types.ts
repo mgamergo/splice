@@ -1,4 +1,4 @@
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import type { SnapLine } from "@/preview/preview-snap";
 import type { ParamDefinition } from "@/params";
 import type { FreeformPathPoint } from "@/masks/freeform/path";
@@ -283,7 +283,7 @@ export type MaskOverlay =
 	| MaskCanvasPathOverlay;
 
 export interface MaskDefaultContext {
-	elementSize?: { width: number; height: number };
+	clipSize?: { width: number; height: number };
 }
 
 export interface MaskParamUpdateArgs<
@@ -295,7 +295,7 @@ export interface MaskParamUpdateArgs<
 	deltaY: number;
 	startCanvasX: number;
 	startCanvasY: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 }
 
@@ -303,7 +303,7 @@ export interface MaskSnapArgs<TParams extends BaseMaskParams = BaseMaskParams> {
 	handleId: MaskHandleId;
 	startParams: TParams;
 	proposedParams: TParams;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	canvasSize: { width: number; height: number };
 	snapThreshold: { x: number; y: number };
 }
@@ -325,7 +325,7 @@ export interface MaskInteractionDefinition<
 > {
 	getInteraction(args: {
 		params: TParams;
-		bounds: ElementBounds;
+		bounds: ClipBounds;
 		displayScale: number;
 		scaleX: number;
 		scaleY: number;
@@ -340,7 +340,7 @@ export interface MaskDefinition<TType extends MaskType = MaskType> {
 	params: ParamDefinition<keyof MaskParamsByType<TType> & string>[];
 	renderer: MaskRenderer<MaskParamsByType<TType>>;
 	interaction: MaskInteractionDefinition<MaskParamsByType<TType>>;
-	/** When defined and returning false, the mask is not applied and the element renders fully visible. */
+	/** When defined and returning false, the mask is not applied and the clip renders fully visible. */
 	isActive?(params: MaskParamsByType<TType>): boolean;
 	buildDefault(context: MaskDefaultContext): Omit<MaskByType<TType>, "id">;
 	computeParamUpdate(

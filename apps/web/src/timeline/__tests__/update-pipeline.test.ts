@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Transform } from "@/rendering";
-import type { SceneTracks, VideoElement } from "@/timeline";
-import { applyElementUpdate } from "@/timeline/update-pipeline";
+import type { SequenceTracks, VideoClip } from "@/timeline";
+import { applyClipUpdate } from "@/timeline/update-pipeline";
 import { mediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 function buildTransform(): Transform {
@@ -13,7 +13,7 @@ function buildTransform(): Transform {
 	};
 }
 
-function buildVideoElement(overrides: Partial<VideoElement> = {}): VideoElement {
+function buildVideoClip(overrides: Partial<VideoClip> = {}): VideoClip {
 	return {
 		id: "video-1",
 		type: "video",
@@ -35,7 +35,7 @@ function buildVideoElement(overrides: Partial<VideoElement> = {}): VideoElement 
 	};
 }
 
-function buildTracks(element: VideoElement): SceneTracks {
+function buildTracks(clip: VideoClip): SequenceTracks {
 	return {
 		overlay: [],
 		main: {
@@ -44,19 +44,19 @@ function buildTracks(element: VideoElement): SceneTracks {
 			name: "Main",
 			muted: false,
 			hidden: false,
-			elements: [element],
+			clips: [clip],
 		},
 		audio: [],
 	};
 }
 
-describe("applyElementUpdate", () => {
+describe("applyClipUpdate", () => {
 	test("rounds retimed durations back to integer media time", () => {
-		const element = buildVideoElement();
-		const tracks = buildTracks(element);
+		const clip = buildVideoClip();
+		const tracks = buildTracks(clip);
 
-		const updatedElement = applyElementUpdate({
-			element,
+		const updatedClip = applyClipUpdate({
+			clip,
 			patch: {
 				retime: { rate: 1.5 },
 			},
@@ -66,7 +66,7 @@ describe("applyElementUpdate", () => {
 			},
 		});
 
-		expect(updatedElement.duration).toBe(mediaTime({ ticks: 7 }));
-		expect(Number.isInteger(updatedElement.duration)).toBe(true);
+		expect(updatedClip.duration).toBe(mediaTime({ ticks: 7 }));
+		expect(Number.isInteger(updatedClip.duration)).toBe(true);
 	});
 });

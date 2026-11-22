@@ -1,9 +1,9 @@
 import type {
 	AnimationPath,
-	ElementAnimations,
+	ClipAnimations,
 } from "@/animation/types";
 import type { TimelineTrack } from "@/timeline";
-import { getElementKeyframes } from "@/animation";
+import { getClipKeyframes } from "@/animation";
 import { KEYFRAME_LANE_HEIGHT_PX } from "./layout";
 
 export interface ExpandedRow {
@@ -53,9 +53,9 @@ export function getPropertyLabel(path: AnimationPath): string {
 export function getExpandedRows({
 	animations,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 }): ExpandedRow[] {
-	const keyframes = getElementKeyframes({ animations });
+	const keyframes = getClipKeyframes({ animations });
 	const propertyPaths = [...new Set(keyframes.map((kf) => kf.propertyPath))];
 	if (propertyPaths.length === 0) return [];
 
@@ -79,15 +79,15 @@ export function getExpansionHeight({ rows }: { rows: ExpandedRow[] }): number {
 
 export function computeTrackExpansionHeight({
 	track,
-	expandedElementIds,
+	expandedClipIds,
 }: {
 	track: TimelineTrack;
-	expandedElementIds: Set<string>;
+	expandedClipIds: Set<string>;
 }): number {
 	let maxHeight = 0;
-	for (const element of track.elements) {
-		if (!expandedElementIds.has(element.id)) continue;
-		const rows = getExpandedRows({ animations: element.animations });
+	for (const clip of track.clips) {
+		if (!expandedClipIds.has(clip.id)) continue;
+		const rows = getExpandedRows({ animations: clip.animations });
 		maxHeight = Math.max(maxHeight, getExpansionHeight({ rows }));
 	}
 	return maxHeight;
@@ -95,17 +95,17 @@ export function computeTrackExpansionHeight({
 
 export function getTrackExpandedRows({
 	track,
-	expandedElementIds,
+	expandedClipIds,
 }: {
 	track: TimelineTrack;
-	expandedElementIds: Set<string>;
+	expandedClipIds: Set<string>;
 }): ExpandedRow[] {
 	let maxHeight = 0;
 	let maxRows: ExpandedRow[] = [];
 
-	for (const element of track.elements) {
-		if (!expandedElementIds.has(element.id)) continue;
-		const rows = getExpandedRows({ animations: element.animations });
+	for (const clip of track.clips) {
+		if (!expandedClipIds.has(clip.id)) continue;
+		const rows = getExpandedRows({ animations: clip.animations });
 		const height = getExpansionHeight({ rows });
 		if (height > maxHeight) {
 			maxHeight = height;

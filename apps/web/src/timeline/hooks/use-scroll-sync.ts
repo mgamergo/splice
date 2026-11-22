@@ -4,27 +4,27 @@ interface UseScrollSyncProps {
 	rulerScrollRef?: React.RefObject<HTMLDivElement | null>;
 	tracksScrollRef: React.RefObject<HTMLDivElement | null>;
 	trackLabelsScrollRef?: React.RefObject<HTMLDivElement | null>;
-	bookmarksScrollRef?: React.RefObject<HTMLDivElement | null>;
+	markersScrollRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export function useScrollSync({
 	tracksScrollRef,
 	rulerScrollRef,
 	trackLabelsScrollRef,
-	bookmarksScrollRef,
+	markersScrollRef,
 }: UseScrollSyncProps) {
 	const isUpdatingRef = useRef(false);
 	const lastRulerSync = useRef(0);
 	const lastTracksSync = useRef(0);
 	const lastVerticalSync = useRef(0);
-	const lastBookmarksSync = useRef(0);
+	const lastMarkersSync = useRef(0);
 
 	useEffect(() => {
 		const rulerViewport = rulerScrollRef?.current ?? null;
 		const tracksViewport = tracksScrollRef.current;
 		const trackLabelsViewport = trackLabelsScrollRef?.current;
-		const bookmarksViewport = bookmarksScrollRef?.current;
-		let handleBookmarksScroll: (() => void) | null = null;
+		const markersViewport = markersScrollRef?.current;
+		let handleMarkersScroll: (() => void) | null = null;
 
 		if (!tracksViewport) return;
 
@@ -47,7 +47,7 @@ export function useScrollSync({
 			isUpdatingRef.current = true;
 			tracksViewport.scrollLeft = rulerViewport?.scrollLeft ?? 0;
 			syncScrollLeft({
-				target: bookmarksViewport,
+				target: markersViewport,
 				scrollLeft: rulerViewport?.scrollLeft ?? 0,
 			});
 			isUpdatingRef.current = false;
@@ -63,7 +63,7 @@ export function useScrollSync({
 				scrollLeft: tracksViewport.scrollLeft,
 			});
 			syncScrollLeft({
-				target: bookmarksViewport,
+				target: markersViewport,
 				scrollLeft: tracksViewport.scrollLeft,
 			});
 			isUpdatingRef.current = false;
@@ -76,14 +76,14 @@ export function useScrollSync({
 			tracksViewport.addEventListener("scroll", handleTracksScroll);
 		}
 
-		if (bookmarksViewport) {
-			handleBookmarksScroll = () => {
+		if (markersViewport) {
+			handleMarkersScroll = () => {
 				const now = Date.now();
-				if (isUpdatingRef.current || now - lastBookmarksSync.current < 16)
+				if (isUpdatingRef.current || now - lastMarkersSync.current < 16)
 					return;
-				lastBookmarksSync.current = now;
+				lastMarkersSync.current = now;
 				isUpdatingRef.current = true;
-				const nextScrollLeft = bookmarksViewport.scrollLeft;
+				const nextScrollLeft = markersViewport.scrollLeft;
 				tracksViewport.scrollLeft = nextScrollLeft;
 				syncScrollLeft({
 					target: rulerViewport,
@@ -92,8 +92,8 @@ export function useScrollSync({
 				isUpdatingRef.current = false;
 			};
 
-			if (bookmarksViewport !== tracksViewport) {
-				bookmarksViewport.addEventListener("scroll", handleBookmarksScroll);
+			if (markersViewport !== tracksViewport) {
+				markersViewport.addEventListener("scroll", handleMarkersScroll);
 			}
 		}
 
@@ -129,13 +129,13 @@ export function useScrollSync({
 					tracksViewport.removeEventListener("scroll", handleTracksScroll);
 				}
 				if (
-					bookmarksViewport &&
-					bookmarksViewport !== tracksViewport &&
-					handleBookmarksScroll
+					markersViewport &&
+					markersViewport !== tracksViewport &&
+					handleMarkersScroll
 				) {
-					bookmarksViewport.removeEventListener(
+					markersViewport.removeEventListener(
 						"scroll",
-						handleBookmarksScroll,
+						handleMarkersScroll,
 					);
 				}
 				trackLabelsViewport.removeEventListener(
@@ -157,17 +157,17 @@ export function useScrollSync({
 				tracksViewport.removeEventListener("scroll", handleTracksScroll);
 			}
 			if (
-				bookmarksViewport &&
-				bookmarksViewport !== tracksViewport &&
-				handleBookmarksScroll
+				markersViewport &&
+				markersViewport !== tracksViewport &&
+				handleMarkersScroll
 			) {
-				bookmarksViewport.removeEventListener("scroll", handleBookmarksScroll);
+				markersViewport.removeEventListener("scroll", handleMarkersScroll);
 			}
 		};
 	}, [
 		rulerScrollRef,
 		tracksScrollRef,
 		trackLabelsScrollRef,
-		bookmarksScrollRef,
+		markersScrollRef,
 	]);
 }

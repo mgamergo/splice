@@ -7,8 +7,8 @@ const TIMELINE_DRAG_MIME = "application/x-timeline-drag";
  *
  * Exists because browsers restrict `DataTransfer.getData()` to the `drop`
  * event for security — during `dragover`/`dragenter` only `types` is
- * readable. The drop target needs the payload (element type, target
- * element types, source duration) while the pointer is hovering, so we
+ * readable. The drop target needs the payload (clip type, target
+ * clip types, source duration) while the pointer is hovering, so we
  * keep a live copy here and hand it out via {@link getActive}.
  */
 export class TimelineDragSource {

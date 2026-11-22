@@ -1,5 +1,5 @@
 import { mediaTimeToSeconds, roundMediaTime } from "@/wasm";
-import { getElementLocalTime } from "@/animation";
+import { getClipLocalTime } from "@/animation";
 import { resolveEffectParamsAtTime } from "@/animation/effect-param-channel";
 import {
 	buildGaussianBlurPasses,
@@ -10,13 +10,13 @@ import type { Effect, EffectPass } from "@/effects/types";
 import { getSourceTimeAtClipTime } from "@/retime";
 import {
 	DEFAULT_GRAPHIC_SOURCE_SIZE,
-	resolveGraphicElementParamsAtTime,
+	resolveGraphicClipParamsAtTime,
 } from "@/graphics";
 import {
-	buildTextBackgroundFromElement,
+	buildTextBackgroundFromClip,
 	getTextMeasurementContext,
-	measureTextElement,
-} from "@/text/measure-element";
+	measureTextClip,
+} from "@/text/measure-clip";
 import { resolveColorAtTime, resolveOpacityAtTime } from "@/animation/values";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
 import { videoCache } from "@/services/video-cache/service";
@@ -144,10 +144,10 @@ function resolveVisualState({
 		return null;
 	}
 
-	const localTime = getElementLocalTime({
+	const localTime = getClipLocalTime({
 		timelineTime: context.time,
-		elementStartTime: params.timeOffset,
-		elementDuration: params.duration,
+		clipStartTime: params.timeOffset,
+		clipDuration: params.duration,
 	});
 	const transform = resolveTransformAtTime({
 		baseTransform: params.transform,
@@ -305,8 +305,8 @@ function resolveGraphicNode({
 
 	return {
 		...visualState,
-		resolvedParams: resolveGraphicElementParamsAtTime({
-			element: node.params,
+		resolvedParams: resolveGraphicClipParamsAtTime({
+			clip: node.params,
 			localTime: visualState.localTime,
 		}),
 	};
@@ -326,12 +326,12 @@ function resolveTextNode({
 		return null;
 	}
 
-	const localTime = getElementLocalTime({
+	const localTime = getClipLocalTime({
 		timelineTime: context.time,
-		elementStartTime: node.params.startTime,
-		elementDuration: node.params.duration,
+		clipStartTime: node.params.startTime,
+		clipDuration: node.params.duration,
 	});
-	const background = buildTextBackgroundFromElement({ element: node.params });
+	const background = buildTextBackgroundFromClip({ clip: node.params });
 
 	return {
 		transform: resolveTransformAtTime({
@@ -366,8 +366,8 @@ function resolveTextNode({
 			width: context.renderer.width,
 			height: context.renderer.height,
 		}),
-		measuredText: measureTextElement({
-			element: node.params,
+		measuredText: measureTextClip({
+			clip: node.params,
 			canvasHeight: node.params.canvasHeight,
 			localTime,
 			ctx: getTextMeasurementContext(),

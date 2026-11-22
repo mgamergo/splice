@@ -1,9 +1,9 @@
 import type {
-	ElementAnimations,
+	ClipAnimations,
 	EffectParamPath,
 } from "@/animation/types";
 import type { ParamValues } from "@/params";
-import { removeElementKeyframe } from "./keyframes";
+import { removeClipKeyframe } from "./keyframes";
 import { resolveAnimationPathValueAtTime } from "./resolve";
 
 export const EFFECT_PARAM_PATH_PREFIX = "effects.";
@@ -62,7 +62,7 @@ export function resolveEffectParamsAtTime({
 }: {
 	effectId: string;
 	params: ParamValues;
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	localTime: number;
 }): ParamValues {
 	const safeLocalTime = Math.max(0, localTime);
@@ -89,12 +89,12 @@ export function removeEffectParamKeyframe({
 	paramKey,
 	keyframeId,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	effectId: string;
 	paramKey: string;
 	keyframeId: string;
-}): ElementAnimations | undefined {
-	return removeElementKeyframe({
+}): ClipAnimations | undefined {
+	return removeClipKeyframe({
 		animations,
 		propertyPath: buildEffectParamPath({ effectId, paramKey }),
 		keyframeId,

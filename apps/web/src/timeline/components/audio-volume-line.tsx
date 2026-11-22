@@ -8,8 +8,8 @@ import {
 	getLinePosFromDb,
 } from "@/timeline/audio-display";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/timeline/audio-constants";
-import { getElementVolume, hasAnimatedVolume } from "@/timeline/audio-state";
-import type { AudioElement } from "@/timeline/types";
+import { getClipVolume, hasAnimatedVolume } from "@/timeline/audio-state";
+import type { AudioClip } from "@/timeline/types";
 import {
 	clamp,
 	formatNumberForDisplay,
@@ -50,17 +50,17 @@ function getVolumeFromPointer({
 }
 
 export function AudioVolumeLine({
-	element,
+	clip,
 	trackId,
 }: {
-	element: AudioElement;
+	clip: AudioClip;
 	trackId: string;
 }) {
 	const editor = useEditor();
 	const surfaceRef = useRef<HTMLDivElement>(null);
 	const activePointerIdRef = useRef<number | null>(null);
-	const startVolumeRef = useRef(getElementVolume({ element }));
-	const lastPreviewVolumeRef = useRef(getElementVolume({ element }));
+	const startVolumeRef = useRef(getClipVolume({ clip }));
+	const lastPreviewVolumeRef = useRef(getClipVolume({ clip }));
 	const hasChangedRef = useRef(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [tooltipClientPos, setTooltipClientPos] = useState<{
@@ -68,8 +68,8 @@ export function AudioVolumeLine({
 		y: number;
 	} | null>(null);
 
-	const hasAnimatedEnvelope = hasAnimatedVolume({ element });
-	const currentVolume = getElementVolume({ element });
+	const hasAnimatedEnvelope = hasAnimatedVolume({ clip });
+	const currentVolume = getClipVolume({ clip });
 	const lineTop = `${getLinePosFromDb({ db: currentVolume })}%`;
 
 	const volumeLabel = `${formatNumberForDisplay({
@@ -88,11 +88,11 @@ export function AudioVolumeLine({
 				return;
 			}
 
-			editor.timeline.previewElements({
+			editor.timeline.previewClips({
 				updates: [
 					{
 						trackId,
-						elementId: element.id,
+						clipId: clip.id,
 						updates: { params: { volume: nextVolume } },
 					},
 				],
@@ -103,7 +103,7 @@ export function AudioVolumeLine({
 				rightValue: nextVolume,
 			});
 		},
-		[editor, element.id, trackId],
+		[editor, clip.id, trackId],
 	);
 
 	const finishDrag = useCallback(
@@ -157,8 +157,8 @@ export function AudioVolumeLine({
 
 			event.preventDefault();
 			event.stopPropagation();
-			editor.selection.setSelectedElements({
-				elements: [{ trackId, elementId: element.id }],
+			editor.selection.setSelectedClips({
+				clips: [{ trackId, clipId: clip.id }],
 			});
 			activePointerIdRef.current = event.pointerId;
 			startVolumeRef.current = currentVolume;
@@ -171,7 +171,7 @@ export function AudioVolumeLine({
 				clientY: event.clientY,
 			});
 		},
-		[currentVolume, editor.selection, element.id, trackId, updateFromPointer],
+		[currentVolume, editor.selection, clip.id, trackId, updateFromPointer],
 	);
 
 	const handlePointerMove = useCallback(

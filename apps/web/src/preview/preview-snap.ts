@@ -69,13 +69,13 @@ function pickClosestScaleCandidate<T extends { distance: number; edge: ScaleEdge
 export function snapPosition({
 	proposedPosition,
 	canvasSize,
-	elementSize,
+	clipSize,
 	rotation = 0,
 	snapThreshold,
 }: {
 	proposedPosition: { x: number; y: number };
 	canvasSize: { width: number; height: number };
-	elementSize: { width: number; height: number };
+	clipSize: { width: number; height: number };
 	rotation?: number;
 	snapThreshold: { x: number; y: number };
 }): SnapResult {
@@ -89,8 +89,8 @@ export function snapPosition({
 	const rotRad = (rotation * Math.PI) / 180;
 	const cosR = Math.abs(Math.cos(rotRad));
 	const sinR = Math.abs(Math.sin(rotRad));
-	const halfWidth = (elementSize.width * cosR + elementSize.height * sinR) / 2;
-	const halfHeight = (elementSize.width * sinR + elementSize.height * cosR) / 2;
+	const halfWidth = (clipSize.width * cosR + clipSize.height * sinR) / 2;
+	const halfHeight = (clipSize.width * sinR + clipSize.height * cosR) / 2;
 	const activeLines: SnapLine[] = [];
 
 	type AxisSnapCandidate = {

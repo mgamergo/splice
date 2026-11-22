@@ -22,16 +22,16 @@ import {
 	resolveTimelineSnap,
 	type SnapPoint,
 } from "@/timeline/snapping";
-import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
+import { getClipEdgeSnapPoints } from "@/timeline/clip-snap-source";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import {
-	isRetimableElement,
-	type SceneTracks,
-	type TimelineElement,
+	isRetimableClip,
+	type SequenceTracks,
+	type TimelineClip,
 	type TimelineTrack,
 } from "@/timeline";
-import type { ElementRef } from "@/timeline/types";
+import type { ClipRef } from "@/timeline/types";
 import type { FrameRate } from "opencut-wasm";
 
 // --- Session ---
@@ -53,13 +53,13 @@ export interface ResizeConfig {
 	zoomLevel: number;
 	snappingEnabled: boolean;
 	isShiftHeld: () => boolean;
-	getSceneTracks: () => SceneTracks;
+	getSequenceTracks: () => SequenceTracks;
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
-	selectedElements: ElementRef[];
+	selectedClips: ClipRef[];
 	discardPreview: () => void;
-	previewElements: (updates: GroupResizeUpdate[]) => void;
-	commitElements: (updates: GroupResizeUpdate[]) => void;
+	previewClips: (updates: GroupResizeUpdate[]) => void;
+	commitClips: (updates: GroupResizeUpdate[]) => void;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 }
 
@@ -71,13 +71,13 @@ export interface ResizeConfigRef {
 
 export function buildResizeMembers({
 	tracks,
-	selectedElements,
+	selectedClips,
 }: {
-	tracks: SceneTracks;
-	selectedElements: ElementRef[];
+	tracks: SequenceTracks;
+	selectedClips: ClipRef[];
 }): GroupResizeMember[] {
-	const selectedElementIds = new Set(
-		selectedElements.map((el) => el.elementId),
+	const selectedClipIds = new Set(
+		selectedClips.map((el) => el.clipId),
 	);
 	const trackMap = new Map(
 		[...tracks.overlay, tracks.main, ...tracks.audio].map((track) => [
@@ -86,33 +86,33 @@ export function buildResizeMembers({
 		]),
 	);
 
-	return selectedElements.flatMap(({ trackId, elementId }) => {
+	return selectedClips.flatMap(({ trackId, clipId }) => {
 		const track = trackMap.get(trackId);
-		const element = track?.elements.find((el) => el.id === elementId);
-		if (!track || !element) return [];
+		const clip = track?.clips.find((el) => el.id === clipId);
+		if (!track || !clip) return [];
 
-		const otherElements = track.elements.filter(
-			(el) => !selectedElementIds.has(el.id),
+		const otherClips = track.clips.filter(
+			(el) => !selectedClipIds.has(el.id),
 		);
-		const leftNeighborBound = otherElements
+		const leftNeighborBound = otherClips
 			.filter(
 				(el) =>
 					addMediaTime({ a: el.startTime, b: el.duration }) <=
-					element.startTime,
+					clip.startTime,
 			)
 			.reduce<MediaTime | null>((bound, el) => {
-				const elementEnd = addMediaTime({
+				const clipEnd = addMediaTime({
 					a: el.startTime,
 					b: el.duration,
 				});
 				return bound === null
-					? elementEnd
-					: maxMediaTime({ a: bound, b: elementEnd });
+					? clipEnd
+					: maxMediaTime({ a: bound, b: clipEnd });
 			}, null);
-		const rightNeighborBound = otherElements
+		const rightNeighborBound = otherClips
 			.filter(
 				(el) =>
-					el.startTime >= addMediaTime({ a: element.startTime, b: element.duration }),
+					el.startTime >= addMediaTime({ a: clip.startTime, b: clip.duration }),
 			)
 			.reduce<MediaTime | null>(
 				(bound, el) =>
@@ -125,13 +125,13 @@ export function buildResizeMembers({
 		return [
 			{
 				trackId,
-				elementId,
-				startTime: element.startTime,
-				duration: element.duration,
-				trimStart: element.trimStart,
-				trimEnd: element.trimEnd,
-				sourceDuration: element.sourceDuration,
-				retime: isRetimableElement(element) ? element.retime : undefined,
+				clipId,
+				startTime: clip.startTime,
+				duration: clip.duration,
+				trimStart: clip.trimStart,
+				trimEnd: clip.trimEnd,
+				sourceDuration: clip.sourceDuration,
+				retime: isRetimableClip(clip) ? clip.retime : undefined,
 				leftNeighborBound,
 				rightNeighborBound,
 			},
@@ -147,7 +147,7 @@ function hasResizeChanges({
 	result: GroupResizeResult;
 }): boolean {
 	return result.updates.some((update) => {
-		const member = members.find((m) => m.elementId === update.elementId);
+		const member = members.find((m) => m.clipId === update.clipId);
 		return (
 			member?.trimStart !== update.patch.trimStart ||
 			member?.trimEnd !== update.patch.trimEnd ||
@@ -196,12 +196,12 @@ export class ResizeController {
 
 	onResizeStart({
 		event,
-		element,
+		clip,
 		track,
 		side,
 	}: {
 		event: ReactMouseEvent;
-		element: TimelineElement;
+		clip: TimelineClip;
 		track: TimelineTrack;
 		side: ResizeSide;
 	}): void {
@@ -215,16 +215,16 @@ export class ResizeController {
 		const fps = this.config.getActiveProjectFps();
 		if (!fps) return;
 
-		const ref = { trackId: track.id, elementId: element.id };
-		const activeSelection = this.config.selectedElements.some(
-			(el) => el.trackId === track.id && el.elementId === element.id,
+		const ref = { trackId: track.id, clipId: clip.id };
+		const activeSelection = this.config.selectedClips.some(
+			(el) => el.trackId === track.id && el.clipId === clip.id,
 		)
-			? this.config.selectedElements
+			? this.config.selectedClips
 			: [ref];
 
 		const members = buildResizeMembers({
-			tracks: this.config.getSceneTracks(),
-			selectedElements: activeSelection,
+			tracks: this.config.getSequenceTracks(),
+			selectedClips: activeSelection,
 		});
 		if (members.length === 0) return;
 
@@ -277,18 +277,18 @@ export class ResizeController {
 			return rawDeltaTime;
 		}
 
-		const tracks = this.config.getSceneTracks();
+		const tracks = this.config.getSequenceTracks();
 		const playheadTime = this.config.getCurrentPlayheadTime();
-		const excludeElementIds = new Set(session.members.map((m) => m.elementId));
+		const excludeClipIds = new Set(session.members.map((m) => m.clipId));
 
 		const snapPoints = buildTimelineSnapPoints({
 			sources: [
-				() => getElementEdgeSnapPoints({ tracks, excludeElementIds }),
+				() => getClipEdgeSnapPoints({ tracks, excludeClipIds }),
 				() => getPlayheadSnapPoints({ playheadTime }),
 				() =>
 					getAnimationKeyframeSnapPointsForTimeline({
 						tracks,
-						excludeElementIds,
+						excludeClipIds,
 					}),
 			],
 		});
@@ -342,7 +342,7 @@ export class ResizeController {
 		});
 
 		session.result = result;
-		this.config.previewElements(result.updates);
+		this.config.previewClips(result.updates);
 	}
 
 	private handleMouseUp(): void {
@@ -355,7 +355,7 @@ export class ResizeController {
 			session.result &&
 			hasResizeChanges({ members: session.members, result: session.result })
 		) {
-			this.config.commitElements(session.result.updates);
+			this.config.commitClips(session.result.updates);
 		}
 
 		this.finishSession();

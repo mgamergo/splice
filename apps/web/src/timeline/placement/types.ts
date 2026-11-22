@@ -1,14 +1,14 @@
-import type { ElementType, TrackType } from "@/timeline";
+import type { ClipType, TrackType } from "@/timeline";
 import type { MediaTime } from "@/wasm";
 
 export interface PlacementTimeSpan {
 	startTime: MediaTime;
 	duration: MediaTime;
-	excludeElementId?: string;
+	excludeClipId?: string;
 }
 
 export type PlacementSubject =
-	| { elementType: ElementType }
+	| { clipType: ClipType }
 	| { trackType: TrackType };
 
 export type PlacementStrategy =

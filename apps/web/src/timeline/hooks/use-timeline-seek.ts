@@ -15,7 +15,7 @@ interface UseTimelineSeekProps {
 	zoomLevel: number;
 	duration: MediaTime;
 	isSelecting: boolean;
-	clearSelectedElements: () => void;
+	clearSelectedClips: () => void;
 	seek: (time: MediaTime) => void;
 }
 
@@ -27,7 +27,7 @@ export function useTimelineSeek({
 	zoomLevel,
 	duration,
 	isSelecting,
-	clearSelectedElements,
+	clearSelectedClips,
 	seek,
 }: UseTimelineSeekProps) {
 	const editor = useEditor();
@@ -40,7 +40,7 @@ export function useTimelineSeek({
 		getRulerScrollEl: () => rulerScrollRef.current,
 		getTracksScrollEl: () => tracksScrollRef.current,
 		getActiveProjectFps: () => editor.project.getActive()?.settings.fps ?? null,
-		clearSelectedElements,
+		clearSelectedClips,
 		seek,
 		setTimelineViewState: ({ zoomLevel, scrollLeft, playheadTime }) =>
 			editor.project.setTimelineViewState({

@@ -14,11 +14,11 @@ export function registerTranscriptionDiagnostics({
 		severity: "caution",
 		message: "No audio detected. Add a clip with audio to the timeline first.",
 		check: (editor) => {
-			const scene = editor.scenes.getActiveSceneOrNull();
-			if (!scene) return false;
+			const sequence = editor.sequences.getActiveSequenceOrNull();
+			if (!sequence) return false;
 			return !timelineHasAudio({
-				tracks: scene.tracks,
-				mediaAssets: editor.media.getAssets(),
+				tracks: sequence.tracks,
+				projectItems: editor.media.getProjectItems(),
 			});
 		},
 	});

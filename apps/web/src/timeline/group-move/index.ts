@@ -7,6 +7,6 @@ export type {
 	GroupMoveResult,
 	GroupTrackSection,
 	MoveGroup,
-	PlannedElementMove,
+	PlannedClipMove,
 	PlannedTrackCreation,
 } from "./types";

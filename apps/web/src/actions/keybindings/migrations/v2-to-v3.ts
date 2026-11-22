@@ -5,9 +5,9 @@ export function v2ToV3({ state }: { state: unknown }): unknown {
 	if (!v2) return state;
 
 	const renames: Record<string, string> = {
-		"split-selected": "split",
-		"split-selected-left": "split-left",
-		"split-selected-right": "split-right",
+		"split-selected": "razor",
+		"split-selected-left": "razor-left",
+		"split-selected-right": "razor-right",
 	};
 
 	const migrated = { ...v2.keybindings };

@@ -1,5 +1,5 @@
 import { Command, type CommandResult } from "@/commands/base-command";
-import type { SceneTracks, TrackType } from "@/timeline";
+import type { SequenceTracks, TrackType } from "@/timeline";
 import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
 import {
@@ -9,7 +9,7 @@ import {
 
 export class AddTrackCommand extends Command {
 	private trackId: string;
-	private savedState: SceneTracks | null = null;
+	private savedState: SequenceTracks | null = null;
 
 	constructor({
 		type,
@@ -29,7 +29,7 @@ export class AddTrackCommand extends Command {
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
-		this.savedState = editor.scenes.getActiveScene().tracks;
+		this.savedState = editor.sequences.getActiveSequence().tracks;
 
 		const insertIndex =
 			this.index ??
@@ -73,10 +73,10 @@ function buildAudioTrackState({
 	insertIndex,
 	trackId,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	insertIndex: number;
 	trackId: string;
-}): SceneTracks {
+}): SequenceTracks {
 	const audioInsertIndex = Math.max(0, insertIndex - tracks.overlay.length - 1);
 	const newTrack = buildEmptyTrack({
 		id: trackId,
@@ -98,11 +98,11 @@ function buildOverlayTrackState({
 	trackId,
 	trackType,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	insertIndex: number;
 	trackId: string;
 	trackType: Exclude<TrackType, "audio">;
-}): SceneTracks {
+}): SequenceTracks {
 	const overlayInsertIndex = Math.min(insertIndex, tracks.overlay.length);
 	const newTrack =
 		trackType === "video"

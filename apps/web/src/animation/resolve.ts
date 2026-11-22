@@ -1,6 +1,6 @@
 import type {
 	AnimationPath,
-	ElementAnimations,
+	ClipAnimations,
 } from "@/animation/types";
 import { formatLinearRgba, parseColorToLinearRgba } from "@/params";
 import type { ParamValue } from "@/params";
@@ -10,22 +10,22 @@ import {
 	isScalarChannel,
 } from "./interpolation";
 
-export function getElementLocalTime({
+export function getClipLocalTime({
 	timelineTime,
-	elementStartTime,
-	elementDuration,
+	clipStartTime,
+	clipDuration,
 }: {
 	timelineTime: number;
-	elementStartTime: number;
-	elementDuration: number;
+	clipStartTime: number;
+	clipDuration: number;
 }): number {
-	const localTime = timelineTime - elementStartTime;
+	const localTime = timelineTime - clipStartTime;
 	if (localTime <= 0) {
 		return 0;
 	}
 
-	if (localTime >= elementDuration) {
-		return elementDuration;
+	if (localTime >= clipDuration) {
+		return clipDuration;
 	}
 
 	return localTime;
@@ -37,7 +37,7 @@ export function resolveAnimationPathValueAtTime({
 	localTime,
 	fallbackValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	localTime: number;
 	fallbackValue: number;
@@ -48,7 +48,7 @@ export function resolveAnimationPathValueAtTime({
 	localTime,
 	fallbackValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	localTime: number;
 	fallbackValue: string;
@@ -59,7 +59,7 @@ export function resolveAnimationPathValueAtTime({
 	localTime,
 	fallbackValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	localTime: number;
 	fallbackValue: boolean;
@@ -70,7 +70,7 @@ export function resolveAnimationPathValueAtTime({
 	localTime,
 	fallbackValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	localTime: number;
 	fallbackValue: ParamValue;
@@ -81,7 +81,7 @@ export function resolveAnimationPathValueAtTime({
 	localTime,
 	fallbackValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	localTime: number;
 	fallbackValue: ParamValue;

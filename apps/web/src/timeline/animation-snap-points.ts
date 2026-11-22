@@ -1,31 +1,31 @@
-import { getElementKeyframes } from "@/animation";
-import type { SceneTracks } from "@/timeline";
+import { getClipKeyframes } from "@/animation";
+import type { SequenceTracks } from "@/timeline";
 import type { SnapPoint } from "@/timeline/snapping";
 import { addMediaTime } from "@/wasm";
 
 export function getAnimationKeyframeSnapPointsForTimeline({
 	tracks,
-	excludeElementIds,
+	excludeClipIds,
 }: {
-	tracks: SceneTracks;
-	excludeElementIds?: Set<string>;
+	tracks: SequenceTracks;
+	excludeClipIds?: Set<string>;
 }): SnapPoint[] {
 	const snapPoints: SnapPoint[] = [];
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 
 	for (const track of orderedTracks) {
-		for (const element of track.elements) {
-			if (excludeElementIds?.has(element.id)) {
+		for (const clip of track.clips) {
+			if (excludeClipIds?.has(clip.id)) {
 				continue;
 			}
 
-			for (const keyframe of getElementKeyframes({
-				animations: element.animations,
+			for (const keyframe of getClipKeyframes({
+				animations: clip.animations,
 			})) {
 				snapPoints.push({
-					time: addMediaTime({ a: element.startTime, b: keyframe.time }),
+					time: addMediaTime({ a: clip.startTime, b: keyframe.time }),
 					type: "keyframe",
-					elementId: element.id,
+					clipId: clip.id,
 					trackId: track.id,
 				});
 			}

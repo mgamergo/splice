@@ -1,10 +1,10 @@
-import type { SceneTracks, TrackType } from "@/timeline";
+import type { SequenceTracks, TrackType } from "@/timeline";
 
 export function getDefaultInsertIndexForTrack({
 	tracks,
 	trackType,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	trackType: TrackType;
 }): number {
 	if (trackType === "audio") {
@@ -22,7 +22,7 @@ export function getHighestInsertIndexForTrack({
 	tracks,
 	trackType,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	trackType: TrackType;
 }): number {
 	if (trackType === "audio") {
@@ -38,7 +38,7 @@ export function resolvePreferredNewTrackPlacement({
 	preferredIndex,
 	direction,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	trackType: TrackType;
 	preferredIndex: number;
 	direction: "above" | "below";

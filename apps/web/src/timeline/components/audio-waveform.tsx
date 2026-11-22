@@ -112,8 +112,8 @@ export function AudioWaveform({
 		}
 
 		const containerRect = container.getBoundingClientRect();
-		const elementWidth = containerRect.width;
-		if (elementWidth <= 0) {
+		const clipWidth = containerRect.width;
+		if (clipWidth <= 0) {
 			clearCanvas();
 			return;
 		}
@@ -126,11 +126,11 @@ export function AudioWaveform({
 		if (scrollParent) {
 			const parentRect = scrollParent.getBoundingClientRect();
 			clipLeft = Math.max(0, parentRect.left - containerRect.left);
-			clipRight = Math.min(elementWidth, parentRect.right - containerRect.left);
+			clipRight = Math.min(clipWidth, parentRect.right - containerRect.left);
 		} else {
 			clipLeft = Math.max(0, -containerRect.left);
 			clipRight = Math.min(
-				elementWidth,
+				clipWidth,
 				window.innerWidth - containerRect.left,
 			);
 		}
@@ -155,7 +155,7 @@ export function AudioWaveform({
 		const canvasH = Math.max(1, Math.round(height * dpr));
 		const barCount = Math.max(1, Math.floor(visibleWidth / BAR_STEP));
 		const renderSignature = JSON.stringify({
-			elementWidth,
+			clipWidth,
 			clipLeft,
 			clipRight,
 			visibleWidth,
@@ -320,7 +320,7 @@ export function AudioWaveform({
 			return;
 		}
 
-		scrollParentRef.current = findScrollParent({ element: container });
+		scrollParentRef.current = findScrollParent({ clip: container });
 		const scrollParent = scrollParentRef.current;
 		if (!scrollParent) {
 			return;

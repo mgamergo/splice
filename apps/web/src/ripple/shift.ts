@@ -1,17 +1,17 @@
-import type { TimelineElement } from "@/timeline/types";
+import type { TimelineClip } from "@/timeline/types";
 
-export function rippleShiftElements<TElement extends TimelineElement>({
-	elements,
+export function rippleShiftClips<TClip extends TimelineClip>({
+	clips,
 	afterTime,
 	shiftAmount,
 }: {
-	elements: TElement[];
+	clips: TClip[];
 	afterTime: number;
 	shiftAmount: number;
-}): TElement[] {
-	return elements.map((element) =>
-		element.startTime >= afterTime
-			? ({ ...element, startTime: element.startTime - shiftAmount } as TElement)
-			: element,
+}): TClip[] {
+	return clips.map((clip) =>
+		clip.startTime >= afterTime
+			? ({ ...clip, startTime: clip.startTime - shiftAmount } as TClip)
+			: clip,
 	);
 }

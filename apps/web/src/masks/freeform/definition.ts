@@ -1,7 +1,7 @@
 import { generateUUID } from "@/utils/id";
 import type { ParamDefinition } from "@/params";
 import { PEN_CURSOR } from "@/preview/components/cursors";
-import type { ElementBounds } from "@/preview/element-bounds";
+import type { ClipBounds } from "@/preview/clip-bounds";
 import type {
 	FreeformPathMask,
 	FreeformPathMaskParams,
@@ -86,7 +86,7 @@ function getFreeformDisplayHandles({
 }: {
 	params: FreeformPathMaskParams;
 	displayScale: number;
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): {
 	handles: MaskHandlePosition[];
 	overlays: MaskOverlay[];
@@ -333,7 +333,7 @@ export const freeformMaskDefinition: MaskDefinition<"freeform"> = {
 				const { snappedPosition, activeLines } = snapPosition({
 					proposedPosition: position,
 					canvasSize: bounds,
-					elementSize: {
+					clipSize: {
 						width: localBounds.width * proposedParams.scale,
 						height: localBounds.height * proposedParams.scale,
 					},
@@ -509,7 +509,7 @@ export function appendPointToFreeformPathMask({
 }: {
 	params: FreeformPathMaskParams;
 	canvasPoint: { x: number; y: number };
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 }): FreeformPathMaskParams {
 	const points = params.path;
 
@@ -583,7 +583,7 @@ export function insertPointOnFreeformSegment({
 	params: FreeformPathMaskParams;
 	segmentIndex: number;
 	canvasPoint: { x: number; y: number };
-	bounds: ElementBounds;
+	bounds: ClipBounds;
 	pointId?: string;
 }): { params: FreeformPathMaskParams; pointId: string } | null {
 	const points = params.path;

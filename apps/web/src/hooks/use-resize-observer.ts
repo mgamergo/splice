@@ -8,8 +8,8 @@ export function useResizeObserver({
 	onResize: (entry: ResizeObserverEntry) => void;
 }) {
 	useEffect(() => {
-		const element = ref.current;
-		if (!element) return;
+		const clip = ref.current;
+		if (!clip) return;
 
 		const observer = new ResizeObserver((entries) => {
 			for (const entry of entries) {
@@ -17,7 +17,7 @@ export function useResizeObserver({
 			}
 		});
 
-		observer.observe(element);
+		observer.observe(clip);
 
 		return () => {
 			observer.disconnect();

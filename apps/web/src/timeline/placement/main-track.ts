@@ -1,26 +1,26 @@
-import type { SceneTracks, TimelineElement, VideoTrack } from "@/timeline";
+import type { SequenceTracks, TimelineClip, VideoTrack } from "@/timeline";
 import { type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 export const MAIN_TRACK_NAME = "Main Track";
 
-export function getEarliestMainTrackElement({
+export function getEarliestMainTrackClip({
 	mainTrack,
-	excludeElementId,
+	excludeClipId,
 }: {
 	mainTrack: VideoTrack;
-	excludeElementId?: string;
-}): TimelineElement | null {
-	const elements = mainTrack.elements.filter((element) => {
-		return !excludeElementId || element.id !== excludeElementId;
+	excludeClipId?: string;
+}): TimelineClip | null {
+	const clips = mainTrack.clips.filter((clip) => {
+		return !excludeClipId || clip.id !== excludeClipId;
 	});
-	if (elements.length === 0) {
+	if (clips.length === 0) {
 		return null;
 	}
 
-	return elements.reduce((earliestElement, element) => {
-		return element.startTime < earliestElement.startTime
-			? element
-			: earliestElement;
+	return clips.reduce((earliestClip, clip) => {
+		return clip.startTime < earliestClip.startTime
+			? clip
+			: earliestClip;
 	});
 }
 
@@ -28,26 +28,26 @@ export function enforceMainTrackStart({
 	tracks,
 	targetTrackId,
 	requestedStartTime,
-	excludeElementId,
+	excludeClipId,
 }: {
-	tracks: SceneTracks;
+	tracks: SequenceTracks;
 	targetTrackId: string;
 	requestedStartTime: MediaTime;
-	excludeElementId?: string;
+	excludeClipId?: string;
 }): MediaTime {
 	if (tracks.main.id !== targetTrackId) {
 		return requestedStartTime;
 	}
 
-	const earliestElement = getEarliestMainTrackElement({
+	const earliestClip = getEarliestMainTrackClip({
 		mainTrack: tracks.main,
-		excludeElementId,
+		excludeClipId,
 	});
-	if (!earliestElement) {
+	if (!earliestClip) {
 		return ZERO_MEDIA_TIME;
 	}
 
-	if (requestedStartTime <= earliestElement.startTime) {
+	if (requestedStartTime <= earliestClip.startTime) {
 		return ZERO_MEDIA_TIME;
 	}
 

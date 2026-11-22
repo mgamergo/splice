@@ -31,7 +31,7 @@ import {
 } from "react";
 import { useContainerSize } from "@/hooks/use-container-size";
 import type { MediaTime } from "@/wasm";
-import type { ElementDragView, DropTarget } from "@/timeline";
+import type { ClipDragView, DropTarget } from "@/timeline";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { SelectionBox } from "@/selection/selection-box";
@@ -46,7 +46,7 @@ import {
 	TIMELINE_TRACK_LABELS_COLUMN_WIDTH_PX,
 	KEYFRAME_LANE_HEIGHT_PX,
 } from "./layout";
-import { useElementInteraction } from "@/timeline/hooks/element/use-element-interaction";
+import { useClipInteraction } from "@/timeline/hooks/clip/use-clip-interaction";
 import {
 	canTrackHaveAudio,
 	canTrackBeHidden,
@@ -68,14 +68,14 @@ import {
 } from "./expanded-layout";
 import { TIMELINE_HORIZONTAL_WHEEL_STEP_PX } from "./interaction";
 import { TimelineToolbar } from "./timeline-toolbar";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
 import { useTimelineSeek } from "@/timeline/hooks/use-timeline-seek";
 import { useTimelineDragDrop } from "@/timeline/hooks/use-timeline-drag-drop";
 import { TimelineRuler } from "./timeline-ruler";
 import {
-	TimelineBookmarksRow,
-	useBookmarkDrag,
-} from "@/timeline/bookmarks/index";
+	TimelineMarkersRow,
+	useMarkerDrag,
+} from "@/timeline/markers/index";
 import { useEdgeAutoScroll } from "@/timeline/hooks/use-edge-auto-scroll";
 import { useInitialScrollBottom } from "@/timeline/hooks/use-initial-scroll-bottom";
 import { useTimelineResize } from "@/timeline/hooks/use-timeline-resize";
@@ -85,7 +85,7 @@ import { useScrollPosition } from "@/timeline/hooks/use-scroll-position";
 import { useTimelinePlayhead } from "@/timeline/hooks/use-timeline-playhead";
 import { DragLine } from "./drag-line";
 import { invokeAction } from "@/actions";
-import { resolveTimelineElementIntersections } from "./selection-hit-testing";
+import { resolveTimelineClipIntersections } from "./selection-hit-testing";
 import { cn } from "@/utils/ui";
 
 const TRACKS_CONTAINER_MAX_HEIGHT = 800;
@@ -117,24 +117,24 @@ const TRACK_ICONS: Record<TimelineTrack["type"], ReactNode> = {
 export function Timeline() {
 	const snappingEnabled = useTimelineStore((s) => s.snappingEnabled);
 	const {
-		selectedElements,
-		clearElementSelection,
-		setElementSelection,
-		mergeElementsIntoSelection,
-	} = useElementSelection();
+		selectedClips,
+		clearClipSelection,
+		setClipSelection,
+		mergeClipsIntoSelection,
+	} = useClipSelection();
 	const editor = useEditor();
 	const timeline = editor.timeline;
-	const scene = useEditor((currentEditor) =>
-		currentEditor.scenes.getActiveSceneOrNull(),
+	const sequence = useEditor((currentEditor) =>
+		currentEditor.sequences.getActiveSequenceOrNull(),
 	);
 	const tracks = useMemo<TimelineTrack[]>(
 		() =>
-			scene
-				? [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio]
+			sequence
+				? [...sequence.tracks.overlay, sequence.tracks.main, ...sequence.tracks.audio]
 				: [],
-		[scene],
+		[sequence],
 	);
-	const mainTrackId = scene?.tracks.main.id ?? null;
+	const mainTrackId = sequence?.tracks.main.id ?? null;
 	const seek = (time: MediaTime) => editor.playback.seek({ time });
 
 	const timelineRef = useRef<HTMLDivElement>(null);
@@ -188,15 +188,15 @@ export function Timeline() {
 		onSnapPointChange: handleSnapPointChange,
 	});
 
-	const expandedElementIds = useTimelineStore((s) => s.expandedElementIds);
+	const expandedClipIds = useTimelineStore((s) => s.expandedClipIds);
 
 	const getTrackExpansionHeight = useCallback(
 		(trackIndex: number) => {
 			const track = tracks[trackIndex];
 			if (!track) return 0;
-			return computeTrackExpansionHeight({ track, expandedElementIds });
+			return computeTrackExpansionHeight({ track, expandedClipIds });
 		},
-		[tracks, expandedElementIds],
+		[tracks, expandedClipIds],
 	);
 
 	// Stable refs so the wheel listener never goes stale
@@ -300,21 +300,21 @@ export function Timeline() {
 		isReady: tracks.length > 0,
 	});
 
-	const { dragView, handleElementMouseDown, handleElementClick } =
-		useElementInteraction({
+	const { dragView, handleClipMouseDown, handleClipClick } =
+		useClipInteraction({
 		zoomLevel,
 		tracksContainerRef,
 		tracksScrollRef,
 		snappingEnabled,
 		onSnapPointChange: handleSnapPointChange,
 	});
-	const isElementDragging = dragView.kind === "dragging";
+	const isClipDragging = dragView.kind === "dragging";
 
 	const {
-		dragState: bookmarkDragState,
-		handleBookmarkMouseDown,
-		lastMouseXRef: bookmarkLastMouseXRef,
-	} = useBookmarkDrag({
+		dragState: markerDragState,
+		handleMarkerMouseDown,
+		lastMouseXRef: markerLastMouseXRef,
+	} = useMarkerDrag({
 		zoomLevel,
 		scrollRef: tracksScrollRef,
 		snappingEnabled,
@@ -343,7 +343,7 @@ export function Timeline() {
 		shouldIgnoreClick,
 	} = useBoxSelect({
 		containerRef: tracksContainerRef,
-		selectedIds: selectedElements,
+		selectedIds: selectedClips,
 		anchorId: null,
 		getIsAdditiveSelection: (event) =>
 			event.shiftKey || event.ctrlKey || event.metaKey,
@@ -352,7 +352,7 @@ export function Timeline() {
 				return [];
 			}
 
-			return resolveTimelineElementIntersections({
+			return resolveTimelineClipIntersections({
 				container: tracksContainerRef.current,
 				scrollContainer: tracksScrollRef.current,
 				tracks,
@@ -363,9 +363,9 @@ export function Timeline() {
 		},
 		onSelectionChange: ({ intersectedIds, isAdditive }) => {
 			if (isAdditive) {
-				mergeElementsIntoSelection({ elements: intersectedIds });
+				mergeClipsIntoSelection({ clips: intersectedIds });
 			} else {
-				setElementSelection({ elements: intersectedIds });
+				setClipSelection({ clips: intersectedIds });
 			}
 		},
 	});
@@ -387,15 +387,15 @@ export function Timeline() {
 		dynamicTimelineWidth > (tracksViewportWidth || containerWidth);
 
 	useEdgeAutoScroll({
-		isActive: bookmarkDragState.isDragging,
-		getMouseClientX: () => bookmarkLastMouseXRef.current,
+		isActive: markerDragState.isDragging,
+		getMouseClientX: () => markerLastMouseXRef.current,
 		rulerScrollRef,
 		tracksScrollRef,
 		contentWidth: dynamicTimelineWidth,
 	});
 
 	useEdgeAutoScroll({
-		isActive: isElementDragging,
+		isActive: isClipDragging,
 		getMouseClientX: () =>
 			dragView.kind === "dragging" ? dragView.currentMouseX : 0,
 		rulerScrollRef,
@@ -406,7 +406,7 @@ export function Timeline() {
 	const showSnapIndicator =
 		snappingEnabled &&
 		currentSnapPoint !== null &&
-		(isElementDragging || bookmarkDragState.isDragging || isResizing);
+		(isClipDragging || markerDragState.isDragging || isResizing);
 
 	const {
 		handleTracksMouseDown,
@@ -421,7 +421,7 @@ export function Timeline() {
 		zoomLevel,
 		duration: timeline.getTotalDuration(),
 		isSelecting,
-		clearSelectedElements: clearElementSelection,
+		clearSelectedClips: clearClipSelection,
 		seek,
 	});
 
@@ -461,13 +461,13 @@ export function Timeline() {
 					<DragLine
 						dropTarget={dropTarget}
 						tracks={tracks}
-						isVisible={isDragOver && !dropTarget?.targetElement}
+						isVisible={isDragOver && !dropTarget?.targetClip}
 						headerHeight={timelineHeaderHeight}
 					/>
 					<DragLine
-						dropTarget={isElementDragging ? dragView.dropTarget : null}
+						dropTarget={isClipDragging ? dragView.dropTarget : null}
 						tracks={tracks}
-						isVisible={isElementDragging}
+						isVisible={isClipDragging}
 						headerHeight={timelineHeaderHeight}
 					/>
 
@@ -487,11 +487,11 @@ export function Timeline() {
 								handleRulerTrackingMouseDown={handleRulerMouseDown}
 								handleRulerMouseDown={handlePlayheadRulerMouseDown}
 							/>
-							<TimelineBookmarksRow
+							<TimelineMarkersRow
 								zoomLevel={zoomLevel}
 								dynamicTimelineWidth={dynamicTimelineWidth}
-								dragState={bookmarkDragState}
-								onBookmarkMouseDown={handleBookmarkMouseDown}
+								dragState={markerDragState}
+								onMarkerMouseDown={handleMarkerMouseDown}
 								handleWheel={handleWheel}
 								handleTimelineContentClick={handleRulerClick}
 								handleRulerTrackingMouseDown={handleRulerMouseDown}
@@ -549,8 +549,8 @@ export function Timeline() {
 										zoomLevel={zoomLevel}
 										dragView={dragView}
 										onResizeStart={handleResizeStart}
-										onElementMouseDown={handleElementMouseDown}
-										onElementClick={handleElementClick}
+										onClipMouseDown={handleClipMouseDown}
+										onClipClick={handleClipClick}
 										onTrackMouseDown={(event) => {
 											handleSelectionMouseDown(event);
 											handleTracksMouseDown(event);
@@ -611,27 +611,27 @@ function TrackLabelsPanel({
 	getTrackExpansionHeight: (trackIndex: number) => number;
 }) {
 	const editor = useEditor();
-	const scene = useEditor((e) => e.scenes.getActiveSceneOrNull());
+	const sequence = useEditor((e) => e.sequences.getActiveSequenceOrNull());
 	const tracks = useMemo<TimelineTrack[]>(
 		() =>
-			scene
-				? [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio]
+			sequence
+				? [...sequence.tracks.overlay, sequence.tracks.main, ...sequence.tracks.audio]
 				: [],
-		[scene],
+		[sequence],
 	);
-	const { selectedElements } = useElementSelection();
+	const { selectedClips } = useClipSelection();
 	const tracksWithSelection = useMemo(
-		() => new Set(selectedElements.map((el) => el.trackId)),
-		[selectedElements],
+		() => new Set(selectedClips.map((el) => el.trackId)),
+		[selectedClips],
 	);
 
-	const expandedElementIds = useTimelineStore((s) => s.expandedElementIds);
+	const expandedClipIds = useTimelineStore((s) => s.expandedClipIds);
 	const trackExpandedRowsMap = useMemo(
 		() =>
 			tracks.map((track) =>
-				getTrackExpandedRows({ track, expandedElementIds }),
+				getTrackExpandedRows({ track, expandedClipIds }),
 			),
-		[tracks, expandedElementIds],
+		[tracks, expandedClipIds],
 	);
 
 	return (
@@ -725,8 +725,8 @@ function TimelineTrackRows({
 	zoomLevel,
 	dragView,
 	onResizeStart,
-	onElementMouseDown,
-	onElementClick,
+	onClipMouseDown,
+	onClipClick,
 	onTrackMouseDown,
 	onTrackMouseUp,
 	shouldIgnoreClick,
@@ -735,16 +735,16 @@ function TimelineTrackRows({
 }: {
 	mainTrackId: string | null;
 	zoomLevel: number;
-	dragView: ElementDragView;
+	dragView: ClipDragView;
 	onResizeStart: React.ComponentProps<
 		typeof TimelineTrackContent
 	>["onResizeStart"];
-	onElementMouseDown: React.ComponentProps<
+	onClipMouseDown: React.ComponentProps<
 		typeof TimelineTrackContent
-	>["onElementMouseDown"];
-	onElementClick: React.ComponentProps<
+	>["onClipMouseDown"];
+	onClipClick: React.ComponentProps<
 		typeof TimelineTrackContent
-	>["onElementClick"];
+	>["onClipClick"];
 	onTrackMouseDown: (event: React.MouseEvent) => void;
 	onTrackMouseUp: (event: React.MouseEvent) => void;
 	shouldIgnoreClick: () => boolean;
@@ -752,32 +752,32 @@ function TimelineTrackRows({
 	dropTarget: DropTarget | null;
 }) {
 	const timeline = useEditor((e) => e.timeline);
-	const scene = useEditor((e) => e.scenes.getActiveSceneOrNull());
+	const sequence = useEditor((e) => e.sequences.getActiveSequenceOrNull());
 	const tracks = useMemo<TimelineTrack[]>(
 		() =>
-			scene
-				? [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio]
+			sequence
+				? [...sequence.tracks.overlay, sequence.tracks.main, ...sequence.tracks.audio]
 				: [],
-		[scene],
+		[sequence],
 	);
-	const { selectedElements } = useElementSelection();
+	const { selectedClips } = useClipSelection();
 	const tracksWithSelection = useMemo(
-		() => new Set(selectedElements.map((el) => el.trackId)),
-		[selectedElements],
+		() => new Set(selectedClips.map((el) => el.trackId)),
+		[selectedClips],
 	);
 
-	const expandedElementIds = useTimelineStore((s) => s.expandedElementIds);
+	const expandedClipIds = useTimelineStore((s) => s.expandedClipIds);
 
 	const getTrackExpansionHeight = useCallback(
 		(trackIndex: number) => {
 			const track = tracks[trackIndex];
 			if (!track) return 0;
-			return computeTrackExpansionHeight({ track, expandedElementIds });
+			return computeTrackExpansionHeight({ track, expandedClipIds });
 		},
-		[tracks, expandedElementIds],
+		[tracks, expandedClipIds],
 	);
 
-	const draggingElementIds = useMemo(
+	const draggingClipIds = useMemo(
 		() =>
 			dragView.kind === "dragging"
 			? dragView.memberTimeOffsets
@@ -785,22 +785,22 @@ function TimelineTrackRows({
 		[dragView],
 	);
 	const sortedTracks = useMemo(() => {
-		if (!draggingElementIds)
+		if (!draggingClipIds)
 			return tracks.map((track, index) => ({ track, index }));
 		return [...tracks]
 			.map((track, index) => ({ track, index }))
 			.sort((a, b) => {
-				const aHasDragged = a.track.elements.some((element) =>
-					draggingElementIds.has(element.id),
+				const aHasDragged = a.track.clips.some((clip) =>
+					draggingClipIds.has(clip.id),
 				);
-				const bHasDragged = b.track.elements.some((element) =>
-					draggingElementIds.has(element.id),
+				const bHasDragged = b.track.clips.some((clip) =>
+					draggingClipIds.has(clip.id),
 				);
 				if (aHasDragged) return 1;
 				if (bHasDragged) return -1;
 				return 0;
 			});
-	}, [tracks, draggingElementIds]);
+	}, [tracks, draggingClipIds]);
 
 	return (
 		<>
@@ -822,14 +822,14 @@ function TimelineTrackRows({
 								zoomLevel={zoomLevel}
 								dragView={dragView}
 								onResizeStart={onResizeStart}
-								onElementMouseDown={onElementMouseDown}
-								onElementClick={onElementClick}
+								onClipMouseDown={onClipMouseDown}
+								onClipClick={onClipClick}
 								onTrackMouseDown={onTrackMouseDown}
 								onTrackMouseUp={onTrackMouseUp}
 								shouldIgnoreClick={shouldIgnoreClick}
-								targetElementId={
+								targetClipId={
 									isDragOver
-										? (dropTarget?.targetElement?.elementId ?? null)
+										? (dropTarget?.targetClip?.clipId ?? null)
 										: null
 								}
 							/>
@@ -843,7 +843,7 @@ function TimelineTrackRows({
 								invokeAction("paste-copied");
 							}}
 						>
-							Paste elements
+							Paste clips
 						</ContextMenuItem>
 						<ContextMenuItem
 							icon={<HugeiconsIcon icon={VolumeHighIcon} />}

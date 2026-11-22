@@ -5,7 +5,7 @@ import type {
 	AnimationPath,
 	DiscreteAnimationChannel,
 	DiscreteAnimationKey,
-	ElementAnimations,
+	ClipAnimations,
 	ScalarAnimationChannel,
 	ScalarAnimationKey,
 	ScalarCurveKeyframePatch,
@@ -70,8 +70,8 @@ function hasChannelData({ data }: { data: ChannelData | undefined }): boolean {
 function toAnimation({
 	animations,
 }: {
-	animations: ElementAnimations;
-}): ElementAnimations | undefined {
+	animations: ClipAnimations;
+}): ClipAnimations | undefined {
 	const nextAnimations = Object.fromEntries(
 		Object.entries(animations).filter(
 			([key, data]) => isAnimationStorageKey({ key }) && hasChannelData({ data }),
@@ -87,8 +87,8 @@ function toAnimation({
 function cloneAnimationsState({
 	animations,
 }: {
-	animations: ElementAnimations | undefined;
-}): ElementAnimations {
+	animations: ClipAnimations | undefined;
+}): ClipAnimations {
 	return { ...(animations ?? {}) };
 }
 
@@ -276,7 +276,7 @@ function getChannelData({
 	animations,
 	propertyPath,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 }): ChannelData | undefined {
 	return animations?.[propertyPath];
@@ -464,7 +464,7 @@ export function getChannel({
 	animations,
 	propertyPath,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 }): AnimationChannel | undefined {
 	const data = getChannelData({ animations, propertyPath });
@@ -484,7 +484,7 @@ export function upsertPathKeyframe({
 	channelLayout,
 	coerceValue,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	time: MediaTime;
 	value: ParamValue;
@@ -492,7 +492,7 @@ export function upsertPathKeyframe({
 	keyframeId?: string;
 	channelLayout: ParamChannelLayout;
 	coerceValue: ({ value }: { value: ParamValue }) => ParamValue | null;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	const coercedValue = coerceValue({ value });
 	if (coercedValue === null) {
 		return animations;
@@ -715,10 +715,10 @@ export function setChannel({
 	propertyPath,
 	channel,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	channel: AnimationChannel | undefined;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	return setBindingComponentChannel({
 		animations,
 		propertyPath,
@@ -733,11 +733,11 @@ export function setBindingComponentChannel({
 	componentKey,
 	channel,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	componentKey: string;
 	channel: AnimationChannel | undefined;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	const nextAnimations = cloneAnimationsState({ animations });
 	nextAnimations[propertyPath] = setChannelInData({
 		data: nextAnimations[propertyPath],
@@ -759,12 +759,12 @@ export function updateScalarKeyframeCurve({
 	keyframeId,
 	patch,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	componentKey: string;
 	keyframeId: string;
 	patch: ScalarCurveKeyframePatch;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	const channel = getChannelFromData({
 		data: getChannelData({ animations, propertyPath }),
 		componentKey,
@@ -837,9 +837,9 @@ export function cloneAnimations({
 	animations,
 	shouldRegenerateKeyframeIds = false,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	shouldRegenerateKeyframeIds?: boolean;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	if (!animations) {
 		return undefined;
 	}
@@ -888,9 +888,9 @@ export function clampAnimationsToDuration({
 	animations,
 	duration,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	duration: MediaTime;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	if (!animations || duration <= 0) {
 		return undefined;
 	}
@@ -1233,12 +1233,12 @@ export function splitAnimationsAtTime({
 	splitTime,
 	shouldIncludeSplitBoundary = true,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	splitTime: MediaTime;
 	shouldIncludeSplitBoundary?: boolean;
 }): {
-	leftAnimations: ElementAnimations | undefined;
-	rightAnimations: ElementAnimations | undefined;
+	leftAnimations: ClipAnimations | undefined;
+	rightAnimations: ClipAnimations | undefined;
 } {
 	if (!animations) {
 		return { leftAnimations: undefined, rightAnimations: undefined };
@@ -1288,15 +1288,15 @@ export function splitAnimationsAtTime({
 	};
 }
 
-export function removeElementKeyframe({
+export function removeClipKeyframe({
 	animations,
 	propertyPath,
 	keyframeId,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	keyframeId: string;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	const data = getChannelData({ animations, propertyPath });
 	if (!data) {
 		return animations;
@@ -1321,17 +1321,17 @@ export function removeElementKeyframe({
 	});
 }
 
-export function retimeElementKeyframe({
+export function retimeClipKeyframe({
 	animations,
 	propertyPath,
 	keyframeId,
 	time,
 }: {
-	animations: ElementAnimations | undefined;
+	animations: ClipAnimations | undefined;
 	propertyPath: AnimationPath;
 	keyframeId: string;
 	time: MediaTime;
-}): ElementAnimations | undefined {
+}): ClipAnimations | undefined {
 	const data = getChannelData({ animations, propertyPath });
 	if (!data) {
 		return animations;

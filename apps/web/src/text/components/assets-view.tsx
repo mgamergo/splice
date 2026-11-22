@@ -2,23 +2,23 @@ import { DraggableItem } from "@/components/editor/panels/assets/draggable-item"
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULTS } from "@/timeline/defaults";
-import { buildTextElement } from "@/timeline/element-utils";
+import { buildTextClip } from "@/timeline/clip-utils";
 import type { MediaTime } from "@/wasm";
 
 export function TextView() {
 	const editor = useEditor();
 
 	const handleAddToTimeline = ({ currentTime }: { currentTime: MediaTime }) => {
-		const activeScene = editor.scenes.getActiveScene();
-		if (!activeScene) return;
+		const activeSequence = editor.sequences.getActiveSequence();
+		if (!activeSequence) return;
 
-		const element = buildTextElement({
-			raw: DEFAULTS.text.element,
+		const clip = buildTextClip({
+			raw: DEFAULTS.text.clip,
 			startTime: currentTime,
 		});
 
-		editor.timeline.insertElement({
-			element,
+		editor.timeline.insertClip({
+			clip,
 			placement: { mode: "auto" },
 		});
 	};
@@ -34,8 +34,8 @@ export function TextView() {
 				}
 				dragData={{
 					id: "temp-text-id",
-					type: DEFAULTS.text.element.type,
-					name: DEFAULTS.text.element.name,
+					type: DEFAULTS.text.clip.type,
+					name: DEFAULTS.text.clip.name,
 					content: "Default text",
 				}}
 				aspectRatio={1}

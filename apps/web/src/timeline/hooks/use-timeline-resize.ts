@@ -2,7 +2,7 @@ import { useEffect, useReducer, useState } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
 import { useShiftKey } from "@/hooks/use-shift-key";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { registerCanceller } from "@/editor/cancel-interaction";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@/timeline/controllers/resize-controller";
 import type { ResizeSide } from "@/timeline/group-resize";
 import type { SnapPoint } from "@/timeline/snapping";
-import type { TimelineElement } from "@/timeline";
+import type { TimelineClip } from "@/timeline";
 
 export type { ResizeSide };
 
@@ -27,31 +27,31 @@ export function useTimelineResize({
 	const editor = useEditor();
 	const isShiftHeldRef = useShiftKey();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
-	const { selectedElements } = useElementSelection();
+	const { selectedClips } = useClipSelection();
 
 	const config: ResizeConfig = {
 		zoomLevel,
 		snappingEnabled,
 		isShiftHeld: () => isShiftHeldRef.current,
-		getSceneTracks: () => editor.scenes.getActiveScene().tracks,
+		getSequenceTracks: () => editor.sequences.getActiveSequence().tracks,
 		getCurrentPlayheadTime: () => editor.playback.getCurrentTime(),
 		getActiveProjectFps: () => editor.project.getActive()?.settings.fps ?? null,
-		selectedElements,
+		selectedClips,
 		discardPreview: () => editor.timeline.discardPreview(),
-		previewElements: (updates) =>
-			editor.timeline.previewElements({
-				updates: updates.map(({ trackId, elementId, patch }) => ({
+		previewClips: (updates) =>
+			editor.timeline.previewClips({
+				updates: updates.map(({ trackId, clipId, patch }) => ({
 					trackId,
-					elementId,
-					updates: patch as Partial<TimelineElement>,
+					clipId,
+					updates: patch as Partial<TimelineClip>,
 				})),
 			}),
-		commitElements: (updates) =>
-			editor.timeline.updateElements({
-				updates: updates.map(({ trackId, elementId, patch }) => ({
+		commitClips: (updates) =>
+			editor.timeline.updateClips({
+				updates: updates.map(({ trackId, clipId, patch }) => ({
 					trackId,
-					elementId,
-					patch: patch as Partial<TimelineElement>,
+					clipId,
+					patch: patch as Partial<TimelineClip>,
 				})),
 			}),
 		onSnapPointChange,

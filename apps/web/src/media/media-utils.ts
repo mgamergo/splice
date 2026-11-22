@@ -1,11 +1,11 @@
-import type { MediaAsset, MediaType } from "@/media/types";
+import type { ProjectItem, MediaType } from "@/media/types";
 
 export const SUPPORTS_AUDIO: readonly MediaType[] = ["audio", "video"];
 
 export function mediaSupportsAudio({
 	media,
 }: {
-	media: MediaAsset | null | undefined;
+	media: ProjectItem | null | undefined;
 }): boolean {
 	if (!media) return false;
 	return SUPPORTS_AUDIO.includes(media.type);

@@ -1,10 +1,10 @@
-import type { ElementRef, ElementType, TrackType } from "@/timeline";
+import type { ClipRef, ClipType, TrackType } from "@/timeline";
 import type { MediaTime } from "@/wasm";
 
 export type GroupTrackSection = "overlay" | "main" | "audio";
 
-export interface GroupMember extends ElementRef {
-	elementType: ElementType;
+export interface GroupMember extends ClipRef {
+	clipType: ClipType;
 	duration: MediaTime;
 	timeOffset: MediaTime;
 	trackSection: GroupTrackSection;
@@ -23,15 +23,15 @@ export interface PlannedTrackCreation {
 	index: number;
 }
 
-export interface PlannedElementMove {
+export interface PlannedClipMove {
 	sourceTrackId: string;
 	targetTrackId: string;
-	elementId: string;
+	clipId: string;
 	newStartTime: MediaTime;
 }
 
 export interface GroupMoveResult {
-	moves: PlannedElementMove[];
+	moves: PlannedClipMove[];
 	createTracks: PlannedTrackCreation[];
-	targetSelection: ElementRef[];
+	targetSelection: ClipRef[];
 }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { registerCanceller } from "@/editor/cancel-interaction";
 import type { NormalizedCubicBezier } from "@/animation/types";
-import { useKeyframeSelection } from "@/timeline/hooks/element/use-keyframe-selection";
+import { useKeyframeSelection } from "@/timeline/hooks/clip/use-keyframe-selection";
 import {
 	applyGraphEditorCurvePreview,
 	buildGraphEditorCurvePatches,
@@ -17,7 +17,7 @@ export function useGraphEditorController() {
 	const renderTracks = useEditor(
 		(currentEditor) =>
 			currentEditor.timeline.getPreviewTracks() ??
-			currentEditor.scenes.getActiveScene().tracks,
+			currentEditor.sequences.getActiveSequence().tracks,
 	);
 	const { selectedKeyframes } = useKeyframeSelection();
 	const [open, setOpen] = useState(false);
@@ -38,7 +38,7 @@ export function useGraphEditorController() {
 
 	const stateKey =
 		state.status === "ready"
-			? `${state.trackId}:${state.elementId}:${state.activeComponentKey}:${state.segments
+			? `${state.trackId}:${state.clipId}:${state.activeComponentKey}:${state.segments
 					.map(
 						(segment) =>
 							`${segment.propertyPath}:${segment.keyframeId}:${segment.context.componentKey}`,
@@ -114,13 +114,13 @@ export function useGraphEditorController() {
 							}),
 						animations,
 					),
-				state.element.animations,
+				state.clip.animations,
 			);
-			editor.timeline.previewElements({
+			editor.timeline.previewClips({
 				updates: [
 					{
 						trackId: state.trackId,
-						elementId: state.elementId,
+						clipId: state.clipId,
 						updates: { animations: nextAnimations },
 					},
 				],
@@ -150,7 +150,7 @@ export function useGraphEditorController() {
 					return segment.allContexts.flatMap((context) =>
 						patches.map(({ keyframeId, patch }) => ({
 							trackId: state.trackId,
-							elementId: state.elementId,
+							clipId: state.clipId,
 							propertyPath: segment.propertyPath,
 							componentKey: context.componentKey,
 							keyframeId,

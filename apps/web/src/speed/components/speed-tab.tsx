@@ -12,7 +12,7 @@ import {
 	clampRetimeRate,
 	canMaintainPitch,
 } from "@/retime/rate";
-import type { AudioElement, VideoElement } from "@/timeline";
+import type { AudioClip, VideoClip } from "@/timeline";
 import {
 	Section,
 	SectionContent,
@@ -58,18 +58,18 @@ function buildRetime({
 }
 
 export function SpeedTab({
-	element,
+	clip,
 	trackId,
 }: {
-	element: AudioElement | VideoElement;
+	clip: AudioClip | VideoClip;
 	trackId: string;
 }) {
 	const editor = useEditor();
 	const rate = clampRetimeRate({
-		rate: element.retime?.rate ?? DEFAULT_RETIME_RATE,
+		rate: clip.retime?.rate ?? DEFAULT_RETIME_RATE,
 	});
 	const isPitchPreserveAvailable = canMaintainPitch({ rate });
-	const maintainPitch = element.retime?.maintainPitch ?? false;
+	const maintainPitch = clip.retime?.maintainPitch ?? false;
 	const pendingRateRef = useRef(rate);
 
 	const commitRetime = ({
@@ -79,9 +79,9 @@ export function SpeedTab({
 		rate: number;
 		maintainPitch: boolean;
 	}) => {
-		editor.timeline.updateElementRetime({
+		editor.timeline.updateClipRetime({
 			trackId,
-			elementId: element.id,
+			clipId: clip.id,
 			retime: buildRetime({ rate: nextRate, maintainPitch: nextMaintainPitch }),
 		});
 	};
@@ -91,11 +91,11 @@ export function SpeedTab({
 		parse: (input) => parseSpeedInput({ input }),
 		onPreview: (nextRate) => {
 			pendingRateRef.current = nextRate;
-			editor.timeline.previewElements({
+			editor.timeline.previewClips({
 				updates: [
 					{
 						trackId,
-						elementId: element.id,
+						clipId: clip.id,
 						updates: {
 							retime: buildRetime({ rate: nextRate, maintainPitch }),
 						},
@@ -109,7 +109,7 @@ export function SpeedTab({
 	});
 
 	return (
-		<Section collapsible sectionKey={`${element.id}:speed`}>
+		<Section collapsible sectionKey={`${clip.id}:speed`}>
 			<SectionHeader>
 				<SectionTitle>Speed</SectionTitle>
 			</SectionHeader>

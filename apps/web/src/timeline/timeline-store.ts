@@ -11,8 +11,8 @@ interface TimelineStore {
 	toggleSnapping: () => void;
 	rippleEditingEnabled: boolean;
 	toggleRippleEditing: () => void;
-	expandedElementIds: Set<string>;
-	toggleElementExpanded: (elementId: string) => void;
+	expandedClipIds: Set<string>;
+	toggleClipExpanded: (clipId: string) => void;
 }
 
 export const useTimelineStore = create<TimelineStore>()(
@@ -32,17 +32,17 @@ export const useTimelineStore = create<TimelineStore>()(
 				}));
 			},
 
-			expandedElementIds: new Set<string>(),
+			expandedClipIds: new Set<string>(),
 
-			toggleElementExpanded: (elementId) => {
+			toggleClipExpanded: (clipId) => {
 				set((state) => {
-					const next = new Set(state.expandedElementIds);
-					if (next.has(elementId)) {
-						next.delete(elementId);
+					const next = new Set(state.expandedClipIds);
+					if (next.has(clipId)) {
+						next.delete(clipId);
 					} else {
-						next.add(elementId);
+						next.add(clipId);
 					}
-					return { expandedElementIds: next };
+					return { expandedClipIds: next };
 				});
 			},
 		}),
