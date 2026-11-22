@@ -15,15 +15,18 @@ export class CommandManager {
 	private history: CommandHistoryEntry[] = [];
 	private redoStack: CommandHistoryEntry[] = [];
 	private reactors: Array<() => void> = [];
+	/** Increments on every execute, undo and redo, so readers can detect change. */
+	private revision = 0;
 
 	constructor(private editor: EditorCore) {}
 
 	execute({ command }: { command: Command }): Command {
-		const beforeTracks = this.isRippleEnabled
+		const beforeTracks = this.shouldRipple({ command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
+		this.revision++;
 		this.applyRippleIfEnabled({ beforeTracks });
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
@@ -52,6 +55,7 @@ export class CommandManager {
 		if (this.history.length === 0) return;
 		const entry = this.history.pop();
 		entry?.command.undo();
+		if (entry) this.revision++;
 		if (entry) {
 			// Only restore selection for commands that explicitly changed it.
 			// Commands without selection intent leave selection untouched,
@@ -74,11 +78,12 @@ export class CommandManager {
 			return;
 		}
 
-		const beforeTracks = this.isRippleEnabled
+		const beforeTracks = this.shouldRipple({ command: entry.command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = entry.command.redo();
+		this.revision++;
 		this.applyRippleIfEnabled({ beforeTracks });
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
@@ -88,6 +93,14 @@ export class CommandManager {
 			previousSelection,
 			selectionOverride,
 		});
+	}
+
+	private shouldRipple({ command }: { command: Command }): boolean {
+		return this.isRippleEnabled && !command.ignoresRippleToggle;
+	}
+
+	getRevision(): number {
+		return this.revision;
 	}
 
 	canUndo(): boolean {
