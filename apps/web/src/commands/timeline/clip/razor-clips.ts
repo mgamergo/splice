@@ -6,15 +6,8 @@ import {
 import type { SequenceTracks, TimelineClip } from "@/timeline";
 import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
-import { isRetimableClip } from "@/timeline";
-import { splitAnimationsAtTime } from "@/animation";
-import { getSourceSpanAtClipTime } from "@/retime";
-import {
-	addMediaTime,
-	type MediaTime,
-	roundMediaTime,
-	subMediaTime,
-} from "@/wasm";
+import { razorClip } from "@/timeline/razor";
+import type { MediaTime } from "@/wasm";
 
 export class RazorClipsCommand extends Command {
 	private savedState: SequenceTracks | null = null;
@@ -69,121 +62,22 @@ export class RazorClipsCommand extends Command {
 					return [clip];
 				}
 
-				const effectiveStart = clip.startTime;
-				const effectiveEnd = clip.startTime + clip.duration;
-
-				if (
-					this.splitTime <= effectiveStart ||
-					this.splitTime >= effectiveEnd
-				) {
+				const rightClipId = generateUUID();
+				const cut = razorClip({ clip, at: this.splitTime, rightClipId });
+				if (!cut) {
 					return [clip];
 				}
-
-				const relativeTime = subMediaTime({
-					a: this.splitTime,
-					b: clip.startTime,
-				});
-				const leftVisibleDuration = relativeTime;
-				const rightVisibleDuration = subMediaTime({
-					a: clip.duration,
-					b: relativeTime,
-				});
-				const retimeRef = isRetimableClip(clip)
-					? clip.retime
-					: undefined;
-				// Snap the source-side split point exactly once and derive the right
-				// half from it. Independently rounding both spans (left and total)
-				// would let a 1-tick rounding error desynchronise them, breaking the
-				// invariant `leftSourceSpan + rightSourceSpan == totalSourceSpan`.
-				// See the same discipline in `compute-resize.ts` (snap-once comment).
-				const leftSourceSpan = roundMediaTime({
-					time: getSourceSpanAtClipTime({
-						clipTime: leftVisibleDuration,
-						retime: retimeRef,
-					}),
-				});
-				const totalSourceSpan = roundMediaTime({
-					time: getSourceSpanAtClipTime({
-						clipTime: clip.duration,
-						retime: retimeRef,
-					}),
-				});
-				const rightSourceSpan = subMediaTime({
-					a: totalSourceSpan,
-					b: leftSourceSpan,
-				});
-				const { leftAnimations, rightAnimations } = splitAnimationsAtTime({
-					animations: clip.animations,
-					splitTime: relativeTime,
-					shouldIncludeSplitBoundary: true,
-				});
-				let splitResult: TimelineClip[];
-
-				const leftTrimEnd = addMediaTime({
-					a: clip.trimEnd,
-					b: rightSourceSpan,
-				});
-				const rightTrimStart = addMediaTime({
-					a: clip.trimStart,
-					b: leftSourceSpan,
-				});
-
-				if (this.retainSide === "left") {
-					splitResult = [
-						{
-							...clip,
-							duration: leftVisibleDuration,
-							trimEnd: leftTrimEnd,
-							name: `${clip.name} (left)`,
-							animations: leftAnimations,
-							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
-						},
-					];
-				} else if (this.retainSide === "right") {
-					const newId = generateUUID();
-					this.rightSideClips.push({
-						trackId: track.id,
-						clipId: newId,
-					});
-					splitResult = [
-						{
-							...clip,
-							id: newId,
-							startTime: this.splitTime,
-							duration: rightVisibleDuration,
-							trimStart: rightTrimStart,
-							name: `${clip.name} (right)`,
-							animations: rightAnimations,
-							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
-						},
-					];
-				} else {
-					const secondClipId = generateUUID();
-					this.rightSideClips.push({
-						trackId: track.id,
-						clipId: secondClipId,
-					});
-					splitResult = [
-						{
-							...clip,
-							duration: leftVisibleDuration,
-							trimEnd: leftTrimEnd,
-							name: `${clip.name} (left)`,
-							animations: leftAnimations,
-							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
-						},
-						{
-							...clip,
-							id: secondClipId,
-							startTime: this.splitTime,
-							duration: rightVisibleDuration,
-							trimStart: rightTrimStart,
-							name: `${clip.name} (right)`,
-							animations: rightAnimations,
-							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
-						},
-					];
+				const left = { ...cut.left, name: `${clip.name} (left)` };
+				const right = { ...cut.right, name: `${clip.name} (right)` };
+				if (this.retainSide !== "left") {
+					this.rightSideClips.push({ trackId: track.id, clipId: rightClipId });
 				}
+				const splitResult: TimelineClip[] =
+					this.retainSide === "left"
+						? [left]
+						: this.retainSide === "right"
+							? [right]
+							: [left, right];
 
 				return splitResult;
 			});
