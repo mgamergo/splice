@@ -1,2 +1,2 @@
-[install]
-minimumReleaseAge = 604800 # 7d
+[test]
+preload = ["./apps/web/test/wasm-loader.ts"]
