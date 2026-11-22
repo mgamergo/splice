@@ -85,19 +85,16 @@ export class EditorApi {
 
 	private run({ request }: { request: ApplyRequest }): ApplyResult {
 		const summary: string[] = [];
-		// Each op is built against the state left by the ops before it.
 		const commands = request.ops.map(
-			(op): Command => new DeferredOpCommand(() => {
-				const { command, description } = this.buildCommand({ op });
-				summary.push(description);
-				return command;
-			}),
+			(op, index): Command =>
+				new DeferredOpCommand(() => {
+					const { command, description } = this.buildCommand({ op });
+					summary[index] = description;
+					return command;
+				}),
 		);
-		const batch = new BatchCommand(commands);
+		const batch = new AgentBatchCommand(commands);
 
-		// The creator's ripple toggle must not change what the agent asked for.
-		const rippleWasEnabled = this.editor.command.isRippleEnabled;
-		this.editor.command.isRippleEnabled = false;
 		try {
 			this.editor.command.execute({ command: batch });
 		} catch (error) {
@@ -107,8 +104,6 @@ export class EditorApi {
 				return { ok: false, code: "INVALID_OP", message: error.message, revision };
 			}
 			throw error;
-		} finally {
-			this.editor.command.isRippleEnabled = rippleWasEnabled;
 		}
 		return { ok: true, revision: this.getRevision(), label: request.label, summary };
 	}
@@ -202,7 +197,16 @@ export class EditorApi {
 	}
 }
 
-/** Builds its real command only when executed, against the state at that moment. */
+/** The creator's ripple toggle must not change what the agent asked for. */
+class AgentBatchCommand extends BatchCommand {
+	readonly ignoresRippleToggle = true;
+}
+
+/**
+ * Builds its real command when executed, against the state left by the ops
+ * before it. Redo builds it again, because earlier ops may have created clips
+ * with new ids.
+ */
 class DeferredOpCommand extends Command {
 	private command: Command | null = null;
 
@@ -220,6 +224,6 @@ class DeferredOpCommand extends Command {
 	}
 
 	redo() {
-		return this.command?.redo();
+		return this.execute();
 	}
 }

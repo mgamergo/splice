@@ -21,7 +21,7 @@ export class CommandManager {
 	constructor(private editor: EditorCore) {}
 
 	execute({ command }: { command: Command }): Command {
-		const beforeTracks = this.isRippleEnabled
+		const beforeTracks = this.shouldRipple({ command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
@@ -78,7 +78,7 @@ export class CommandManager {
 			return;
 		}
 
-		const beforeTracks = this.isRippleEnabled
+		const beforeTracks = this.shouldRipple({ command: entry.command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
@@ -93,6 +93,10 @@ export class CommandManager {
 			previousSelection,
 			selectionOverride,
 		});
+	}
+
+	private shouldRipple({ command }: { command: Command }): boolean {
+		return this.isRippleEnabled && !command.ignoresRippleToggle;
 	}
 
 	getRevision(): number {

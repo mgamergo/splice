@@ -1,4 +1,8 @@
-import { Command, type CommandResult } from "@/commands/base-command";
+import {
+	Command,
+	createClipSelectionResult,
+	type CommandResult,
+} from "@/commands/base-command";
 import { EditorCore } from "@/core";
 import type { TSequence } from "@/timeline";
 import { rippleDeleteRanges, type TimeRange } from "@/timeline/ripple-delete";
@@ -31,6 +35,17 @@ export class RippleDeleteRangesCommand extends Command {
 				updates: { tracks: result.tracks, markers: result.markers },
 			}),
 		});
+
+		const remainingClipIds = new Set(
+			[result.tracks.main, ...result.tracks.overlay, ...result.tracks.audio].flatMap((track) =>
+				track.clips.map((clip) => clip.id),
+			),
+		);
+		const selected = editor.selection.getSnapshot().selectedClips;
+		const stillSelected = selected.filter((ref) => remainingClipIds.has(ref.clipId));
+		if (stillSelected.length !== selected.length) {
+			return createClipSelectionResult(stillSelected);
+		}
 		return undefined;
 	}
 

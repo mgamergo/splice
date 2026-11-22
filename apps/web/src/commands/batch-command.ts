@@ -12,8 +12,9 @@ export class BatchCommand extends Command {
 
 		try {
 			for (const command of this.commands) {
-				const result = command.execute();
+				// Recorded before it runs: a command may change state and then throw.
 				executed.push(command);
+				const result = command.execute();
 				if (result?.selection !== undefined) {
 					latestSelectionResult = result;
 				}

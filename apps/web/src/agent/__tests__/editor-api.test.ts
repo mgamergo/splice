@@ -100,6 +100,65 @@ describe("EditorApi.apply", () => {
 	});
 });
 
+describe("EditorApi undo and redo", () => {
+	test("redo rebuilds ops that depend on clips created earlier in the batch", () => {
+		api.apply({
+			expectedRevision: 0,
+			label: "Two cuts",
+			ops: [
+				{ op: "razor", at: { seconds: 10 } },
+				{ op: "razor", at: { seconds: 20 } },
+			],
+		});
+		const spans = () => mainClips().map((clip) => [clip.startTime, clip.duration]);
+		const afterApply = spans();
+		expect(afterApply).toHaveLength(3);
+
+		editor.command.undo();
+		editor.command.redo();
+		expect(spans()).toEqual(afterApply);
+	});
+
+	test("redo ignores the creator's ripple toggle, like apply does", () => {
+		editor.command.isRippleEnabled = true;
+		api.apply({
+			expectedRevision: 0,
+			label: "Remove pause",
+			ops: [{ op: "ripple_delete", ranges: [{ start: { seconds: 2 }, end: { seconds: 5 } }] }],
+		});
+		const afterApply = mainClips().map((clip) => [clip.startTime, clip.duration]);
+
+		editor.command.undo();
+		editor.command.redo();
+		expect(mainClips().map((clip) => [clip.startTime, clip.duration])).toEqual(afterApply);
+	});
+
+	test("ripple delete drops removed clips from the selection", () => {
+		editor.timeline.updateTracks({
+			...editor.sequences.getActiveSequence().tracks,
+			main: {
+				...editor.sequences.getActiveSequence().tracks.main,
+				clips: [videoClip({ id: "a", start: 0, duration: 5 }), videoClip({ id: "b", start: 5, duration: 5 })],
+			},
+		});
+		const trackId = editor.sequences.getActiveSequence().tracks.main.id;
+		editor.selection.setSelectedClips({
+			clips: [
+				{ trackId, clipId: "a" },
+				{ trackId, clipId: "b" },
+			],
+		});
+
+		api.apply({
+			expectedRevision: api.getRevision(),
+			label: "Remove first take",
+			ops: [{ op: "ripple_delete", ranges: [{ start: { seconds: 0 }, end: { seconds: 5 } }] }],
+		});
+
+		expect(editor.selection.getSnapshot().selectedClips).toEqual([{ trackId, clipId: "b" }]);
+	});
+});
+
 describe("EditorApi.getDigest", () => {
 	test("describes tracks, clips with source ranges, markers and the revision", () => {
 		const digest = api.getDigest();

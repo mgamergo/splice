@@ -36,6 +36,7 @@ describe("BatchCommand", () => {
 		]);
 
 		expect(() => batch.execute()).toThrow("c failed");
-		expect(log).toEqual(["do a", "do b", "undo b", "undo a"]);
+		// The failing command is undone too, in case it changed state before throwing.
+		expect(log).toEqual(["do a", "do b", "undo c", "undo b", "undo a"]);
 	});
 });

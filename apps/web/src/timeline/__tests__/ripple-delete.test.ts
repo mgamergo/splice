@@ -26,6 +26,18 @@ describe("rippleDeleteRanges", () => {
 		expect(right).toMatchObject({ startTime: s(2), duration: s(6), trimStart: s(4), trimEnd: s(0) });
 	});
 
+	test("keeps the clip id when only the start of a clip is removed", () => {
+		const result = rippleDeleteRanges({
+			tracks: tracksWith([videoClip({ id: "c1", start: 0, duration: 10 })]),
+			markers: [],
+			ranges: [{ start: s(0), end: s(3) }],
+			generateId,
+		});
+		expect(result.tracks.main.clips).toEqual([
+			expect.objectContaining({ id: "c1", startTime: s(0), duration: s(7), trimStart: s(3) }),
+		]);
+	});
+
 	test("drops clips inside the range and shifts later clips and markers", () => {
 		const result = rippleDeleteRanges({
 			tracks: tracksWith([

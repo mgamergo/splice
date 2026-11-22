@@ -47,7 +47,10 @@ function rippleDeleteClips<TClip extends TimelineClip>({
 			if (cut) pieces.push(cut.left);
 		}
 		if (clipEnd > range.end) {
-			const cut = razorClip({ clip, at: range.end, rightClipId: generateId() });
+			// When nothing of the clip survives before the range, the remaining
+			// piece is still the same clip, so it keeps its id.
+			const rightClipId = pieces.length === 0 ? clip.id : generateId();
+			const cut = razorClip({ clip, at: range.end, rightClipId });
 			if (cut) pieces.push({ ...cut.right, startTime: range.start });
 		}
 		return pieces;
