@@ -813,7 +813,8 @@ export function extractRmsRange({
 	});
 }
 
-function mixAudioChannels({
+/** Mixes one clip into the export buffer at its volume; exported for tests. */
+export function mixAudioChannels({
 	clip,
 	buffer,
 	trimStart,

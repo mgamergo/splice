@@ -59,6 +59,7 @@ export function createTabHandlers({
 			return api.roughCut(params);
 		},
 		"editor.takesList": (params) => api.takesList(params),
+		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>
 			editor.media.getProjectItems().map(summarizeItem),
 		"editor.importItems": (params) => {
