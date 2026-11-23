@@ -28,6 +28,8 @@ const DEFAULT_FONT_SIZE = 8;
 const CAPTION_HOLD_SECONDS = 0.3;
 /** A silence this long between words starts a new caption. */
 const CAPTION_BREAK_GAP_SECONDS = 0.5;
+/** whisper.cpp sometimes gives a word no duration; it still gets shown. */
+const MIN_WORD_SECONDS = 0.08;
 const SENTENCE_END = /[.!?,;:…]["')\]]*$/;
 
 export class CaptionError extends Error {}
@@ -111,16 +113,14 @@ export function mapWordsToTimeline({
 				});
 			for (const word of sourceWords) {
 				const text = word.text.trim();
-				const middle = (word.start + word.end) / 2;
+				const wordEnd = Math.max(word.end, word.start + MIN_WORD_SECONDS);
+				const middle = (word.start + wordEnd) / 2;
 				if (!text || middle < trimStart || middle >= sourceOut) continue;
 				const start = Math.max(
 					clipStart,
 					toTimeline(Math.max(word.start, trimStart)),
 				);
-				const end = Math.min(
-					clipEnd,
-					toTimeline(Math.min(word.end, sourceOut)),
-				);
+				const end = Math.min(clipEnd, toTimeline(Math.min(wordEnd, sourceOut)));
 				if (end > start) words.push({ start, end, text });
 			}
 		}

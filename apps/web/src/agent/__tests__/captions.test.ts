@@ -57,6 +57,32 @@ describe("mapWordsToTimeline", () => {
 		]);
 	});
 
+	test("keeps words whisper.cpp gave no duration", () => {
+		const tracks = tracksWith({});
+		tracks.main = {
+			...tracks.main,
+			clips: [videoClip({ id: "a", start: 0, duration: 5, trimStart: 9 })],
+		};
+		const words = mapWordsToTimeline({
+			tracks,
+			sources: [
+				{
+					projectItemId: "rec",
+					words: [
+						word(9, 9, "Welcome"),
+						word(9, 9, "to"),
+						word(9, 9.15, "Editing"),
+					],
+				},
+			],
+		});
+		expect(rounded(words)).toEqual([
+			[0, 0.08, "Welcome"],
+			[0, 0.08, "to"],
+			[0, 0.15, "Editing"],
+		]);
+	});
+
 	test("captions each kept piece of a split recording in timeline order", () => {
 		const tracks = tracksWith({});
 		tracks.main = {
