@@ -45,11 +45,7 @@ import type {
 	VisualNodeParams,
 } from "./nodes/visual-node";
 
-/**
- * The source frame a video clip shows at `clipTime`. Decoding stops at the
- * clip's out point, so a short cut of a long recording reads only the part
- * it plays (plus keyframe lead-in), not the rest of the file.
- */
+/** The source frame a video clip shows at `clipTime`. */
 function getVideoFrameAt({
 	cache,
 	params,
@@ -58,19 +54,17 @@ function getVideoFrameAt({
 	cache: VideoCache;
 	params: Pick<
 		VideoNode["params"],
-		"mediaId" | "file" | "trimStart" | "retime" | "duration"
+		"mediaId" | "file" | "trimStart" | "retime"
 	>;
 	clipTime: number;
 }) {
-	const toSeconds = (ticks: number) =>
-		mediaTimeToSeconds({ time: roundMediaTime({ time: ticks }) });
-	const sourceTime = (time: number) =>
-		params.trimStart + getSourceTimeAtClipTime({ clipTime: time, retime: params.retime });
+	const sourceTimeTicks =
+		params.trimStart +
+		getSourceTimeAtClipTime({ clipTime, retime: params.retime });
 	return cache.getFrameAt({
 		mediaId: params.mediaId,
 		file: params.file,
-		time: toSeconds(sourceTime(clipTime)),
-		endTime: toSeconds(sourceTime(params.duration)),
+		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
 	});
 }
 
