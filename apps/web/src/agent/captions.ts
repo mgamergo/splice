@@ -405,9 +405,6 @@ export function rebuildCaptions({
 	}
 
 	const seconds = (time: number) => mediaTimeToSeconds({ time: roundMediaTime({ time }) });
-	const words = mapWordsToTimeline({ tracks: content, sources: captions.sources });
-	const startsAt = (time: number) =>
-		words.filter(({ start }) => Math.abs(start - time) < SAME_TIME_SECONDS);
 	let before = previous.clips.filter(
 		(clip) => clip.startTime + clip.duration <= window.start,
 	);
@@ -419,6 +416,10 @@ export function rebuildCaptions({
 		tracks: withoutCaptionTrack({ tracks: sequence.tracks }),
 		sources: captions.sources,
 	});
+	const unanchored = (time: number) =>
+		!oldWords.some(
+			({ start }) => Math.abs(start - seconds(time)) < SAME_TIME_SECONDS,
+		);
 	const keptEnd = Math.max(
 		0,
 		...before.map((clip) => seconds(clip.startTime + clip.duration)),
@@ -427,26 +428,34 @@ export function rebuildCaptions({
 		(clip) =>
 			!before.includes(clip) &&
 			Math.abs(seconds(clip.startTime) - keptEnd) < SAME_TIME_SECONDS &&
-			!oldWords.some(
-				({ start }) =>
-					Math.abs(start - seconds(clip.startTime)) < SAME_TIME_SECONDS,
-			),
+			unanchored(clip.startTime),
 	);
 	const runStart = oldWords.filter(({ start }) => start < keptEnd).at(-1)?.start;
 	if (runCrosses && runStart !== undefined)
 		before = before.filter(
 			(clip) => seconds(clip.startTime) < runStart - SAME_TIME_SECONDS,
 		);
-	const after = previous.clips
+	const kept = previous.clips
 		.filter((clip) => clip.startTime >= window.end)
-		.map((clip) => ({
-			...clip,
-			startTime: roundMediaTime({ time: clip.startTime + window.delta }),
-		}))
 		.sort((a, b) => a.startTime - b.startTime);
-	// A staggered caption starts at no word's start: drop the run's tail.
-	while (after.length && !startsAt(seconds(after[0].startTime)).length)
-		after.shift();
+	// The same on the far edge: a staggered caption that continues straight
+	// after a caption the edit replaced belongs to a run being rebuilt.
+	while (
+		kept.length &&
+		unanchored(kept[0].startTime) &&
+		previous.clips.some(
+			(clip) =>
+				!kept.includes(clip) &&
+				Math.abs(
+					seconds(clip.startTime + clip.duration) - seconds(kept[0].startTime),
+				) < SAME_TIME_SECONDS,
+		)
+	)
+		kept.shift();
+	const after = kept.map((clip) => ({
+		...clip,
+		startTime: roundMediaTime({ time: clip.startTime + window.delta }),
+	}));
 	// Fresh captions fill the gap between the kept ones, including any that
 	// straddled the window's edges, from only the words heard in the gap.
 	const from = Math.max(

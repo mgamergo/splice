@@ -457,7 +457,10 @@ describe("EditorApi captions", () => {
 describe("rebuildCaptions", () => {
 	// Two words heard together at 1.0 s show one after another: "w1" at
 	// 1.0–1.2 s and "w2" at 1.2–1.4 s. "z" follows at 5 s.
-	function stackedSequence({ correct = false }: { correct?: boolean } = {}) {
+	function stackedSequence({
+		correct = false,
+		moveZ = false,
+	}: { correct?: boolean; moveZ?: boolean } = {}) {
 		const content = tracksWith({});
 		content.main = {
 			...content.main,
@@ -474,22 +477,20 @@ describe("rebuildCaptions", () => {
 		};
 		const canvasSize = { width: 1080, height: 1920 };
 		const built = withCaptionTrack({ tracks: content, captions, canvasSize }).tracks;
+		// The creator may have corrected "w2", or dragged "z" a little later
+		// than its word.
+		const edit = (clip: TextClip): TextClip =>
+			correct && clip.params.content === "w2"
+				? { ...clip, params: { ...clip.params, content: "W2!" } }
+				: moveZ && clip.params.content === "z"
+					? { ...clip, startTime: s(5.1), params: { ...clip.params, content: "Z!" } }
+					: clip;
 		const sequence = {
 			...buildDefaultSequence({ name: "S", isMain: true }),
-			// The creator may have corrected "w2" by hand.
 			tracks: {
 				...built,
 				overlay: built.overlay.map((track) =>
-					track.type === "text" && correct
-						? {
-								...track,
-								clips: track.clips.map((clip) =>
-									clip.params.content === "w2"
-										? { ...clip, params: { ...clip.params, content: "W2!" } }
-										: clip,
-								),
-							}
-						: track,
+					track.type === "text" ? { ...track, clips: track.clips.map(edit) } : track,
 				),
 			},
 			captions,
@@ -519,6 +520,11 @@ describe("rebuildCaptions", () => {
 	test("keeps a hand-corrected run of stacked words the window doesn't touch", () => {
 		const { texts } = stackedSequence({ correct: true });
 		expect(texts({ start: s(2), end: s(3), delta: 0 })).toEqual(["w1", "W2!", "z"]);
+	});
+
+	test("keeps a caption moved off its word's start outside the window", () => {
+		const { texts } = stackedSequence({ moveZ: true });
+		expect(texts({ start: s(2), end: s(3), delta: 0 })).toEqual(["w1", "w2", "Z!"]);
 	});
 
 	test("rebuilds a run of stacked words whose head the window removed", () => {
