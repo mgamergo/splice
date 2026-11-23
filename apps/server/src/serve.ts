@@ -29,7 +29,7 @@ export async function serve({
 			dev,
 		});
 	} catch (error) {
-		running.stop();
+		await running.stop();
 		throw error;
 	}
 	const host = webHost;
@@ -43,9 +43,9 @@ export async function serve({
 		},
 	});
 
-	const shutdown = () => {
+	const shutdown = async () => {
 		host.stop();
-		running.stop();
+		await running.stop();
 		process.exit(0);
 	};
 	process.on("SIGINT", shutdown);
@@ -56,7 +56,7 @@ export async function serve({
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
 		host.stop();
-		running.stop();
+		await running.stop();
 		process.exit(1);
 	}
 	console.log(`\nSplice is running. Data folder: ${config.root}`);

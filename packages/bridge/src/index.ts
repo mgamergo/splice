@@ -35,7 +35,12 @@ export function isTabMethod(method: string): method is TabMethod {
 }
 
 /** Methods the server answers itself. */
-export const SERVER_METHODS = ["server.status", "footage.list"] as const;
+export const SERVER_METHODS = [
+	"server.status",
+	"footage.list",
+	"transcribe.start",
+	"transcribe.status",
+] as const;
 export type ServerMethod = (typeof SERVER_METHODS)[number];
 
 export function isServerMethod(method: string): method is ServerMethod {
@@ -112,6 +117,28 @@ export interface ItemSummary {
 export interface ImportItemsResult {
 	imported: ItemSummary[];
 	failed: Array<{ path: string; error: string }>;
+}
+
+/** Source-relative timing in seconds. Word probabilities are estimates from whisper.cpp. */
+export interface TranscriptWord {
+	start: number;
+	end: number;
+	text: string;
+	probability: number;
+}
+
+export interface Transcript {
+	/** Relative to Footage. */
+	path: string;
+	durationSeconds: number;
+	language: string;
+	model: string;
+	segments: Array<{
+		start: number;
+		end: number;
+		text: string;
+		words: TranscriptWord[];
+	}>;
 }
 
 export interface ServerStatus {

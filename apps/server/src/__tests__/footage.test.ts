@@ -27,7 +27,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-	server.stop();
+	await server.stop();
 	await rm(root, { recursive: true, force: true });
 });
 

@@ -32,14 +32,34 @@ bun run splice      # or `bun run splice -- --dev` to run the editor with hot re
 To let an agent edit, register `splice mcp` as a stdio MCP server in your agent (T3 Code, Codex, Claude Code):
 
 ```json
-{ "command": "bun", "args": ["<path to this repo>/apps/server/src/cli.ts", "mcp"] }
+{
+	"command": "bun",
+	"args": ["<path to this repo>/apps/server/src/cli.ts", "mcp"]
+}
 ```
 
-`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list` and `items_import`.
+`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe` and `transcribe_status`.
 
 Put recordings in the `Footage` folder. `items_import` adds them to the open project as project items that reference the files in place; nothing is copied into the browser. Files you drop or upload in the editor are still stored in the browser, as before. `bun run splice link` prints the editor link of a running `splice`, for example one that `splice mcp` started. The editor header shows whether an agent is connected, and **Stop agent** refuses its edits until you allow them again.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `SPLICE_ROOT` | `D:\Splice` (Windows), `~/Splice` | Data folder |
-| `SPLICE_PORT` | `7420` | Port you open; the editor's own server uses the next one |
+| Variable      | Default                           | Meaning                                                  |
+| ------------- | --------------------------------- | -------------------------------------------------------- |
+| `SPLICE_ROOT` | `D:\Splice` (Windows), `~/Splice` | Data folder                                              |
+| `SPLICE_PORT` | `7420`                            | Port you open; the editor's own server uses the next one |
+
+## Transcribe a recording
+
+Call `transcribe` with a path from `footage_list`. It starts a job and returns its ID, or returns a cached result. Set `waitSeconds` to wait up to 30 seconds. Poll `transcribe_status` by `jobId` or `path`. A completed result includes `cachePath` for the full JSON and a page of up to 100 segments by default. Pass `nextOffset` as `offset` to continue, or set `includeWords` to include word timings in a page. Times are seconds from the start of the recording. You can delete `Cache/transcripts` to regenerate transcripts.
+
+Install FFmpeg on PATH or put its executable in `<SPLICE_ROOT>/Tools/`. Splice downloads the checksum-pinned Whisper `base.en` model on first use. It's intended for English voiceovers and keeps CPU fallback practical. Set `SPLICE_WHISPER_MODEL` to a local ggml model file before starting the server to use another model.
+
+On Windows x64, Splice tries the pinned upstream CUDA bundle and then the CPU bundle if CUDA fails. The CUDA 12.4 build ships forward-compatible PTX. Use a current NVIDIA driver with CUDA 12.8 or later support for the RTX 5050. For a native CUDA build, set `SPLICE_WHISPER_BIN` to its `whisper-cli.exe`, or put the executable and its DLLs in `<SPLICE_ROOT>/Tools/whisper/`.
+
+On Linux, build the CPU CLI with CMake and a C++ compiler, then launch Splice with its absolute path:
+
+```sh
+git clone --depth 1 --branch v1.9.2 https://github.com/ggml-org/whisper.cpp.git
+cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF
+cmake --build whisper.cpp/build --target whisper-cli -j 4
+SPLICE_WHISPER_BIN="$PWD/whisper.cpp/build/bin/whisper-cli" bun run splice
+```

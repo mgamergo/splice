@@ -18,12 +18,12 @@ const TOKEN = "test-token";
 const running: RunningServer[] = [];
 const sockets: WebSocket[] = [];
 
-afterEach(() => {
+afterEach(async () => {
 	for (const socket of sockets.splice(0)) {
 		socket.close();
 	}
 	for (const server of running.splice(0)) {
-		server.stop();
+		await server.stop();
 	}
 });
 

@@ -39,6 +39,8 @@ describe("splice mcp tools", () => {
 			"items_list",
 			"sequence_apply",
 			"sequence_get",
+			"transcribe",
+			"transcribe_status",
 		]);
 	});
 
