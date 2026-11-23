@@ -28,13 +28,21 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
 		: "";
 }
 
+/** The tightening fields the rough_cut tool fills in when the agent omits them. */
+const tightenDefaults = {
+	falseStarts: [],
+	pausePaddingSeconds: 0.2,
+	pauses: "auto",
+	removeFillerWords: false,
+};
+
 describe("splice mcp tools", () => {
 	test("lists the tools", async () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
-			"detect_pauses",
 			"captions_add",
+			"detect_pauses",
 			"editor_status",
 			"footage_list",
 			"items_import",
@@ -163,6 +171,7 @@ describe("splice mcp tools", () => {
 			"editor.roughCut",
 			{
 				...roughCutArgs,
+				...tightenDefaults,
 				captions: {
 					sources: [
 						{
@@ -187,7 +196,11 @@ describe("splice mcp tools", () => {
 			"editor.getState",
 			"editor.roughCut",
 		]);
-		expect(calls.at(-1)?.[1]).toEqual({ ...roughCutArgs, captions: undefined });
+		expect(calls.at(-1)?.[1]).toEqual({
+			...roughCutArgs,
+			...tightenDefaults,
+			captions: undefined,
+		});
 	});
 
 	test("captions_add asks for transcripts in batches of 200 paths", async () => {
@@ -381,7 +394,10 @@ describe("loudness tools", () => {
 		expect(result.isError).toBeFalsy();
 		expect(calls).toEqual([
 			["editor.getState", undefined],
-			["editor.roughCut", { expectedRevision: 3, sections, plan: true }],
+			[
+				"editor.roughCut",
+				{ expectedRevision: 3, sections, ...tightenDefaults, plan: true },
+			],
 			[
 				"loudness.measure",
 				{ path: "quiet.wav", ranges: [{ start: 2, end: 9 }] },
@@ -395,6 +411,7 @@ describe("loudness tools", () => {
 				{
 					expectedRevision: 3,
 					sections,
+					...tightenDefaults,
 					sourceGains: [
 						{ projectItemId: "rec-1", gainDb: 14 },
 						{ projectItemId: "rec-2", gainDb: 1.45 },
@@ -491,6 +508,7 @@ describe("loudness tools", () => {
 			{
 				expectedRevision: 3,
 				sections,
+				...tightenDefaults,
 				captions,
 				sourceGains: [
 					{ projectItemId: "rec-1", gainDb: 14 },

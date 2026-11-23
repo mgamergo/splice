@@ -218,9 +218,9 @@ export class EditorApi {
 			captions,
 			plan,
 			sourceGains,
-			...request
+			...cutPlan
 		} = parsed.data;
-		const source = this.findRoughCutSource(request);
+		const source = this.findRoughCutSource(cutPlan);
 		if ("ok" in source) return source;
 		const names = new Set(
 			this.editor.sequences.getSequences().map(({ name }) => name),
@@ -233,7 +233,7 @@ export class EditorApi {
 			const cut = buildRoughCut({
 				source,
 				name,
-				plan: request,
+				plan: cutPlan,
 				projectItems,
 				sliverDuration: resolveTimeSpec({
 					spec: { frame: 2 },

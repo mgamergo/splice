@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RoughCutSources, Transcript } from "@splice/bridge";
+import { roughCutTabRequestSchema } from "@splice/bridge/ops";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -614,4 +615,48 @@ test("passes explicit pauses through and refuses fillers without a transcript", 
 			fillerCuts: unused,
 		}),
 	).toEqual({ plan: invalid });
+});
+
+test("the plan and apply passes tighten alike and keep captions and gains for the tab", async () => {
+	const captions = {
+		sources: [
+			{ projectItemId: "a", words: [{ start: 0, end: 0.4, text: "Hi" }] },
+		],
+	};
+	const resolve = (pass: object) =>
+		resolveRoughCutRequest({
+			params: { ...request, captions, ...pass },
+			listSources: async () => ({
+				ok: true,
+				sequenceId: "raw",
+				items: [{ id: "a", name: "A", path: "a.mp4" }],
+			}),
+			detect: async () => ({
+				path: "a.mp4",
+				durationSeconds: 10,
+				noiseDb: -35,
+				minSeconds: 0.6,
+				cached: true,
+				hasAudio: true,
+				transcribed: true,
+				pauses: [{ start: 4, end: 5 }],
+				pauseSeconds: 1,
+				fillerWords: null,
+			}),
+			fillerCuts: async () => [],
+		});
+	const sourceGains = [{ projectItemId: "a", gainDb: 3 }];
+	const planned = await resolve({ plan: true });
+	const applied = await resolve({ sourceGains });
+	const tighten = {
+		...request,
+		pausePaddingSeconds: 0.2,
+		pauses: [{ projectItemId: "a", sourceIn: 4, sourceOut: 5 }],
+		fillerWords: [],
+		captions,
+	};
+	expect(planned).toEqual({ plan: { ...tighten, plan: true } });
+	expect(applied).toEqual({ plan: { ...tighten, sourceGains } });
+	if (!("plan" in applied)) throw new Error("expected a plan");
+	expect(roughCutTabRequestSchema.safeParse(applied.plan).success).toBe(true);
 });
