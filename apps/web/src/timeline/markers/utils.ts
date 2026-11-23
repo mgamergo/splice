@@ -1,6 +1,12 @@
 import type { Marker } from "@/timeline";
 import type { FrameRate } from "opencut-wasm";
-import { addMediaTime, roundFrameTime, type MediaTime } from "@/wasm";
+import {
+	addMediaTime,
+	minMediaTime,
+	maxMediaTime,
+	roundFrameTime,
+	type MediaTime,
+} from "@/wasm";
 
 function markerTimeEqual({
 	markerTime,
@@ -73,7 +79,7 @@ export function updateMarkerInArray({
 }: {
 	markers: Marker[];
 	frameTime: MediaTime;
-	updates: Partial<Omit<Marker, "time">>;
+	updates: Partial<Pick<Marker, "note" | "color" | "duration">>;
 }): Marker[] {
 	const index = findMarkerIndex({ markers, frameTime });
 	if (index === -1) {
@@ -90,12 +96,16 @@ export function moveMarkerInArray({
 	markers,
 	fromTime,
 	toTime,
+	markerId,
 }: {
 	markers: Marker[];
 	fromTime: MediaTime;
 	toTime: MediaTime;
+	markerId?: string;
 }): Marker[] {
-	const index = findMarkerIndex({ markers, frameTime: fromTime });
+	const index = markers.findIndex((marker) =>
+		markerId ? marker.id === markerId : !marker.id && marker.time === fromTime,
+	);
 	if (index === -1) {
 		return markers;
 	}
@@ -141,5 +151,20 @@ export function getMarkersActiveAtTime({
 				? addMediaTime({ a: start, b: marker.duration })
 				: start;
 		return time >= start && time <= end;
+	});
+}
+
+export function clampMarkerDragTime({
+	time,
+	duration,
+	markerTime,
+}: {
+	time: MediaTime;
+	duration: MediaTime;
+	markerTime: MediaTime;
+}): MediaTime {
+	return minMediaTime({
+		a: time,
+		b: maxMediaTime({ a: duration, b: markerTime }),
 	});
 }

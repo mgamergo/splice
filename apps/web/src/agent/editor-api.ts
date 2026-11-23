@@ -3,6 +3,12 @@ import { type ApplyRequest, applyRequestSchema, type EditOp } from "@splice/brid
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";
+import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
+import {
+	RemovalTakeError,
+	resolveTake,
+} from "@/timeline/markers/removal-takes";
+import { generateUUID } from "@/utils/id";
 import { AddMarkerCommand } from "@/commands/sequence/add-marker";
 import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
 import { DeleteClipsCommand } from "@/commands/timeline/clip/delete-clips";
@@ -119,8 +125,17 @@ export class EditorApi {
 		} catch (error) {
 			// BatchCommand has already undone the ops that ran before the failure.
 			const revision = this.getRevision();
-			if (error instanceof InvalidOpError || error instanceof TimeSpecError) {
-				return { ok: false, code: "INVALID_OP", message: error.message, revision };
+			if (
+				error instanceof InvalidOpError ||
+				error instanceof TimeSpecError ||
+				error instanceof RemovalTakeError
+			) {
+				return {
+					ok: false,
+					code: "INVALID_OP",
+					message: error.message,
+					revision,
+				};
 			}
 			throw error;
 		}
@@ -179,15 +194,37 @@ export class EditorApi {
 			case "add_marker": {
 				const at = time(op.at);
 				const duration = op.duration ? time(op.duration) : undefined;
+				const data = op.data;
+				if (data) {
+					const projectItems = this.editor.media.getProjectItems();
+					for (const take of [data.bestTake, ...data.badTakes]) {
+						resolveTake({ take, projectItems });
+					}
+				}
+				const fields = {
+					time: at,
+					...(op.note ? { note: op.note } : {}),
+					...(duration ? { duration } : {}),
+				};
 				return {
-					command: new AddMarkerCommand({
-						time: at,
-						...(op.note ? { note: op.note } : {}),
-						...(duration ? { duration } : {}),
-					}),
+					command: new AddMarkerCommand(
+						data ? { ...fields, id: generateUUID(), data } : fields,
+					),
 					description: `added marker at ${formatSeconds({ time: at })}`,
 				};
 			}
+			case "restore_takes":
+			case "swap_take":
+				return {
+					command: new EditRemovalMarkerCommand({
+						editor: this.editor,
+						edit: op,
+					}),
+					description:
+						op.op === "restore_takes"
+							? `restored stored takes at marker ${op.markerId}`
+							: `swapped take ${op.takeIndex + 1} at marker ${op.markerId}`,
+				};
 		}
 	}
 

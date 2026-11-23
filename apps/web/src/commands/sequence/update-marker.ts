@@ -16,7 +16,7 @@ export class UpdateMarkerCommand extends Command {
 		updates,
 	}: {
 		time: MediaTime;
-		updates: Partial<Omit<Marker, "time">>;
+		updates: Partial<Pick<Marker, "note" | "color" | "duration">>;
 	}) {
 		super();
 		this.time = time;
@@ -24,7 +24,7 @@ export class UpdateMarkerCommand extends Command {
 	}
 
 	private time: MediaTime;
-	private updates: Partial<Omit<Marker, "time">>;
+	private updates: Partial<Pick<Marker, "note" | "color" | "duration">>;
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();

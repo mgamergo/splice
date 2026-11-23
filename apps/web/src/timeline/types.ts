@@ -2,6 +2,7 @@ import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
+import type { RemovalMarkerData } from "@splice/bridge/ops";
 import type { MediaTime } from "@/wasm";
 
 export type ClipRef = {
@@ -9,12 +10,21 @@ export type ClipRef = {
 	clipId: string;
 };
 
-export interface Marker {
+interface MarkerFields {
 	time: MediaTime;
 	note?: string;
 	color?: string;
 	duration?: MediaTime;
 }
+
+export type RemovalMarker = MarkerFields & {
+	id: string;
+	data: RemovalMarkerData;
+};
+
+export type Marker =
+	| (MarkerFields & { id?: never; data?: never })
+	| RemovalMarker;
 
 export interface TSequence {
 	id: string;

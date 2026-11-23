@@ -2,52 +2,31 @@ import { Command, type CommandResult } from "@/commands/base-command";
 import { EditorCore } from "@/core";
 import type { TSequence } from "@/timeline";
 import { updateSequenceInArray } from "@/timeline/sequences";
-import { getFrameTime, moveMarkerInArray } from "@/timeline/markers/index";
+import { moveMarkerInArray } from "@/timeline/markers/index";
 import type { MediaTime } from "@/wasm";
 
 export class MoveMarkerCommand extends Command {
 	private savedSequences: TSequence[] | null = null;
 
-	constructor({
-		fromTime,
-		toTime,
-	}: {
-		fromTime: MediaTime;
-		toTime: MediaTime;
-	}) {
+	constructor(
+		private readonly move: {
+			fromTime: MediaTime;
+			toTime: MediaTime;
+			markerId?: string;
+		},
+	) {
 		super();
-		this.fromTime = fromTime;
-		this.toTime = toTime;
 	}
-
-	private fromTime: MediaTime;
-	private toTime: MediaTime;
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
 		const activeSequence = editor.sequences.getActiveSequence();
-		const activeProject = editor.project.getActive();
-
-		if (!activeSequence || !activeProject) {
-			return;
-		}
-
 		const sequences = editor.sequences.getSequences();
 		this.savedSequences = [...sequences];
 
-		const fromFrameTime = getFrameTime({
-			time: this.fromTime,
-			fps: activeProject.settings.fps,
-		});
-		const toFrameTime = getFrameTime({
-			time: this.toTime,
-			fps: activeProject.settings.fps,
-		});
-
 		const updatedMarkers = moveMarkerInArray({
 			markers: activeSequence.markers,
-			fromTime: fromFrameTime,
-			toTime: toFrameTime,
+			...this.move,
 		});
 
 		const updatedSequences = updateSequenceInArray({
@@ -57,6 +36,7 @@ export class MoveMarkerCommand extends Command {
 		});
 
 		editor.sequences.setSequences({ sequences: updatedSequences });
+		return undefined;
 	}
 
 	undo(): void {

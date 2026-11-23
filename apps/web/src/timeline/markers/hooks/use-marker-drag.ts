@@ -15,6 +15,7 @@ import {
 	resolveTimelineSnap,
 	type SnapPoint,
 } from "@/timeline/snapping";
+import { clampMarkerDragTime } from "../utils";
 import { getMarkerSnapPoints } from "../snap-source";
 import { getClipEdgeSnapPoints } from "@/timeline/clip-snap-source";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
@@ -25,11 +26,13 @@ import { roundFrameTime, type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 export interface MarkerDragState {
 	isDragging: boolean;
 	markerTime: MediaTime | null;
+	markerId?: string;
 	currentTime: MediaTime;
 }
 
 interface PendingMarkerDrag {
 	markerTime: MediaTime;
+	markerId?: string;
 	startMouseX: number;
 	startMouseY: number;
 }
@@ -49,9 +52,7 @@ export function useMarkerDrag({
 }: UseMarkerDragProps) {
 	const editor = useEditor();
 	const isShiftHeldRef = useShiftKey();
-	const tracks = editor.sequences.getActiveSequence().tracks;
-	const activeSequence = editor.sequences.getActiveSequence();
-	const markers = activeSequence?.markers ?? [];
+	const { tracks, markers } = editor.sequences.getActiveSequence();
 	const playheadTime = editor.playback.getCurrentTime();
 	const duration = editor.timeline.getTotalDuration();
 
@@ -67,14 +68,17 @@ export function useMarkerDrag({
 	const startDrag = useCallback(
 		({
 			markerTime,
+			markerId,
 			initialCurrentTime,
 		}: {
 			markerTime: MediaTime;
+			markerId?: string;
 			initialCurrentTime: MediaTime;
 		}) => {
 			setDragState({
 				isDragging: true,
 				markerTime,
+				markerId,
 				currentTime: initialCurrentTime,
 			});
 		},
@@ -140,7 +144,7 @@ export function useMarkerDrag({
 			if (!scrollContainer) return;
 
 			if (isPendingDrag && pendingDragRef.current) {
-				const { startMouseX, startMouseY, markerTime } =
+				const { startMouseX, startMouseY, markerTime, markerId } =
 					pendingDragRef.current;
 				const deltaX = Math.abs(event.clientX - startMouseX);
 				const deltaY = Math.abs(event.clientY - startMouseY);
@@ -162,8 +166,11 @@ export function useMarkerDrag({
 					zoomLevel,
 					scrollLeft,
 				});
-				const clampedTime =
-					mouseTime > duration ? duration : mouseTime;
+				const clampedTime = clampMarkerDragTime({
+					time: mouseTime,
+					duration,
+					markerTime,
+				});
 				const frameSnappedTime = roundFrameTime({
 					time: clampedTime,
 					fps: activeProject.settings.fps,
@@ -175,6 +182,7 @@ export function useMarkerDrag({
 
 				startDrag({
 					markerTime,
+					markerId,
 					initialCurrentTime: initialTime,
 				});
 				pendingDragRef.current = null;
@@ -194,8 +202,11 @@ export function useMarkerDrag({
 				zoomLevel,
 				scrollLeft,
 			});
-			const clampedTime =
-				mouseTime > duration ? duration : mouseTime;
+			const clampedTime = clampMarkerDragTime({
+				time: mouseTime,
+				duration,
+				markerTime: dragState.markerTime,
+			});
 			const frameSnappedTime = roundFrameTime({
 				time: clampedTime,
 				fps: activeProject.settings.fps,
@@ -237,12 +248,16 @@ export function useMarkerDrag({
 				return;
 			}
 
-			const clampedTime =
-				dragState.currentTime > duration ? duration : dragState.currentTime;
+			const clampedTime = clampMarkerDragTime({
+				time: dragState.currentTime,
+				duration,
+				markerTime: dragState.markerTime,
+			});
 
 			editor.sequences.moveMarker({
 				fromTime: dragState.markerTime,
 				toTime: clampedTime,
+				markerId: dragState.markerId,
 			});
 
 			endDrag();
@@ -255,6 +270,7 @@ export function useMarkerDrag({
 		dragState.isDragging,
 		dragState.markerTime,
 		dragState.currentTime,
+		dragState.markerId,
 		duration,
 		endDrag,
 		onSnapPointChange,
@@ -283,6 +299,7 @@ export function useMarkerDrag({
 
 			pendingDragRef.current = {
 				markerTime: marker.time,
+				markerId: marker.id,
 				startMouseX: event.clientX,
 				startMouseY: event.clientY,
 			};

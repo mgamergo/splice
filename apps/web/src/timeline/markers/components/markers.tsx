@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { EditorCore } from "@/core";
 import { useEditor } from "@/editor/use-editor";
+import { RemovalMarkerPopover } from "./removal-marker-popover";
 import type { MarkerDragState } from "../hooks/use-marker-drag";
 import { DEFAULT_TIMELINE_MARKER_COLOR } from "@/timeline/components/theme";
 import { TIMELINE_MARKER_ROW_HEIGHT_PX } from "@/timeline/components/layout";
@@ -38,6 +39,8 @@ const MIN_MARKER_WIDTH_PX = 2;
 const MARKER_WIDTH_PX = 12;
 const MARKER_HEIGHT_PX = 15;
 const MARKER_HALF_WIDTH_PX = MARKER_WIDTH_PX / 2;
+const REMOVAL_MARKER_CLIP_PATH = "polygon(50% 4%, 100% 50%, 50% 96%, 0% 50%)";
+const REMOVAL_MARKER_COLOR = "#fbbf24";
 const MARKER_CLIP_PATH =
 	"polygon(50% 100%, 12% 72%, 12% 10%, 88% 10%, 88% 72%)";
 
@@ -85,6 +88,7 @@ export function TimelineMarkersRow({
 		<div
 			className="relative flex-1 overflow-hidden"
 			style={{ height: TIMELINE_MARKER_ROW_HEIGHT_PX }}
+			onWheel={handleWheel}
 		>
 			<button
 				className="relative w-full cursor-default select-none border-0 bg-transparent p-0"
@@ -94,27 +98,21 @@ export function TimelineMarkersRow({
 				}}
 				aria-label="Timeline ruler"
 				type="button"
-				onWheel={handleWheel}
-				onClick={(event) => {
-					if (!event.currentTarget.contains(event.target as Node)) return;
-					handleTimelineContentClick(event);
-				}}
+				onClick={handleTimelineContentClick}
 				onMouseDown={(event) => {
-					if (!event.currentTarget.contains(event.target as Node)) return;
 					handleRulerMouseDown(event);
 					handleRulerTrackingMouseDown(event);
 				}}
-			>
-				{markers.map((marker) => (
-					<TimelineMarker
-						key={`marker-${marker.time}`}
-						marker={marker}
-						zoomLevel={zoomLevel}
-						dragState={dragState}
-						onMarkerMouseDown={onMarkerMouseDown}
-					/>
-				))}
-			</button>
+			/>
+			{markers.map((marker) => (
+				<TimelineMarker
+					key={marker.id ?? `marker-${marker.time}`}
+					marker={marker}
+					zoomLevel={zoomLevel}
+					dragState={dragState}
+					onMarkerMouseDown={onMarkerMouseDown}
+				/>
+			))}
 		</div>
 	);
 }
@@ -140,7 +138,8 @@ function TimelineMarker({
 	const isDragging =
 		dragState.isDragging &&
 		dragState.markerTime !== null &&
-		dragState.markerTime === marker.time;
+		dragState.markerTime === marker.time &&
+		dragState.markerId === marker.id;
 
 	const displayTime = isDragging ? dragState.currentTime : marker.time;
 	const time = marker.time;
@@ -154,14 +153,17 @@ function TimelineMarker({
 	const left = timelineTimeToSnappedPixels({ time: displayTime, zoomLevel });
 	const markerLeft = left - MARKER_HALF_WIDTH_PX;
 	const rightHalfLeft = MARKER_HALF_WIDTH_PX + Math.max(durationWidth, 0);
-	const iconColor = marker.color ?? DEFAULT_TIMELINE_MARKER_COLOR;
+	const iconColor = marker.data
+		? REMOVAL_MARKER_COLOR
+		: (marker.color ?? DEFAULT_TIMELINE_MARKER_COLOR);
+	const clipPath = marker.data ? REMOVAL_MARKER_CLIP_PATH : MARKER_CLIP_PATH;
 
 	const handleSeek = () => seekToMarkerTime({ editor, time });
 
 	const handleClick = (event: React.MouseEvent) => {
 		event.preventDefault();
 		event.stopPropagation();
-		if (event.detail === 2) {
+		if (marker.data || event.detail === 2) {
 			setIsPopoverOpen(true);
 		} else {
 			handleSeek();
@@ -171,7 +173,8 @@ function TimelineMarker({
 	const handleKeyDown = (event: React.KeyboardEvent) => {
 		if (event.key !== "Enter" && event.key !== " ") return;
 		event.preventDefault();
-		handleSeek();
+		if (marker.data) setIsPopoverOpen(true);
+		else handleSeek();
 	};
 
 	const handleMouseDown = (event: React.MouseEvent) => {
@@ -189,9 +192,17 @@ function TimelineMarker({
 						left: `${markerLeft}px`,
 						width: `${markerWidth}px`,
 					}}
-					aria-label={`Marker at ${formatNumberForDisplay({ value: mediaTimeToSeconds({ time }), fractionDigits: 1 })}s`}
+					aria-label={`${marker.data ? `Removal marker: ${marker.data.sectionName}` : "Marker"} at ${formatNumberForDisplay({ value: mediaTimeToSeconds({ time }), fractionDigits: 1 })}s`}
+					aria-haspopup={marker.data ? "dialog" : undefined}
+					aria-expanded={marker.data ? isPopoverOpen : undefined}
 					type="button"
 					onMouseDown={handleMouseDown}
+					onContextMenu={(event) => {
+						if (!marker.data) return;
+						event.preventDefault();
+						event.stopPropagation();
+						setIsPopoverOpen(true);
+					}}
 					onClick={handleClick}
 					onKeyDown={handleKeyDown}
 				>
@@ -220,7 +231,7 @@ function TimelineMarker({
 							style={{
 								width: MARKER_WIDTH_PX,
 								height: MARKER_HEIGHT_PX,
-								clipPath: MARKER_CLIP_PATH,
+								clipPath,
 								backgroundColor: "hsl(var(--background))",
 							}}
 						/>
@@ -231,7 +242,7 @@ function TimelineMarker({
 								left: 1,
 								width: MARKER_WIDTH_PX - 2,
 								height: MARKER_HEIGHT_PX - 2,
-								clipPath: MARKER_CLIP_PATH,
+								clipPath,
 								backgroundColor: iconColor,
 							}}
 						/>
@@ -250,7 +261,7 @@ function TimelineMarker({
 								left: -MARKER_HALF_WIDTH_PX,
 								width: MARKER_WIDTH_PX,
 								height: MARKER_HEIGHT_PX,
-								clipPath: MARKER_CLIP_PATH,
+								clipPath,
 								backgroundColor: "hsl(var(--background))",
 							}}
 						/>
@@ -261,7 +272,7 @@ function TimelineMarker({
 								left: 1 - MARKER_HALF_WIDTH_PX,
 								width: MARKER_WIDTH_PX - 2,
 								height: MARKER_HEIGHT_PX - 2,
-								clipPath: MARKER_CLIP_PATH,
+								clipPath,
 								backgroundColor: iconColor,
 							}}
 						/>
@@ -273,14 +284,20 @@ function TimelineMarker({
 				align="start"
 				side="bottom"
 				sideOffset={8}
-				onOpenAutoFocus={(event) => event.preventDefault()}
+				onOpenAutoFocus={(event) => {
+					if (!marker.data) event.preventDefault();
+				}}
 			>
-				<MarkerPopoverContent
-					marker={marker}
-					time={time}
-					timelineDuration={duration}
-					onPopoverClose={() => setIsPopoverOpen(false)}
-				/>
+				{marker.data ? (
+					<RemovalMarkerPopover marker={marker} />
+				) : (
+					<MarkerPopoverContent
+						marker={marker}
+						time={time}
+						timelineDuration={duration}
+						onPopoverClose={() => setIsPopoverOpen(false)}
+					/>
+				)}
 			</PopoverContent>
 		</Popover>
 	);
@@ -321,8 +338,8 @@ function MarkerPopoverContent({
 		note,
 		color,
 		duration,
-	}: Partial<Omit<Marker, "time">>) => {
-		const updates: Partial<Omit<Marker, "time">> = {};
+	}: Partial<Pick<Marker, "note" | "color" | "duration">>) => {
+		const updates: Partial<Pick<Marker, "note" | "color" | "duration">> = {};
 		if (note !== undefined && note !== marker.note) updates.note = note;
 		if (
 			color !== undefined &&
