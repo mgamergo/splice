@@ -735,6 +735,7 @@ test("restoring the later of two collapsed sections keeps the earlier one ahead 
 		}),
 	).toMatchObject({ ok: true });
 	const [a, b] = active().markers;
+	if (!a?.id || !b?.id) throw new Error("Expected two removal markers");
 	expect([a.time, b.time]).toEqual([s(4), s(4)]);
 	expect([a.data?.sectionName, b.data?.sectionName]).toEqual(["A", "B"]);
 	expect(apply({ op: "restore_takes", markerId: b.id })).toMatchObject({
