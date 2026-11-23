@@ -152,9 +152,9 @@ export function ffmpegInput({ source }: { source: string }): string[] {
 	];
 }
 
-/** Reads only local files in the formats Footage holds, mapping the first audio stream. */
+/** Reads only local files in the formats Footage holds. */
 export function ffmpegInputArgs({ source }: { source: string }): string[] {
-	return ["-nostats", ...ffmpegInput({ source }), "-map", "0:a:0"];
+	return ["-nostats", ...ffmpegInput({ source })];
 }
 
 export function ffmpegArgs({
@@ -170,6 +170,8 @@ export function ffmpegArgs({
 		"-loglevel",
 		"error",
 		...ffmpegInputArgs({ source }),
+		"-map",
+		"0:a:0",
 		"-af",
 		SOURCE_TIMELINE_FILTER,
 		"-ac",

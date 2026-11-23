@@ -72,7 +72,7 @@ const volumes = () =>
 		"volume" in clip.params ? clip.params.volume : undefined,
 	]);
 
-test("collects each recording's audible source ranges, merged, with its Footage path", () => {
+test("collects each recording's audible source ranges, one per clip, with its Footage path", () => {
 	const clip = ({
 		id,
 		start,
@@ -95,6 +95,7 @@ test("collects each recording's audible source ranges, merged, with its Footage 
 		...diskItem("browser"),
 		file: new File([], "browser.mov"),
 	};
+	const missingItem: ProjectItem = { ...diskItem("gone"), missing: true };
 	const tracks = {
 		...active().tracks,
 		main: {
@@ -108,30 +109,48 @@ test("collects each recording's audible source ranges, merged, with its Footage 
 					...clip({ id: "d", start: 7, duration: 1, trimStart: 0 }),
 					mediaId: "browser",
 				},
+				// Plays the same audio as "a" again, so it counts again.
+				clip({ id: "e", start: 8, duration: 2, trimStart: 4 }),
+				{
+					...clip({ id: "f", start: 10, duration: 1, trimStart: 0 }),
+					mediaId: "gone",
+				},
 			] satisfies TimelineClip[],
 		},
 	};
 	expect(
 		collectAudioSources({
 			tracks,
-			projectItems: [diskItem(first), browserItem],
+			projectItems: [diskItem(first), browserItem, missingItem],
 		}),
 	).toEqual([
 		{
 			projectItemId: first,
 			path: `Day 1/${first}.mov`,
 			noiseReduction: false,
-			clipIds: ["a", "b", "c"],
+			missing: false,
+			clipIds: ["a", "b", "c", "e"],
 			ranges: [
 				{ start: 0, end: 3 },
-				{ start: 4, end: 7 },
+				{ start: 4, end: 6 },
+				{ start: 4, end: 6 },
+				{ start: 6, end: 7 },
 			],
 		},
 		{
 			projectItemId: "browser",
 			path: null,
 			noiseReduction: false,
+			missing: false,
 			clipIds: ["d"],
+			ranges: [{ start: 0, end: 1 }],
+		},
+		{
+			projectItemId: "gone",
+			path: "Day 1/gone.mov",
+			noiseReduction: false,
+			missing: true,
+			clipIds: ["f"],
 			ranges: [{ start: 0, end: 1 }],
 		},
 	]);
@@ -154,6 +173,7 @@ test("a planned rough cut reports what it keeps without changing anything", () =
 				projectItemId: first,
 				path: `Day 1/${first}.mov`,
 				noiseReduction: false,
+				missing: false,
 				clipIds: [expect.any(String)],
 				ranges: [{ start: 0, end: 8 }],
 			},
@@ -161,6 +181,7 @@ test("a planned rough cut reports what it keeps without changing anything", () =
 				projectItemId: second,
 				path: `Day 1/${second}.mov`,
 				noiseReduction: false,
+				missing: false,
 				clipIds: [expect.any(String)],
 				ranges: [{ start: 2, end: 12 }],
 			},

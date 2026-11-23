@@ -3,13 +3,13 @@ import {
 	CLIP_GAIN_DB,
 	DEFAULT_TARGET_LUFS,
 	MAX_TRUE_PEAK_DBTP,
-	mergeSourceRanges,
 	type SourceGain,
 	type SourceRange,
+	sortSourceRanges,
 	sourceRangeSchema,
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -26,10 +26,10 @@ export const measureLoudnessInput = {
 	ranges: z
 		.array(sourceRangeSchema)
 		.min(1)
-		.max(2000)
+		.max(5000)
 		.optional()
 		.describe(
-			"Source ranges in seconds to measure together, e.g. what a cut keeps. Defaults to the whole file.",
+			"Source ranges in seconds to measure together, e.g. what a cut keeps, one per clip: a range listed twice counts twice. Defaults to the whole file.",
 		),
 	noiseReduction: z
 		.boolean()
@@ -44,6 +44,7 @@ const measureSchema = z.object(measureLoudnessInput);
 export const loudnessMeasurementSchema = z.object({
 	/** Null when no audio passes the gate: silence, or less than 400 ms. */
 	integratedLufs: z.number().nullable(),
+	/** Null for silence. Measured even when the audio is too short to gate. */
 	truePeakDbtp: z.number().nullable(),
 	lraLu: z.number(),
 });
@@ -63,7 +64,7 @@ export function loudnessCacheKey({
 	noiseReduction?: boolean;
 }): string {
 	// Bump the version when the measurement changes.
-	const key: unknown[] = [1, path, size, mtimeMs, ranges];
+	const key: unknown[] = [2, path, size, mtimeMs, ranges];
 	if (noiseReduction) key.push({ noiseReduction: NOISE_REDUCTION_VERSION });
 	return createHash("sha256").update(JSON.stringify(key)).digest("hex");
 }
@@ -72,32 +73,119 @@ function seconds(value: number): string {
 	return value.toFixed(6);
 }
 
-export function ebur128Args({
-	source,
-	ranges,
-}: {
-	source: string;
-	ranges: SourceRange[] | null;
-}): string[] {
-	const filters = [SOURCE_TIMELINE_FILTER];
-	if (ranges) {
-		const selected = ranges
-			.map(({ start, end }) => `gte(t,${seconds(start)})*lt(t,${seconds(end)})`)
-			.join("+");
-		// Short frames keep each range boundary within 10 ms at 48 kHz.
-		filters.push("asetnsamples=n=480:p=0", `aselect='${selected}'`);
+/**
+ * Longest stretch of repeated audio measured in one piece. FFmpeg holds every
+ * copy but the one it's measuring in memory, so long repeats are measured in turns.
+ */
+export const MAX_REPEATED_SECONDS = 30;
+
+/** A stretch of source audio, and how many of the ranges play it. */
+export interface PlayedSegment {
+	start: number;
+	end: number;
+	copies: number;
+}
+
+/**
+ * Splits the source from 0 to the last range's end into stretches played the
+ * same number of times, in source order. Stretches no range plays have 0 copies.
+ */
+export function playedSegments(ranges: SourceRange[]): PlayedSegment[] {
+	const edges = new Map<number, number>();
+	for (const { start, end } of ranges) {
+		edges.set(start, (edges.get(start) ?? 0) + 1);
+		edges.set(end, (edges.get(end) ?? 0) - 1);
 	}
+	const segments: PlayedSegment[] = [];
+	let copies = 0;
+	let from = 0;
+	for (const [at, change] of [...edges].sort(([a], [b]) => a - b)) {
+		const last = segments.at(-1);
+		if (at > from) {
+			if (last && last.copies === copies) last.end = at;
+			else segments.push({ start: from, end: at, copies });
+		}
+		copies += change;
+		from = at;
+	}
+	return segments.flatMap((segment) => {
+		if (segment.copies <= 1) return [segment];
+		const pieces: PlayedSegment[] = [];
+		for (let start = segment.start; start < segment.end; ) {
+			const end = Math.min(segment.end, start + MAX_REPEATED_SECONDS);
+			pieces.push({ ...segment, start, end });
+			start = end;
+		}
+		return pieces;
+	});
+}
+
+const METER =
 	// The editor plays mono sources on both stereo channels, so measure them
 	// that way too. Per-frame lines go to the verbose level, below what is read.
-	filters.push("ebur128=peak=true:dualmono=true:framelog=verbose");
+	"ebur128=peak=true:dualmono=true:framelog=verbose[out]";
+
+/**
+ * The FFmpeg filter graph that measures the ranges played back to back.
+ * `asegment` cuts at exact samples and passes each sample on once, so even a
+ * thousand ranges cost one decode. Repeated stretches are split into copies.
+ */
+export function ebur128Graph(ranges: SourceRange[] | null): string {
+	const source = `[0:a:0]${SOURCE_TIMELINE_FILTER}`;
+	if (!ranges) return `${source},${METER}`;
+	const segments = playedSegments(ranges);
+	// One more output than cut points: the audio after the last range.
+	const labels = [...segments, null].map((_, index) => `[s${index}]`);
+	const statements = [
+		`${source},asegment=timestamps=${segments.map(({ end }) => seconds(end)).join("|")}${labels.join("")}`,
+		`${labels.at(-1)}anullsink`,
+	];
+	const played: string[] = [];
+	for (const [index, { copies }] of segments.entries()) {
+		const label = labels[index];
+		if (copies === 0) statements.push(`${label}anullsink`);
+		else if (copies === 1) played.push(label);
+		else {
+			const copyLabels = Array.from(
+				{ length: copies },
+				(_, copy) => `[s${index}c${copy}]`,
+			);
+			statements.push(`${label}asplit=${copies}${copyLabels.join("")}`);
+			played.push(...copyLabels);
+		}
+	}
+	statements.push(
+		`${played.join("")}concat=n=${played.length}:v=0:a=1,${METER}`,
+	);
+	return statements.join(";\n");
+}
+
+/**
+ * FFmpeg 6 reads a filter graph file with -filter_complex_script, which FFmpeg 8
+ * dropped for the -/filter_complex form FFmpeg 7 added. A file keeps long range
+ * lists under Windows' 32,767-character command-line limit.
+ */
+export type GraphFileOption = "-filter_complex_script" | "-/filter_complex";
+
+export function ebur128Args({
+	source,
+	graphFile,
+	graphFileOption,
+}: {
+	source: string;
+	graphFile: string;
+	graphFileOption: GraphFileOption;
+}): string[] {
 	return [
 		"-nostdin",
 		"-hide_banner",
 		"-loglevel",
 		"info",
 		...ffmpegInputArgs({ source }),
-		"-af",
-		filters.join(","),
+		graphFileOption,
+		graphFile,
+		"-map",
+		"[out]",
 		"-f",
 		"null",
 		"-",
@@ -118,10 +206,13 @@ export function parseEbur128Summary(log: string): LoudnessMeasurement {
 	const integrated = read(/\bI:\s+(-inf|-?\d+(?:\.\d+)?) LUFS/);
 	const lra = read(/\bLRA:\s+(-?\d+(?:\.\d+)?) LU\b/) ?? 0;
 	const peak = read(/\bPeak:\s+(-inf|-?\d+(?:\.\d+)?) dBFS/);
-	// -70 LUFS is the absolute gate: nothing was loud enough to measure, and
-	// the peak of no samples reads as 0 dBFS.
-	if (integrated === null || integrated <= -70)
+	// The peak of no samples at all reads as 0 dBFS.
+	if (log.includes("Output file is empty"))
 		return { integratedLufs: null, truePeakDbtp: null, lraLu: 0 };
+	// -70 LUFS is the absolute gate: nothing was loud enough, or long enough,
+	// to measure. The true peak still holds, and short clips still need its cap.
+	if (integrated === null || integrated <= -70)
+		return { integratedLufs: null, truePeakDbtp: peak, lraLu: 0 };
 	return { integratedLufs: integrated, truePeakDbtp: peak, lraLu: lra };
 }
 
@@ -133,8 +224,8 @@ export const PEAK_READING_MARGIN_DB = 0.05;
 
 export interface LoudnessGain {
 	gainDb: number;
-	/** Integrated loudness after the gain. */
-	expectedLufs: number;
+	/** Integrated loudness after the gain, or null when it can't be measured. */
+	expectedLufs: number | null;
 	expectedTruePeakDbtp: number | null;
 	/** What kept the gain short of the target, if anything. */
 	limitedBy: "true_peak" | "max_gain" | null;
@@ -142,7 +233,8 @@ export interface LoudnessGain {
 
 /**
  * The clip gain that brings a measurement to the target, short of pushing the
- * true peak above `maxTruePeakDbtp`. Null when there is nothing to measure.
+ * true peak above `maxTruePeakDbtp`. Audio too short to gate keeps its source
+ * level unless its peak is over the cap. Null for silence.
  */
 export function loudnessGain({
 	measurement,
@@ -154,8 +246,8 @@ export function loudnessGain({
 	maxTruePeakDbtp?: number;
 }): LoudnessGain | null {
 	const { integratedLufs, truePeakDbtp } = measurement;
-	if (integratedLufs === null) return null;
-	const wanted = targetLufs - integratedLufs;
+	if (integratedLufs === null && truePeakDbtp === null) return null;
+	const wanted = integratedLufs === null ? 0 : targetLufs - integratedLufs;
 	const headroom =
 		truePeakDbtp === null
 			? Infinity
@@ -172,18 +264,24 @@ export function loudnessGain({
 	const round = (value: number) => Math.round(value * 10) / 10;
 	return {
 		gainDb,
-		expectedLufs: round(integratedLufs + gainDb),
+		expectedLufs:
+			integratedLufs === null ? null : round(integratedLufs + gainDb),
 		expectedTruePeakDbtp:
 			truePeakDbtp === null ? null : round(truePeakDbtp + gainDb),
 		limitedBy,
 	};
 }
 
+/** The Footage file a measurement asked for isn't there. */
+export class MissingFootageError extends Error {}
+
 export type MeasureLoudness = (request: {
 	path: string;
 	ranges: SourceRange[];
 	noiseReduction: boolean;
 }) => Promise<LoudnessMeasurement>;
+
+const MISSING = "Missing from Footage, so playback skips it. Relink it first.";
 
 export type SourceLoudness = {
 	projectItemId: string;
@@ -207,7 +305,13 @@ export async function planSourceGains({
 	const sourceGains: SourceGain[] = [];
 	const sources: SourceLoudness[] = [];
 	// One at a time: each measurement already decodes a whole file.
-	for (const { projectItemId, path, ranges, noiseReduction } of audioSources) {
+	for (const {
+		projectItemId,
+		path,
+		missing,
+		ranges,
+		noiseReduction,
+	} of audioSources) {
 		if (path === null) {
 			sources.push({
 				projectItemId,
@@ -218,15 +322,21 @@ export async function planSourceGains({
 			});
 			continue;
 		}
-		const measured = await measure({ path, ranges, noiseReduction });
+		if (missing) {
+			sources.push({ projectItemId, path, noiseReduction, skipped: MISSING });
+			continue;
+		}
+		let measured: LoudnessMeasurement;
+		try {
+			measured = await measure({ path, ranges, noiseReduction });
+		} catch (error) {
+			if (!(error instanceof MissingFootageError)) throw error;
+			sources.push({ projectItemId, path, noiseReduction, skipped: MISSING });
+			continue;
+		}
 		const gain = loudnessGain({ measurement: measured, targetLufs });
 		if (!gain) {
-			sources.push({
-				projectItemId,
-				path,
-				noiseReduction,
-				skipped: "Silent or shorter than 400 ms.",
-			});
+			sources.push({ projectItemId, path, noiseReduction, skipped: "Silent." });
 			continue;
 		}
 		sourceGains.push({ projectItemId, gainDb: gain.gainDb });
@@ -248,6 +358,31 @@ async function readCache(
 	}
 }
 
+const graphFileOptions = new Map<string, Promise<GraphFileOption>>();
+
+/** Which way this FFmpeg reads a filter graph file, checked once per binary. */
+function graphFileOption(command: string): Promise<GraphFileOption> {
+	let option = graphFileOptions.get(command);
+	if (!option) {
+		option = (async () => {
+			const help = Bun.spawn([command, "-hide_banner", "-h", "long"], {
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "ignore",
+				windowsHide: true,
+			});
+			const text = await new Response(help.stdout).text();
+			await help.exited;
+			return text.includes("-filter_complex_script")
+				? "-filter_complex_script"
+				: "-/filter_complex";
+		})();
+		graphFileOptions.set(command, option);
+		void option.catch(() => graphFileOptions.delete(command));
+	}
+	return option;
+}
+
 export async function runEbur128({
 	root,
 	source,
@@ -260,16 +395,34 @@ export async function runEbur128({
 	signal: AbortSignal;
 }): Promise<LoudnessMeasurement> {
 	const command = await findFfmpeg({ root });
-	const summary: string[] = [];
-	await run({
-		command,
-		args: ebur128Args({ source, ranges }),
-		signal,
-		onLine(line) {
-			if (summary.length > 0 || line.includes("Summary:")) summary.push(line);
-		},
-	});
-	return parseEbur128Summary(summary.join("\n"));
+	const cacheDir = join(root, "Cache", "loudness");
+	await mkdir(cacheDir, { recursive: true });
+	const job = await mkdtemp(join(cacheDir, ".graph-"));
+	try {
+		const graphFile = join(job, "graph.txt");
+		await writeFile(graphFile, ebur128Graph(ranges));
+		const log: string[] = [];
+		await run({
+			command,
+			args: ebur128Args({
+				source,
+				graphFile,
+				graphFileOption: await graphFileOption(command),
+			}),
+			signal,
+			onLine(line) {
+				if (
+					log.length > 0 ||
+					line.includes("Summary:") ||
+					line.includes("Output file is empty")
+				)
+					log.push(line);
+			},
+		});
+		return parseEbur128Summary(log.join("\n"));
+	} finally {
+		await rm(job, { recursive: true, force: true });
+	}
 }
 
 /**
@@ -353,7 +506,7 @@ export function createLoudnessMeter({
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const { path, noiseReduction: denoised = false } = parsed.data;
 			const ranges = parsed.data.ranges
-				? mergeSourceRanges(parsed.data.ranges)
+				? sortSourceRanges(parsed.data.ranges)
 				: null;
 			const target = { path, ranges, denoised };
 			const { source, key, cachePath } = await identify(target);

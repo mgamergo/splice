@@ -42,6 +42,13 @@ const takeSchema = z.union([
 const takePlacementSchema = z.strictObject({
 	trackId: z.string().min(1),
 	audioTrackId: z.string().min(1).optional(),
+	/**
+	 * The clip volume in dB the take played at when it was swapped out, so it
+	 * keeps its recording's gain even once no other clip of that recording is left.
+	 */
+	volume: z.number().optional(),
+	/** Whether the take played noise-reduced when it was swapped out. */
+	noiseReduction: z.boolean().optional(),
 });
 
 export const removalMarkerDataSchema = z.strictObject({
@@ -253,18 +260,16 @@ export const sourceRangeSchema = z
 		message: "End must be after start",
 	});
 
-/** Sorts and merges source ranges, so the same audio always reads the same. */
-export function mergeSourceRanges(
+/**
+ * Sorts source ranges, so the same audio always reads the same. Repeats and
+ * overlaps stay: audio that plays twice counts twice toward loudness.
+ */
+export function sortSourceRanges(
 	ranges: Array<z.infer<typeof sourceRangeSchema>>,
 ): Array<z.infer<typeof sourceRangeSchema>> {
-	const merged: Array<z.infer<typeof sourceRangeSchema>> = [];
-	for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
-		const last = merged.at(-1);
-		if (last && range.start <= last.end)
-			last.end = Math.max(last.end, range.end);
-		else merged.push({ ...range });
-	}
-	return merged;
+	return ranges
+		.map(({ start, end }) => ({ start, end }))
+		.sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
 /** The audible audio of one project item in a sequence, in source seconds. */
@@ -274,8 +279,10 @@ export const audioSourceSchema = z.strictObject({
 	path: z.string().nullable(),
 	/** Whether these clips play the noise-reduced render. */
 	noiseReduction: z.boolean(),
+	/** The file has left Footage, so playback skips it until it's relinked. */
+	missing: z.boolean(),
 	clipIds: z.array(z.string()),
-	/** Sorted, merged source ranges. */
+	/** Sorted source ranges, one per clip, so repeated audio counts each time. */
 	ranges: z.array(sourceRangeSchema),
 });
 

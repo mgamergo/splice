@@ -67,6 +67,8 @@ export function noiseScanArgs({ source }: { source: string }): string[] {
 		"-loglevel",
 		"info",
 		...ffmpegInputArgs({ source }),
+		"-map",
+		"0:a:0",
 		"-af",
 		[
 			`aresample=${SCAN_SAMPLE_RATE}:async=1:first_pts=0`,
@@ -128,6 +130,8 @@ export function denoiseArgs({
 		return [
 			...head,
 			...ffmpegInputArgs({ source }),
+			"-map",
+			"0:a:0",
 			"-af",
 			[SOURCE_TIMELINE_FILTER, RUMBLE_FILTER, TRACKED_DENOISE_FILTER].join(","),
 			...tail,

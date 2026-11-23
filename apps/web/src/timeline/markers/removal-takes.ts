@@ -86,45 +86,42 @@ interface TakeAudio {
 }
 
 /**
- * The clip volume and noise reduction each take's project item mostly plays
- * with in the sequence, so restored and swapped takes keep a recording's gain,
- * such as the one loudness normalization set, and its noise reduction, instead
- * of jumping back to the source audio.
+ * The clip volume and noise reduction each project item's audible clips mostly
+ * play with, so restored and swapped takes keep a recording's gain, such as the
+ * one loudness normalization set, and its noise reduction, instead of jumping
+ * back to the source audio.
  */
-function takeAudio({
-	tracks,
-	takes,
+function itemAudio({
+	clips,
+	items,
 }: {
-	tracks: SequenceTracks;
-	takes: ResolvedRange[];
+	clips: TimelineClip[];
+	items: Map<string, ProjectItem>;
 }): Map<string, TakeAudio> {
-	const items = new Map(takes.map(({ item }) => [item.id, item]));
 	const counts = new Map<
 		string,
 		Map<string, { audio: TakeAudio; count: number }>
 	>();
-	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
-		for (const clip of track.clips) {
-			if (
-				!canClipHaveAudio(clip) ||
-				!hasMediaId(clip) ||
-				hasAnimatedVolume({ clip })
-			)
-				continue;
-			const item = items.get(clip.mediaId);
-			if (!item || !doesClipHaveEnabledAudio({ clip, projectItem: item }))
-				continue;
-			const audio = {
-				volume: getClipVolume({ clip }),
-				noiseReduction: isNoiseReduced({ clip }),
-			};
-			const seen = counts.get(item.id) ?? new Map();
-			const key = `${audio.volume}:${audio.noiseReduction}`;
-			const entry = seen.get(key) ?? { audio, count: 0 };
-			entry.count++;
-			seen.set(key, entry);
-			counts.set(item.id, seen);
-		}
+	for (const clip of clips) {
+		if (
+			!canClipHaveAudio(clip) ||
+			!hasMediaId(clip) ||
+			hasAnimatedVolume({ clip })
+		)
+			continue;
+		const item = items.get(clip.mediaId);
+		if (!item || !doesClipHaveEnabledAudio({ clip, projectItem: item }))
+			continue;
+		const audio = {
+			volume: getClipVolume({ clip }),
+			noiseReduction: isNoiseReduced({ clip }),
+		};
+		const seen = counts.get(item.id) ?? new Map();
+		const key = `${audio.volume}:${audio.noiseReduction}`;
+		const entry = seen.get(key) ?? { audio, count: 0 };
+		entry.count++;
+		seen.set(key, entry);
+		counts.set(item.id, seen);
 	}
 	return new Map(
 		Array.from(counts, ([id, seen]) => [
@@ -136,14 +133,55 @@ function takeAudio({
 	);
 }
 
+const allClips = (tracks: SequenceTracks) =>
+	[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap(
+		(track): TimelineClip[] => track.clips,
+	);
+
+function takesAudio({
+	tracks,
+	takes,
+}: {
+	tracks: SequenceTracks;
+	takes: ResolvedRange[];
+}): Map<string, TakeAudio> {
+	return itemAudio({
+		clips: allClips(tracks),
+		items: new Map(takes.map(({ item }) => [item.id, item])),
+	});
+}
+
+/**
+ * A take's audio: how its recording plays elsewhere in the sequence, else how
+ * it played when it was swapped out.
+ */
+function takeAudio({
+	take,
+	audioByItem,
+	placement,
+}: {
+	take: ResolvedRange;
+	audioByItem: Map<string, TakeAudio>;
+	placement?: TakePlacement;
+}): TakeAudio | undefined {
+	const audio = audioByItem.get(take.item.id);
+	if (audio) return audio;
+	if (placement?.volume === undefined && !placement?.noiseReduction)
+		return undefined;
+	return {
+		volume: placement.volume ?? 0,
+		noiseReduction: placement.noiseReduction === true,
+	};
+}
+
 function createTakeClip({
 	take,
 	at,
-	audioByItem,
+	audio,
 }: {
 	take: ResolvedRange;
 	at: MediaTime;
-	audioByItem: Map<string, TakeAudio>;
+	audio: TakeAudio | undefined;
 }): VideoClip | AudioClip {
 	const sourceDuration = mediaTimeFromSeconds({
 		seconds: take.item.duration ?? 0,
@@ -158,7 +196,6 @@ function createTakeClip({
 	if (clip.type !== "video" && clip.type !== "audio") {
 		throw new RemovalTakeError("Takes require a video or audio source.");
 	}
-	const audio = audioByItem.get(take.item.id);
 	return {
 		...clip,
 		...(audio && {
@@ -559,7 +596,7 @@ export function restoreTakeClips({
 		)?.id;
 	const audioTrack = (id?: string) =>
 		tracks.audio.find((track) => track.id === id)?.id;
-	const audioByItem = takeAudio({
+	const audioByItem = takesAudio({
 		tracks,
 		takes: takes.flatMap(({ take }) => take),
 	});
@@ -570,7 +607,7 @@ export function restoreTakeClips({
 			const clip = createTakeClip({
 				take: range,
 				at: end,
-				audioByItem,
+				audio: takeAudio({ take: range, audioByItem, placement }),
 			});
 			end = roundMediaTime({ time: end + clip.duration });
 			if (clip.type === "audio") {
@@ -764,14 +801,18 @@ export function swapTakeClips({
 
 	const video: PlacedClip<VideoClip>[] = [];
 	const audio: PlacedClip<AudioClip>[] = [];
-	const audioByItem = takeAudio({ tracks, takes: chosen });
+	const audioByItem = takesAudio({ tracks, takes: chosen });
 	let replacementEnd = start;
 	let videoIndex = 0;
 	let audioIndex = 0;
 	for (const [index, range] of chosen.entries()) {
 		const placement = chosenPlacements?.[index];
 		const clip = {
-			...createTakeClip({ take: range, at: replacementEnd, audioByItem }),
+			...createTakeClip({
+				take: range,
+				at: replacementEnd,
+				audio: takeAudio({ take: range, audioByItem, placement }),
+			}),
 			bestTakeMarkerIds: [marker.id],
 		};
 		replacementEnd = roundMediaTime({ time: replacementEnd + clip.duration });
@@ -874,10 +915,21 @@ export function swapTakeClips({
 	// that would otherwise be pruned once it's empty.
 	return {
 		previousPlacements: parts.map((part): TakePlacement => {
-			const audioTrackId = audioForVideo.get(part)?.[0]?.trackId;
+			const linked = audioForVideo.get(part) ?? [];
+			const audioTrackId = linked[0]?.trackId;
+			const clipIds = new Set(
+				[part, ...linked].flatMap(({ clipIds }) => clipIds),
+			);
+			const audio = itemAudio({
+				clips: allClips(tracks).filter(({ id }) => clipIds.has(id)),
+				items: new Map([[part.range.item.id, part.range.item]]),
+			}).get(part.range.item.id);
 			return {
 				trackId: part.trackId,
 				...(audioTrackId ? { audioTrackId } : {}),
+				// 0 dB and no noise reduction are the defaults, so need no record.
+				...(audio?.volume ? { volume: audio.volume } : {}),
+				...(audio?.noiseReduction ? { noiseReduction: true } : {}),
 			};
 		}),
 		tracks: insertTakeClips({

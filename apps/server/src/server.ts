@@ -211,6 +211,7 @@ export function startServer({
 						code:
 							error instanceof BridgeError ? error.code : RPC_ERRORS.INTERNAL,
 						message: error instanceof Error ? error.message : String(error),
+						data: error instanceof BridgeError ? error.data : undefined,
 					}),
 				);
 			}
