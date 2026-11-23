@@ -1,5 +1,6 @@
 import { formatGain } from "@/agent/loudness";
 import { formatSeconds } from "@/agent/time";
+import { projectFormat } from "@/project/format";
 import type { TProject } from "@/project/types";
 import { getSourceSpanAtClipTime } from "@/retime";
 import { canClipHaveAudio, isRetimableClip } from "@/timeline";
@@ -24,6 +25,10 @@ function describeClip({ clip }: { clip: TimelineClip }): string {
 	if (typeof volume === "number" && volume !== 0)
 		text += ` gain ${formatGain(volume)}`;
 	if (canClipHaveAudio(clip) && isNoiseReduced({ clip })) text += " denoised";
+	if (clip.type === "text") {
+		const content = String(clip.params.content ?? "").replace(/\s+/g, " ");
+		text += ` ${JSON.stringify(content.length > 40 ? `${content.slice(0, 39)}…` : content)}`;
+	}
 	return `${text}]`;
 }
 
@@ -43,7 +48,7 @@ export function buildSequenceDigest({
 }): string {
 	const { canvasSize, fps } = project.settings;
 	const lines = [
-		`project "${project.metadata.name}" ${canvasSize.width}x${canvasSize.height} @${fps.numerator / fps.denominator}fps, revision ${revision}`,
+		`project "${project.metadata.name}" ${projectFormat({ project })} ${canvasSize.width}x${canvasSize.height} @${fps.numerator / fps.denominator}fps, revision ${revision}`,
 		`sequence "${sequence.name}" (${sequence.id})`,
 	];
 	const videoTracks = [

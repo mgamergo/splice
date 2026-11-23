@@ -1,7 +1,6 @@
 import {
 	type AudioSource,
 	type SourceGain,
-	sortSourceRanges,
 } from "@splice/bridge/ops";
 import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
@@ -73,7 +72,11 @@ export function collectAudioSources({
 	projectItems: ProjectItem[];
 }): AudioSource[] {
 	const sources = new Map<string, AudioSource>();
-	for (const { clip } of audibleClips({ tracks, projectItems })) {
+	// In the order they play, so the meter hears the joins between them.
+	const played = [...audibleClips({ tracks, projectItems })].sort(
+		(a, b) => a.clip.startTime - b.clip.startTime,
+	);
+	for (const { clip } of played) {
 		const span = roundMediaTime({
 			time: getSourceSpanAtClipTime({
 				clipTime: clip.duration,
@@ -106,10 +109,7 @@ export function collectAudioSources({
 			}),
 		});
 	}
-	return Array.from(sources.values(), (source) => ({
-		...source,
-		ranges: sortSourceRanges(source.ranges),
-	}));
+	return [...sources.values()];
 }
 
 /**

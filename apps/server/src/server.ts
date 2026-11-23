@@ -141,6 +141,7 @@ export function startServer({
 	const serverJobs = new Map<string, (params: unknown) => Promise<unknown>>([
 		["transcribe.start", (params) => transcription.start(params)],
 		["transcribe.status", (params) => transcription.status(params)],
+		["transcript.words", (params) => transcription.words(params)],
 		["loudness.measure", (params) => loudness.measure(params)],
 		["noiseReduction.render", (params) => noiseReduction.render(params)],
 	]);

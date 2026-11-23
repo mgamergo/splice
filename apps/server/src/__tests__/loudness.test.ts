@@ -202,7 +202,7 @@ test("the cache key covers the file's identity and the measured ranges", () => {
 	}
 });
 
-test("measures once per file and ranges, in any order, and remeasures a changed file", async () => {
+test("measures once per file and ordered ranges, and remeasures a changed file", async () => {
 	const root = await mkdtemp(join(tmpdir(), "splice-loudness-"));
 	try {
 		await mkdir(join(root, "Footage"));
@@ -229,11 +229,7 @@ test("measures once per file and ranges, in any order, and remeasures a changed 
 		expect(first).toEqual({
 			path: "take.wav",
 			noiseReduction: false,
-			ranges: [
-				{ start: 0, end: 2 },
-				{ start: 1.5, end: 3 },
-				{ start: 4, end: 6 },
-			],
+			ranges,
 			integratedLufs: -20,
 			truePeakDbtp: -6,
 			lraLu: 3,
@@ -241,19 +237,23 @@ test("measures once per file and ranges, in any order, and remeasures a changed 
 		});
 		expect(joined).toEqual(first);
 		expect(
-			await meter.measure({ path: "take.wav", ranges: [...ranges].reverse() }),
+			await meter.measure({ path: "take.wav", ranges: ranges.map((r) => ({ ...r })) }),
 		).toMatchObject({ integratedLufs: -20, cached: true });
+		// Played in another order, the joins differ, so it's measured again.
+		expect(
+			await meter.measure({ path: "take.wav", ranges: [...ranges].reverse() }),
+		).toMatchObject({ cached: false });
 		expect(await meter.measure({ path: "take.wav" })).toMatchObject({
 			ranges: null,
 			cached: false,
 		});
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 
 		await utimes(file, new Date(), new Date(Date.now() + 10_000));
 		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
 			cached: false,
 		});
-		expect(calls).toHaveLength(3);
+		expect(calls).toHaveLength(4);
 		await meter.stop();
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -383,6 +383,7 @@ const ffmpeg = Bun.which("ffmpeg");
 async function ffmpegMeter(
 	callback: (meter: {
 		root: string;
+		ffmpegRun: (args: string[]) => Promise<string>;
 		generate: (
 			name: string,
 			expression: string,
@@ -416,6 +417,7 @@ async function ffmpegMeter(
 		await mkdir(join(root, "Footage"));
 		await callback({
 			root,
+			ffmpegRun,
 			async generate(name, expression, seconds) {
 				const file = join(root, "Footage", name);
 				await ffmpegRun([
@@ -542,6 +544,48 @@ test.skipIf(!ffmpeg)(
 			const measured = await measure(source, ranges);
 			expect(measured.integratedLufs).not.toBeNull();
 			expect(performance.now() - started).toBeLessThan(30_000);
+		}),
+	60_000,
+);
+
+test.skipIf(!ffmpeg)(
+	"measures a video's ranges from its audio alone, copied once",
+	() =>
+		ffmpegMeter(async ({ root, ffmpegRun, measure, reference }) => {
+			const source = join(root, "Footage", "screen.mp4");
+			await ffmpegRun([
+				"-f",
+				"lavfi",
+				"-i",
+				"aevalsrc=0.05*sin(2*PI*440*t)+0.8*sin(2*PI*997*t)*between(t\\,1.9\\,1.95):s=48000:d=4",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=s=160x120:r=30:d=4",
+				"-shortest",
+				"-c:a",
+				"aac",
+				"-c:v",
+				"libx264",
+				"-pix_fmt",
+				"yuv420p",
+				source,
+			]);
+			const ranges = [{ start: 1, end: 2 }];
+			const measured = await measure(source, ranges);
+			const exact = await reference(source, "[0:a:0]atrim=start=1:end=2,");
+			// The burst at 1.9 s, just before the out point, is measured.
+			expect(measured.truePeakDbtp ?? -Infinity).toBeGreaterThanOrEqual(
+				(exact.peak ?? 0) - 0.1,
+			);
+			const copies = [...new Bun.Glob("audio-*.mka").scanSync(
+				join(root, "Cache", "loudness"),
+			)];
+			expect(copies).toHaveLength(1);
+			await measure(source, [{ start: 0, end: 1 }]);
+			expect([
+				...new Bun.Glob("audio-*.mka").scanSync(join(root, "Cache", "loudness")),
+			]).toEqual(copies);
 		}),
 	60_000,
 );

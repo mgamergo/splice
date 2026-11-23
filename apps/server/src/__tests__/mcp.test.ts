@@ -33,6 +33,7 @@ describe("splice mcp tools", () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
+			"captions_add",
 			"editor_status",
 			"footage_list",
 			"items_import",
@@ -48,6 +49,153 @@ describe("splice mcp tools", () => {
 			"transcribe",
 			"transcribe_status",
 		]);
+	});
+
+	const roughCutArgs = {
+		expectedRevision: 3,
+		sections: [
+			{
+				name: "Intro",
+				takes: [
+					{ projectItemId: "rec", sourceIn: 0, sourceOut: 2 },
+					{ projectItemId: "rec", sourceIn: 2, sourceOut: 4 },
+				],
+				bestTakeIndex: 1,
+			},
+		],
+	};
+
+	function captionRpc({
+		format,
+		calls,
+	}: {
+		format: "horizontal" | "short";
+		calls: Array<[string, unknown]>;
+	}): RpcCall {
+		return async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState") return { project: { format } };
+			if (method === "editor.listItems")
+				return [
+					{ id: "rec", type: "video", path: "rec.mp4", missing: false },
+					{ id: "logo", type: "image", path: "logo.png", missing: false },
+					{ id: "gone", type: "video", path: "gone.mp4", missing: true },
+					{ id: "pasted", type: "video", path: null, missing: false },
+					{ id: "other", type: "audio", path: "other.mp4", missing: false },
+				];
+			if (method === "transcript.words")
+				return {
+					transcripts: [
+						{ path: "rec.mp4", words: [{ start: 2.1, end: 2.4, text: "Hi" }] },
+					],
+					missing: ["other.mp4"],
+				};
+			// The tab reports "other" is on the sequence but got no words.
+			return { ok: true, revision: 4, uncaptionedItemIds: ["other"] };
+		};
+	}
+
+	test("rough_cut adds cached transcript words as captions in a Short project", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(captionRpc({ format: "short", calls }));
+		const result = await client.callTool({
+			name: "rough_cut",
+			arguments: {
+				...roughCutArgs,
+				loudness: false,
+				captionStyle: { uppercase: true },
+			},
+		});
+		expect(result.isError).toBeFalsy();
+		const output = JSON.parse(textOf(result));
+		expect(output).toMatchObject({
+			uncaptionedRecordings: ["other.mp4"],
+			warning: expect.stringContaining("captions_add"),
+		});
+		expect(output).not.toHaveProperty("uncaptionedItemIds");
+		expect(
+			calls.find(([method]) => method === "transcript.words")?.[1],
+		).toEqual({ paths: ["rec.mp4", "other.mp4"] });
+		expect(calls.at(-1)).toEqual([
+			"editor.roughCut",
+			{
+				...roughCutArgs,
+				captions: {
+					sources: [
+						{
+							projectItemId: "rec",
+							words: [{ start: 2.1, end: 2.4, text: "Hi" }],
+						},
+					],
+					style: { uppercase: true },
+				},
+			},
+		]);
+	});
+
+	test("rough_cut leaves horizontal projects uncaptioned", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(captionRpc({ format: "horizontal", calls }));
+		await client.callTool({
+			name: "rough_cut",
+			arguments: { ...roughCutArgs, loudness: false },
+		});
+		expect(calls.map(([method]) => method)).toEqual([
+			"editor.getState",
+			"editor.roughCut",
+		]);
+		expect(calls.at(-1)?.[1]).toEqual({ ...roughCutArgs, captions: undefined });
+	});
+
+	test("captions_add asks for transcripts in batches of 200 paths", async () => {
+		const batches: number[] = [];
+		const items = Array.from({ length: 450 }, (_, index) => ({
+			id: `rec-${index}`,
+			type: "video",
+			path: `rec-${index}.mp4`,
+			missing: false,
+		}));
+		const client = await connect(async ({ method, params }) => {
+			if (method === "editor.listItems") return items;
+			if (method === "transcript.words") {
+				const { paths } = params as { paths: string[] };
+				batches.push(paths.length);
+				return {
+					transcripts: paths
+						.filter((path) => path === "rec-449.mp4")
+						.map((path) => ({
+							path,
+							words: [{ start: 0, end: 1, text: "last" }],
+						})),
+					missing: [],
+				};
+			}
+			return { ok: true, captionCount: 1 };
+		});
+		const result = await client.callTool({
+			name: "captions_add",
+			arguments: { expectedRevision: 1 },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(batches).toEqual([200, 200, 50]);
+		// Untranscribed recordings the sequence doesn't use aren't flagged.
+		expect(JSON.parse(textOf(result))).not.toHaveProperty("warning");
+	});
+
+	test("captions_add fails clearly when nothing is transcribed", async () => {
+		const client = await connect(async ({ method }) => {
+			if (method === "editor.listItems")
+				return [{ id: "rec", type: "video", path: "rec.mp4", missing: false }];
+			if (method === "transcript.words")
+				return { transcripts: [], missing: ["rec.mp4"] };
+			throw new Error(`unexpected ${method}`);
+		});
+		const result = await client.callTool({
+			name: "captions_add",
+			arguments: { expectedRevision: 1 },
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("Run transcribe");
 	});
 
 	test("sequence_apply forwards a validated batch", async () => {
@@ -175,6 +323,8 @@ describe("loudness tools", () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {
 			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
 			if (method === "loudness.measure") {
 				const path = field({ params, key: "path" });
 				return { path, ...measurements[String(path)], cached: false };
@@ -189,6 +339,7 @@ describe("loudness tools", () => {
 		});
 		expect(result.isError).toBeFalsy();
 		expect(calls).toEqual([
+			["editor.getState", undefined],
 			["editor.roughCut", { expectedRevision: 3, sections, plan: true }],
 			[
 				"loudness.measure",
@@ -228,10 +379,74 @@ describe("loudness tools", () => {
 		});
 	});
 
+	test("rough_cut in a Short project captions and normalizes in one cut", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState") return { project: { format: "short" } };
+			if (method === "editor.listItems")
+				return [
+					{ id: "rec-1", type: "video", path: "quiet.wav", missing: false },
+					{ id: "rec-2", type: "video", path: "loud.wav", missing: false },
+				];
+			if (method === "transcript.words")
+				return {
+					transcripts: [
+						{ path: "quiet.wav", words: [{ start: 2, end: 2.4, text: "Hi" }] },
+					],
+					missing: ["loud.wav"],
+				};
+			if (method === "loudness.measure") {
+				const path = field({ params, key: "path" });
+				return { path, ...measurements[String(path)], cached: false };
+			}
+			if (field({ params, key: "plan" }))
+				return { ok: true, revision: 3, audioSources };
+			return {
+				ok: true,
+				revision: 4,
+				captionCount: 1,
+				uncaptionedItemIds: ["rec-2"],
+			};
+		});
+		const result = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 3, sections },
+		});
+		expect(result.isError).toBeFalsy();
+		const captions = {
+			sources: [
+				{ projectItemId: "rec-1", words: [{ start: 2, end: 2.4, text: "Hi" }] },
+			],
+		};
+		expect(calls.at(-1)).toEqual([
+			"editor.roughCut",
+			{
+				expectedRevision: 3,
+				sections,
+				captions,
+				sourceGains: [
+					{ projectItemId: "rec-1", gainDb: 14 },
+					{ projectItemId: "rec-2", gainDb: 1.45 },
+				],
+			},
+		]);
+		expect(
+			calls.find(([, params]) => field({ params, key: "plan" }))?.[1],
+		).toMatchObject({ captions });
+		expect(JSON.parse(textOf(result))).toMatchObject({
+			captionCount: 1,
+			uncaptionedRecordings: ["loud.wav"],
+			loudness: { targetLufs: -14 },
+		});
+	});
+
 	test("rough_cut with loudness false is one call, and a refused plan measures nothing", async () => {
 		const calls: string[] = [];
 		const client = await connect(async ({ method }) => {
 			calls.push(method);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
 			return { ok: false, code: "REVISION_CONFLICT", message: "changed" };
 		});
 		const plain = await client.callTool({
@@ -248,7 +463,12 @@ describe("loudness tools", () => {
 		});
 		expect(plain.isError).toBe(true);
 		expect(normalized.isError).toBe(true);
-		expect(calls).toEqual(["editor.roughCut", "editor.roughCut"]);
+		expect(calls).toEqual([
+			"editor.getState",
+			"editor.roughCut",
+			"editor.getState",
+			"editor.roughCut",
+		]);
 	});
 
 	test("normalize_loudness sets one gain per recording on the active sequence in one apply", async () => {
@@ -310,16 +530,19 @@ describe("loudness tools", () => {
 });
 
 describe("noise reduction tools", () => {
+	// As the tab lists them once noise reduction is set: one source per
+	// recording, its ranges in playing order.
 	const heard = [
-		...audioSources,
 		{
-			projectItemId: "rec-1",
-			path: "quiet.wav",
-			noiseReduction: true,
-			missing: false,
-			clipIds: ["c4"],
-			ranges: [{ start: 8, end: 12 }],
+			...audioSources[0],
+			clipIds: ["c1", "c4", "c2"],
+			ranges: [
+				{ start: 2, end: 6 },
+				{ start: 8, end: 12 },
+				{ start: 6, end: 9 },
+			],
 		},
+		audioSources[1],
 		{
 			projectItemId: "browser",
 			path: null,
@@ -346,13 +569,18 @@ describe("noise reduction tools", () => {
 		return async ({ method, params }) => {
 			calls.push([method, params]);
 			const path = String(field({ params, key: "path" }));
-			if (method === "editor.audioSources")
+			if (method === "editor.audioSources") {
+				const enabled = field({ params, key: "noiseReduction" }) === true;
 				return {
 					ok: true,
 					sequenceId: "seq-1",
 					revision: 7,
-					audioSources: heard,
+					audioSources: heard.map((source) => ({
+						...source,
+						noiseReduction: enabled && source.path !== null,
+					})),
 				};
+			}
 			if (method === "noiseReduction.render")
 				return {
 					path,
@@ -398,12 +626,15 @@ describe("noise reduction tools", () => {
 			["loudness.measure", "loud.wav"],
 			["editor.apply", undefined],
 		]);
-		// Both of rec-1's sources are measured together, as one denoised recording.
+		// The tab is asked for each recording as it will sound denoised, and
+		// rec-1's clips are measured together, in playing order.
+		expect(calls[0][1]).toEqual({ noiseReduction: true });
 		expect(calls[3][1]).toEqual({
 			path: "quiet.wav",
 			ranges: [
-				{ start: 2, end: 9 },
+				{ start: 2, end: 6 },
 				{ start: 8, end: 12 },
+				{ start: 6, end: 9 },
 			],
 			noiseReduction: true,
 		});
@@ -416,10 +647,10 @@ describe("noise reduction tools", () => {
 				ops: [
 					{
 						op: "set_noise_reduction",
-						clipIds: ["c1", "c2", "c4", "c3"],
+						clipIds: ["c1", "c4", "c2", "c3"],
 						enabled: true,
 					},
-					{ op: "set_gain", clipIds: ["c1", "c2", "c4"], gainDb: 14.5 },
+					{ op: "set_gain", clipIds: ["c1", "c4", "c2"], gainDb: 14.5 },
 					{ op: "set_gain", clipIds: ["c3"], gainDb: 1.95 },
 				],
 			},
@@ -496,10 +727,10 @@ describe("noise reduction tools", () => {
 		expect(field({ params: calls.at(-1)?.[1], key: "ops" })).toEqual([
 			{
 				op: "set_noise_reduction",
-				clipIds: ["c1", "c2", "c4"],
+				clipIds: ["c1", "c4", "c2"],
 				enabled: false,
 			},
-			{ op: "set_gain", clipIds: ["c1", "c2", "c4"], gainDb: 14 },
+			{ op: "set_gain", clipIds: ["c1", "c4", "c2"], gainDb: 14 },
 		]);
 		expect(field({ params: calls.at(-1)?.[1], key: "label" })).toBe(
 			"Agent: noise reduction off",

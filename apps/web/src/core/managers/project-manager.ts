@@ -1,3 +1,4 @@
+import { PROJECT_FORMATS, type ProjectFormat } from "@splice/bridge";
 import type { EditorCore } from "@/core";
 import type {
 	TProject,
@@ -13,8 +14,6 @@ import { toast } from "sonner";
 import { generateUUID } from "@/utils/id";
 import { UpdateProjectSettingsCommand } from "@/commands/project";
 import { DEFAULT_BACKGROUND_COLOR } from "@/background/color";
-import { DEFAULT_CANVAS_SIZE } from "@/canvas/sizes";
-import { DEFAULT_FPS } from "@/fps/defaults";
 import {
 	buildDefaultSequence,
 	getProjectDurationFromSequences,
@@ -44,7 +43,14 @@ export class ProjectManager {
 
 	constructor(private editor: EditorCore) {}
 
-	async createNewProject({ name }: { name: string }): Promise<string> {
+	async createNewProject({
+		name,
+		format = "horizontal",
+	}: {
+		name: string;
+		format?: ProjectFormat;
+	}): Promise<string> {
+		const { width, height, fps } = PROJECT_FORMATS[format];
 		const mainSequence = buildDefaultSequence({
 			name: "Main sequence",
 			isMain: true,
@@ -62,8 +68,9 @@ export class ProjectManager {
 			sequences: [mainSequence],
 			currentSequenceId: mainSequence.id,
 			settings: {
-				fps: DEFAULT_FPS,
-				canvasSize: DEFAULT_CANVAS_SIZE,
+				format,
+				fps: { numerator: fps, denominator: 1 },
+				canvasSize: { width, height },
 				canvasSizeMode: "preset",
 				lastCustomCanvasSize: null,
 				originalCanvasSize: null,

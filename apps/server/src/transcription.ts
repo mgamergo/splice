@@ -32,7 +32,12 @@ export const transcribeStatusInput = {
 	...transcriptPageInput,
 };
 
+export const transcriptWordsInput = {
+	paths: z.array(footagePath).min(1).max(200),
+};
+
 const startSchema = z.object(transcribeInput);
+const wordsSchema = z.object(transcriptWordsInput);
 const statusSchema = z.object(transcribeStatusInput);
 type PageInput = z.infer<z.ZodObject<typeof transcriptPageInput>>;
 
@@ -333,6 +338,34 @@ export function createTranscriptionJobs({
 			throw invalidParams(
 				"No transcription job found. Start one with transcribe.",
 			);
+		},
+
+		/** Word timings from cached transcripts. Never starts a job; uncached paths are listed as missing. */
+		async words(params: unknown) {
+			const parsed = wordsSchema.safeParse(params);
+			if (!parsed.success) throw invalidParams(parsed.error.message);
+			const transcripts: Array<{
+				path: string;
+				words: Array<{ start: number; end: number; text: string }>;
+			}> = [];
+			const missing: string[] = [];
+			for (const path of new Set(parsed.data.paths)) {
+				// An unreadable or non-media path just has no words.
+				const transcript = await identifySource({ path })
+					.then(({ cachePath }) => readCache({ cachePath }))
+					.catch(() => null);
+				if (!transcript) {
+					missing.push(path);
+					continue;
+				}
+				transcripts.push({
+					path,
+					words: transcript.segments.flatMap(({ words }) =>
+						words.map(({ start, end, text }) => ({ start, end, text })),
+					),
+				});
+			}
+			return { transcripts, missing };
 		},
 
 		async stop() {

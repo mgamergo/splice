@@ -166,6 +166,51 @@ const targetLufs = z
 	.describe(
 		`Integrated loudness target in LUFS. Defaults to ${DEFAULT_TARGET_LUFS}.`,
 	);
+const captionWordSchema = z.strictObject({
+	start: z.number().nonnegative(),
+	end: z.number().nonnegative(),
+	text: z.string(),
+});
+
+/** Source-relative word timings of one recording, from its transcript. */
+const captionSourceSchema = z.strictObject({
+	projectItemId: z.string().min(1),
+	words: z.array(captionWordSchema).max(200_000),
+});
+
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use #rrggbb");
+
+export const captionStyleSchema = z.strictObject({
+	wordsPerCaption: z
+		.number()
+		.int()
+		.min(1)
+		.max(8)
+		.optional()
+		.describe("Most words shown at once (default 3)"),
+	fontFamily: z.string().min(1).max(100).optional(),
+	fontSize: z
+		.number()
+		.positive()
+		.max(40)
+		.optional()
+		.describe("Editor text units, relative to the canvas height (default 8)"),
+	color: hexColor.optional().describe("Text color (default #ffffff)"),
+	background: z
+		.union([hexColor, z.literal("none")])
+		.optional()
+		.describe('Box behind the words, or "none" (default #000000)'),
+	position: z
+		.enum(["top", "middle", "bottom"])
+		.optional()
+		.describe("Vertical placement (default bottom, clear of the Shorts UI)"),
+	uppercase: z.boolean().optional(),
+});
+
+export const captionsRequestSchema = z.strictObject({
+	sources: z.array(captionSourceSchema).min(1),
+	style: captionStyleSchema.optional(),
+});
 
 const loudnessOption = z
 	.union([z.strictObject({ targetLufs }), z.literal(false)])
@@ -202,6 +247,11 @@ export const roughCutRequestSchema = z.strictObject({
 		.describe(
 			"Turns noise reduction on for every recording in the cut, in the same undo step. Off by default.",
 		),
+	captions: captionsRequestSchema
+		.optional()
+		.describe(
+			"Word timings for burned-in captions. splice mcp fills this for Short projects.",
+		),
 });
 
 const sourceGainSchema = z.strictObject({
@@ -227,6 +277,11 @@ export const audioSourcesRequestSchema = z.strictObject({
 		.min(1)
 		.optional()
 		.describe("Sequence to inspect. Defaults to the active sequence."),
+	/**
+	 * Lists the sources as they would be with noise reduction set this way on
+	 * every Footage clip, so each recording is one source, in playing order.
+	 */
+	noiseReduction: z.boolean().optional(),
 });
 
 export const normalizeLoudnessRequestSchema = z.strictObject({
@@ -260,18 +315,6 @@ export const sourceRangeSchema = z
 		message: "End must be after start",
 	});
 
-/**
- * Sorts source ranges, so the same audio always reads the same. Repeats and
- * overlaps stay: audio that plays twice counts twice toward loudness.
- */
-export function sortSourceRanges(
-	ranges: Array<z.infer<typeof sourceRangeSchema>>,
-): Array<z.infer<typeof sourceRangeSchema>> {
-	return ranges
-		.map(({ start, end }) => ({ start, end }))
-		.sort((a, b) => a.start - b.start || a.end - b.end);
-}
-
 /** The audible audio of one project item in a sequence, in source seconds. */
 export const audioSourceSchema = z.strictObject({
 	projectItemId: z.string(),
@@ -282,8 +325,21 @@ export const audioSourceSchema = z.strictObject({
 	/** The file has left Footage, so playback skips it until it's relinked. */
 	missing: z.boolean(),
 	clipIds: z.array(z.string()),
-	/** Sorted source ranges, one per clip, so repeated audio counts each time. */
+	/**
+	 * Source ranges, one per clip in the order they play, so repeated audio
+	 * counts each time and joins are measured as heard.
+	 */
 	ranges: z.array(sourceRangeSchema),
+});
+
+export const addCaptionsRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Sequence to caption. Defaults to the active sequence."),
+	expectedRevision,
+	...captionsRequestSchema.shape,
 });
 
 export const takesListRequestSchema = z.strictObject({
@@ -301,6 +357,8 @@ export type SourceGain = z.infer<typeof sourceGainSchema>;
 export type NoiseReductionRequest = z.infer<typeof noiseReductionRequestSchema>;
 export type SourceRange = z.infer<typeof sourceRangeSchema>;
 export type AudioSource = z.infer<typeof audioSourceSchema>;
+export type CaptionStyle = z.infer<typeof captionStyleSchema>;
+export type CaptionsRequest = z.infer<typeof captionsRequestSchema>;
 
 export type TakeSourceRange = z.infer<typeof takeSourceRangeSchema>;
 export type RemovalMarkerData = z.infer<typeof removalMarkerDataSchema>;
