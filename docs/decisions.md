@@ -174,3 +174,11 @@ For Explainer, let the vertical recording fill the frame by default. Prefer a to
 For Raw, an optional brief hook grounded in the opening narration or footage overlays the opening and clears as the demonstration begins. Skip a redundant hook. Allow zooms and highlights for legibility. Additional explanatory cards require creator direction.
 
 Burn captions into both styles. Start centered for Explainer and lower for Raw. Hold placement through a passage and move the caption block when it would obscure an action. Preserve manual placement. Verify readability, speech sync and clearance from the action in the exported vertical MP4. That MP4 completes delivery. Offer a separate SRT on request using the same corrected words and timing. Thumbnails remain independent.
+
+### Cut transcript, integration trial and handoff
+
+Derive a readable, navigable transcript from the cut. A take swap updates its passage. Selecting a sentence plays it or identifies a range for an instruction in T3 Code. Direct text deletion as an editing operation can wait beyond the first horizontal milestone.
+
+Evaluate HyperFrames on one approved horizontal passage with one diagram and a timed reveal. Revise the wording, preview, export and reopen the project. Check that only the graphic changed, the approved cut is intact and the reopened project reproduces the export. Use the result to decide how deeply to integrate the toolkit, including whether to vendor it.
+
+After successful export verification, Open export folder reveals the exact deliverables for that revision. The creator handles platform upload separately.
