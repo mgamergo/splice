@@ -257,7 +257,9 @@ describe("removal markers", () => {
 				ops: [
 					{
 						op: "set_gain",
-						clipIds: tracks().audio[0].clips.map((clip) => clip.id),
+						clipIds: [...tracks().main.clips, ...tracks().audio[0].clips].map(
+							(clip) => clip.id,
+						),
 						gainDb: -3,
 					},
 				],
