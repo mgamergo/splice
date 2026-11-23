@@ -59,6 +59,23 @@ export interface EditorState {
 /** The cookie that authorizes `/splice/media/*` requests from the editor tab. */
 export const SESSION_COOKIE = "splice_session";
 
+/**
+ * Whether a path is a plain relative path under Footage: forward slashes, no
+ * empty, "." or ".." segments. URLs would otherwise normalize ".." away.
+ */
+export function isFootagePath(path: string): boolean {
+	return path
+		.split("/")
+		.every(
+			(segment) =>
+				segment !== "" &&
+				segment !== "." &&
+				segment !== ".." &&
+				!segment.includes("\\") &&
+				!segment.includes("\0"),
+		);
+}
+
 /** The URL of a file under Footage, for a path relative to that folder with forward slashes. */
 export function mediaUrlForPath(path: string): string {
 	return `${BRIDGE_PATHS.media}${path.split("/").map(encodeURIComponent).join("/")}`;

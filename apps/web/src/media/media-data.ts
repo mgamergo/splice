@@ -1,4 +1,4 @@
-import { mediaUrlForPath } from "@splice/bridge";
+import { isFootagePath, mediaUrlForPath } from "@splice/bridge";
 import { BlobSource, UrlSource, type Source } from "mediabunny";
 import { ensureMediaSession } from "@/bridge/media-session";
 import type { DiskMedia, MediaData } from "./types";
@@ -37,6 +37,9 @@ export async function probeDiskMedia({
 }: {
 	path: string;
 }): Promise<DiskMedia | null> {
+	if (!isFootagePath(path)) {
+		return null;
+	}
 	const url = mediaUrlForPath(path);
 	const head = () => fetch(url, { method: "HEAD", credentials: "same-origin" });
 	let response = await head();

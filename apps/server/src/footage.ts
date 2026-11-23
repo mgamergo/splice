@@ -1,4 +1,4 @@
-import type { FootageFile } from "@splice/bridge";
+import { type FootageFile, isFootagePath } from "@splice/bridge";
 import { realpath, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
@@ -54,19 +54,10 @@ export async function resolveFootagePath({
 	root: string;
 	path: string;
 }): Promise<string | null> {
-	const segments = path.split("/");
-	if (
-		segments.some(
-			(segment) =>
-				segment === "" ||
-				segment === "." ||
-				segment === ".." ||
-				segment.includes("\\") ||
-				segment.includes("\0"),
-		)
-	) {
+	if (!isFootagePath(path)) {
 		return null;
 	}
+	const segments = path.split("/");
 	try {
 		const footage = await realpath(join(root, FOOTAGE_FOLDER));
 		const resolved = await realpath(join(footage, ...segments));
