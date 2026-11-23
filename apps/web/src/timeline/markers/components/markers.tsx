@@ -255,7 +255,7 @@ function TimelineMarker({
 						/>
 					</div>
 					<div
-						className="pointer-events-none absolute top-0 overflow-hidden"
+						className={`absolute top-0 overflow-hidden ${marker.data ? "pointer-events-auto" : "pointer-events-none"}`}
 						style={{
 							left: rightHalfLeft,
 							width: MARKER_HALF_WIDTH_PX,
