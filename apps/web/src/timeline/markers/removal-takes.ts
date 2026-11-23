@@ -254,25 +254,32 @@ function takeWindows({
 			findTakeWindows({ track, take: range, markerId, complete }),
 		);
 	};
-	let windows = forRange(first).map((part) => ({
-		start: part.start,
-		end: part.end,
-		parts: [part],
-	}));
+	// Count routes per candidate (capped at 2) instead of listing every path:
+	// duplicated cuts on parallel tracks would otherwise grow 2^ranges paths.
+	let nodes: PathNode[] = forRange(first).map((part) => ({ part, routes: 1 }));
 	for (const range of rest) {
-		const next = forRange(range);
-		windows = windows.flatMap((window) =>
-			next
-				.filter((part) => part.start === window.end)
-				.map((part) => ({
-					...window,
-					end: part.end,
-					parts: [...window.parts, part],
-				})),
-		);
+		const previous = nodes;
+		nodes = forRange(range).flatMap((part) => {
+			const joins = previous.filter((node) => node.part.end === part.start);
+			if (!joins.length) return [];
+			const routes = Math.min(
+				2,
+				joins.reduce((sum, node) => sum + node.routes, 0),
+			);
+			return [{ part, routes, previous: joins[0] }];
+		});
 	}
-	return windows;
+	return nodes.flatMap((node) => {
+		const parts: RangeWindow[] = [];
+		for (let step: PathNode | undefined = node; step; step = step.previous)
+			parts.unshift(step.part);
+		const window = { start: parts[0].start, end: node.part.end, parts };
+		// Several routes to one end are ambiguous; listing it twice tells callers so.
+		return node.routes > 1 ? [window, window] : [window];
+	});
 }
+
+type PathNode = { part: RangeWindow; routes: number; previous?: PathNode };
 
 /** Resolve a take only when its entire source maps to one contiguous window. */
 export function mapTakeToSequence({
@@ -462,17 +469,51 @@ export function restoreTakeClips({
 	at,
 }: {
 	tracks: SequenceTracks;
-	takes: ResolvedTake[];
+	/** Placements saved by a swap put each range back on its track and audio track. */
+	takes: Array<{ take: ResolvedTake; placements?: TakePlacement[] | null }>;
 	at: MediaTime;
 }) {
-	const video: VideoClip[] = [];
-	const audio: AudioClip[] = [];
+	const video: PlacedClip<VideoClip>[] = [];
+	const audio: PlacedClip<AudioClip>[] = [];
+	const videoTrack = (id?: string) =>
+		[tracks.main, ...tracks.overlay].find(
+			(track) => track.id === id && track.type === "video",
+		)?.id;
+	const audioTrack = (id?: string) =>
+		tracks.audio.find((track) => track.id === id)?.id;
 	let end = at;
-	for (const take of takes.flat()) {
-		const clip = createTakeClip({ take, at: end });
-		if (clip.type === "video") video.push(clip);
-		else audio.push(clip);
-		end = roundMediaTime({ time: end + clip.duration });
+	for (const { take, placements } of takes) {
+		for (const [index, range] of take.entries()) {
+			const placement = placements?.[index];
+			const clip = createTakeClip({ take: range, at: end });
+			end = roundMediaTime({ time: end + clip.duration });
+			if (clip.type === "audio") {
+				audio.push({
+					clip,
+					trackId: audioTrack(placement?.trackId) ?? tracks.audio[0]?.id,
+				});
+				continue;
+			}
+			const trackId = videoTrack(placement?.trackId) ?? tracks.main.id;
+			const audioTrackId = audioTrack(placement?.audioTrackId);
+			if (!audioTrackId || range.item.hasAudio === false) {
+				video.push({ clip, trackId });
+				continue;
+			}
+			const paired = {
+				...clip,
+				isSourceAudioEnabled: false,
+				sourceAudioGroupId: generateUUID(),
+			};
+			video.push({ clip: paired, trackId });
+			audio.push({
+				clip: {
+					...buildSeparatedAudioClip({ sourceClip: paired }),
+					id: generateUUID(),
+				},
+				trackId: audioTrackId,
+			});
+		}
 	}
 	const delta = end - at;
 	const shifted = mapTracks({
@@ -480,11 +521,7 @@ export function restoreTakeClips({
 		map: (clips) => spliceClips({ clips, start: at, end: at, delta }),
 	});
 	return {
-		tracks: insertTakeClips({
-			tracks: shifted,
-			video: video.map((clip) => ({ clip, trackId: tracks.main.id })),
-			audio: audio.map((clip) => ({ clip, trackId: tracks.audio[0]?.id })),
-		}),
+		tracks: insertTakeClips({ tracks: shifted, video, audio }),
 		delta,
 	};
 }
@@ -746,19 +783,16 @@ export function swapTakeClips({
 		},
 	});
 
-	const spansTracks =
-		new Set(parts.map(({ trackId }) => trackId)).size > 1 ||
-		new Set(linkedAudio.map(({ trackId }) => trackId)).size > 1;
+	// Saved even for one track, so swapping back can return to an overlay
+	// that would otherwise be pruned once it's empty.
 	return {
-		previousPlacements: spansTracks
-			? parts.map((part): TakePlacement => {
-					const audioTrackId = audioForVideo.get(part)?.[0]?.trackId;
-					return {
-						trackId: part.trackId,
-						...(audioTrackId ? { audioTrackId } : {}),
-					};
-				})
-			: null,
+		previousPlacements: parts.map((part): TakePlacement => {
+			const audioTrackId = audioForVideo.get(part)?.[0]?.trackId;
+			return {
+				trackId: part.trackId,
+				...(audioTrackId ? { audioTrackId } : {}),
+			};
+		}),
 		tracks: insertTakeClips({
 			tracks: clearBestTake({ tracks: shifted, markerId: marker.id }),
 			video,

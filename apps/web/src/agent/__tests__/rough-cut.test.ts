@@ -2,6 +2,10 @@ import { beforeEach, expect, spyOn, test } from "bun:test";
 import type { EditOp } from "@splice/bridge/ops";
 import { EditorApi } from "@/agent/editor-api";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
+import {
+	mapTakeToSequence,
+	resolveTake,
+} from "@/timeline/markers/removal-takes";
 import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import type { EditorCore } from "@/core";
 import type { RemovalMarker } from "@/timeline";
@@ -701,4 +705,90 @@ test("swapping back keeps each extracted audio part on its original track", () =
 	expect(restoredVideo?.sourceAudioGroupId).toBe(
 		restoredAudio?.clips[0].sourceAudioGroupId,
 	);
+});
+
+test("restoring the later of two collapsed sections keeps the earlier one ahead of it", () => {
+	raw();
+	const sections = [
+		{
+			name: "A",
+			takes: [
+				{ projectItemId: first, sourceIn: 4, sourceOut: 6 },
+				{ projectItemId: first, sourceIn: 0, sourceOut: 2 },
+			],
+			bestTakeIndex: 1,
+		},
+		{
+			name: "B",
+			takes: [
+				{ projectItemId: first, sourceIn: 6, sourceOut: 8 },
+				{ projectItemId: first, sourceIn: 2, sourceOut: 4 },
+			],
+			bestTakeIndex: 1,
+		},
+	];
+	// B is listed first so marker order can't come from the plan.
+	expect(
+		api.roughCut({
+			sections: [sections[1], sections[0]],
+			expectedRevision: api.getRevision(),
+		}),
+	).toMatchObject({ ok: true });
+	const [a, b] = active().markers;
+	expect([a.time, b.time]).toEqual([s(4), s(4)]);
+	expect([a.data?.sectionName, b.data?.sectionName]).toEqual(["A", "B"]);
+	expect(apply({ op: "restore_takes", markerId: b.id })).toMatchObject({
+		ok: true,
+	});
+	expect(apply({ op: "restore_takes", markerId: a.id })).toMatchObject({
+		ok: true,
+	});
+	expect(
+		active()
+			.tracks.main.clips.filter((clip) => clip.mediaId === first)
+			.map((clip) => [clip.startTime, clip.trimStart]),
+	).toEqual([
+		[s(0), s(0)],
+		[s(4), s(4)],
+		[s(6), s(6)],
+		[s(8), s(8)],
+	]);
+});
+
+test("rejects a take duplicated across tracks quickly instead of listing every path", () => {
+	const ranges = Array.from({ length: 24 }, (_, index) => ({
+		projectItemId: "rec",
+		sourceIn: index,
+		sourceOut: index + 1,
+	}));
+	const pieces = ranges.map((_, index) =>
+		videoClip({ id: `m${index}`, start: index, duration: 1, trimStart: index }),
+	);
+	const overlay = {
+		...buildEmptyTrack({ id: "dup", type: "video" }),
+		clips: pieces.map((clip) => ({ ...clip, id: `d-${clip.id}` })),
+	};
+	const tracks = {
+		...buildDefaultSequence({ name: "Dup", isMain: true }).tracks,
+		overlay: [overlay],
+	};
+	tracks.main = { ...tracks.main, clips: pieces };
+	const projectItems = [
+		{
+			id: "rec",
+			name: "rec",
+			type: "video" as const,
+			duration: 30,
+			hasAudio: true,
+			file: new File([], "rec"),
+		},
+	];
+	const started = performance.now();
+	expect(() =>
+		mapTakeToSequence({
+			tracks,
+			take: resolveTake({ take: { ranges }, projectItems }),
+		}),
+	).toThrow("multiple places");
+	expect(performance.now() - started).toBeLessThan(1_000);
 });

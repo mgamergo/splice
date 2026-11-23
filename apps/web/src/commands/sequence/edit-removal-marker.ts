@@ -66,8 +66,15 @@ export class EditRemovalMarkerCommand extends Command {
 		const update = swap ?? {
 			...restoreTakeClips({
 				tracks: sequence.tracks,
-				takes: (chosen ? [chosen] : badTakes).map((take) =>
-					resolveTake({ take, projectItems }),
+				takes: badTakes.flatMap((take, index) =>
+					edit.takeIndex === undefined || index === edit.takeIndex
+						? [
+								{
+									take: resolveTake({ take, projectItems }),
+									placements: badTakePlacements?.[index],
+								},
+							]
+						: [],
 				),
 				at: marker.time,
 			}),
@@ -94,8 +101,9 @@ export class EditRemovalMarkerCommand extends Command {
 				: time >= update.start
 					? update.start
 					: time;
+		const markerIndex = sequence.markers.indexOf(marker);
 		const markers = sequence.markers
-			.flatMap((candidate): Marker[] => {
+			.flatMap((candidate, index): Marker[] => {
 				if (candidate === marker) {
 					if (edit.op === "restore_takes") {
 						return chosen && remaining.length
@@ -118,6 +126,14 @@ export class EditRemovalMarkerCommand extends Command {
 						];
 					}
 				}
+				// Markers that collapsed to one time keep their source order: those
+				// before this one stay ahead of the restored takes.
+				if (
+					edit.op === "restore_takes" &&
+					candidate.time === marker.time &&
+					index < markerIndex
+				)
+					return [candidate];
 				const time = shiftMarkerTime(candidate);
 				return [time === candidate.time ? candidate : { ...candidate, time }];
 			})

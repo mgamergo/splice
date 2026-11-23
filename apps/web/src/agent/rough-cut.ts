@@ -175,6 +175,9 @@ export function buildRoughCut({
 		},
 	);
 
+	// Sorted while the cut points are distinct, so sections whose markers
+	// collapse to one time keep their timeline order.
+	markers.sort((a, b) => a.time - b.time);
 	const cut = rippleDeleteRanges({
 		tracks,
 		markers,
