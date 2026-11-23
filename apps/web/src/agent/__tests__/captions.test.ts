@@ -325,6 +325,16 @@ describe("buildCaptionCues", () => {
 		]);
 	});
 
+	test("stacked words with too little time before the next caption join it", () => {
+		const cues = buildCaptionCues({
+			words: [word(1, 1, "w0"), word(1, 1, "w1"), word(1.05, 1.3, "next")],
+			style: { wordsPerCaption: 1 },
+		});
+		expect(cues.map(({ text }) => text)).toEqual(["w0 w1 next"]);
+		expect(cues[0]).toMatchObject({ startTime: 1 });
+		expect(cues[0].duration).toBeCloseTo(0.6);
+	});
+
 	test("a word too short to read shares a caption with the next one", () => {
 		const cues = buildCaptionCues({
 			words: [
@@ -445,6 +455,56 @@ describe("EditorApi captions", () => {
 });
 
 describe("rebuildCaptions", () => {
+	// Two words heard together at 1.0 s show one after another: "w1" at
+	// 1.0–1.2 s and "w2" at 1.2–1.4 s. "z" follows at 5 s.
+	function stackedSequence() {
+		const content = tracksWith({});
+		content.main = {
+			...content.main,
+			clips: [videoClip({ id: "v", start: 0, duration: 10 })],
+		};
+		const captions = {
+			sources: [
+				{
+					projectItemId: "rec",
+					words: [word(1, 1.1, "w1"), word(1, 1.1, "w2"), word(5, 5.4, "z")],
+				},
+			],
+			style: { wordsPerCaption: 1 },
+		};
+		const canvasSize = { width: 1080, height: 1920 };
+		const sequence = {
+			...buildDefaultSequence({ name: "S", isMain: true }),
+			tracks: withCaptionTrack({ tracks: content, captions, canvasSize }).tracks,
+			captions,
+		};
+		const texts = (window: { start: number; end: number; delta: number }) => {
+			const [track] = rebuildCaptions({
+				sequence,
+				tracks: content,
+				canvasSize,
+				window,
+			}).overlay;
+			if (track?.type !== "text") throw new Error("No Captions track");
+			return track.clips.map((clip) => clip.params.content);
+		};
+		return { sequence, texts };
+	}
+
+	test("rebuilds a run of stacked words whose tail the window removed", () => {
+		const { sequence, texts } = stackedSequence();
+		const [track] = sequence.tracks.overlay;
+		expect(
+			track?.type === "text" && track.clips.map((clip) => clip.params.content),
+		).toEqual(["w1", "w2", "z"]);
+		expect(texts({ start: s(1.2), end: s(1.4), delta: 0 })).toEqual(["w1", "w2", "z"]);
+	});
+
+	test("rebuilds a run of stacked words whose head the window removed", () => {
+		const { texts } = stackedSequence();
+		expect(texts({ start: s(0.5), end: s(1.1), delta: 0 })).toEqual(["w1", "w2", "z"]);
+	});
+
 	test("captions only the words in the edited gap, so none repeat or go missing at its edges", () => {
 		const content = tracksWith({});
 		content.main = {

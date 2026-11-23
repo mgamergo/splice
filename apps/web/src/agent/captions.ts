@@ -38,7 +38,9 @@ const MIN_WORD_SECONDS = 0.08;
  * with the next one rather than flash by unseen.
  */
 const MIN_CAPTION_SECONDS = 0.1;
-const SENTENCE_END = /[.!?,;:…]["')\]]*$/;
+/** Word starts closer than this are one time, allowing for tick rounding. */
+const SAME_TIME_SECONDS = 0.002;
+const SENTENCE_END =/[.!?,;:…]["')\]]*$/;
 
 export class CaptionError extends Error {}
 
@@ -402,25 +404,44 @@ export function rebuildCaptions({
 		return { ...content, overlay: [track, ...content.overlay] };
 	}
 
-	const before = previous.clips.filter(
+	const seconds = (time: number) => mediaTimeToSeconds({ time: roundMediaTime({ time }) });
+	const words = mapWordsToTimeline({ tracks: content, sources: captions.sources });
+	const startsAt = (time: number) =>
+		words.filter(({ start }) => Math.abs(start - time) < SAME_TIME_SECONDS);
+	let before = previous.clips.filter(
 		(clip) => clip.startTime + clip.duration <= window.start,
 	);
+	// Captions of words that share a start show one after another, so a run of
+	// them can straddle the window's edge. Rebuild the whole run rather than
+	// keep part of it and lose or repeat its other words.
+	const keptEnd = Math.max(
+		0,
+		...before.map((clip) => seconds(clip.startTime + clip.duration)),
+	);
+	const lastHeard = words.filter(({ start }) => start < keptEnd).at(-1);
+	if (lastHeard && startsAt(lastHeard.start).length > 1)
+		before = before.filter(
+			(clip) => seconds(clip.startTime) < lastHeard.start - SAME_TIME_SECONDS,
+		);
 	const after = previous.clips
 		.filter((clip) => clip.startTime >= window.end)
 		.map((clip) => ({
 			...clip,
 			startTime: roundMediaTime({ time: clip.startTime + window.delta }),
-		}));
+		}))
+		.sort((a, b) => a.startTime - b.startTime);
+	// A staggered caption starts at no word's start: drop the run's tail.
+	while (after.length && !startsAt(seconds(after[0].startTime)).length)
+		after.shift();
 	// Fresh captions fill the gap between the kept ones, including any that
 	// straddled the window's edges, from only the words heard in the gap.
-	const from = mediaTimeToSeconds({
-		time: roundMediaTime({
-			time: Math.max(0, ...before.map((clip) => clip.startTime + clip.duration)),
-		}),
-	});
+	const from = Math.max(
+		0,
+		...before.map((clip) => seconds(clip.startTime + clip.duration)),
+	);
 	const until = Math.min(
 		Number.POSITIVE_INFINITY,
-		...after.map((clip) => mediaTimeToSeconds({ time: clip.startTime })),
+		...after.map((clip) => seconds(clip.startTime)),
 	);
 	const between = captionClips({ content, captions, canvasSize, from, until });
 	return {
