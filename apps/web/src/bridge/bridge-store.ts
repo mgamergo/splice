@@ -16,9 +16,13 @@ function readStoredBlocked(): boolean | null {
 	}
 }
 
-/** Whether agent writes are refused right now; another tab may have pressed Stop. */
+/**
+ * Whether agent writes are refused right now. Either source can stop the agent:
+ * the shared flag (Stop pressed in another tab) or this tab's own state (Stop
+ * pressed here even if storage refused the write).
+ */
 export function isAgentBlocked(): boolean {
-	return readStoredBlocked() ?? useAgentBridgeStore.getState().blocked;
+	return readStoredBlocked() === true || useAgentBridgeStore.getState().blocked;
 }
 
 function writeBlocked(blocked: boolean): void {
