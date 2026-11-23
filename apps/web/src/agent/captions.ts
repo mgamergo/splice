@@ -420,15 +420,13 @@ export function rebuildCaptions({
 		tracks: withoutCaptionTrack({ tracks: sequence.tracks }),
 		sources: captions.sources,
 	});
-	const sameTime = (a: number, b: number) =>
-		Math.abs(a - b) < SAME_TIME_SECONDS;
 	/** The latest start before `at` that several words share. */
 	const runStartBefore = (at: number) =>
 		oldWords
 			.filter(({ start }) => start < at - SAME_TIME_SECONDS)
 			.findLast(
 				({ start }, _, earlier) =>
-					earlier.filter((word) => sameTime(word.start, start)).length > 1,
+					earlier.filter((word) => Math.abs(word.start - start) < SAME_TIME_SECONDS).length > 1,
 			)?.start;
 	/**
 	 * Whether a caption starting here is a later caption of a run of words
@@ -447,7 +445,7 @@ export function rebuildCaptions({
 			) + CAPTION_HOLD_SECONDS;
 		return (
 			at < runEnd - SAME_TIME_SECONDS &&
-			!oldWords.some(({ start }) => sameTime(start, at))
+			!oldWords.some(({ start }) => Math.abs(start - at) < SAME_TIME_SECONDS)
 		);
 	};
 	const keptEnd = Math.max(
@@ -457,7 +455,7 @@ export function rebuildCaptions({
 	const runCrosses = previous.clips.some(
 		(clip) =>
 			!before.includes(clip) &&
-			sameTime(seconds(clip.startTime), keptEnd) &&
+			Math.abs(seconds(clip.startTime) - keptEnd) < SAME_TIME_SECONDS &&
 			isStaggered(clip.startTime),
 	);
 	const runStart = runStartBefore(keptEnd);
