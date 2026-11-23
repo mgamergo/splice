@@ -26,7 +26,13 @@ afterAll(async () => {
 	await rm(root, { recursive: true, force: true });
 });
 
-const media = (path: string, headers: Record<string, string> = {}) =>
+const media = ({
+	path,
+	headers = {},
+}: {
+	path: string;
+	headers?: Record<string, string>;
+}) =>
 	fetch(`${server.origin}${mediaUrlForPath(path)}`, {
 		headers: { authorization: `Bearer ${TOKEN}`, ...headers },
 	});
@@ -57,23 +63,34 @@ describe("footage paths", () => {
 
 describe("media route", () => {
 	test("serves a file and byte ranges", async () => {
-		const full = await media("Day 1/take #1.mp4");
+		const full = await media({ path: "Day 1/take #1.mp4" });
 		expect(full.status).toBe(200);
 		expect(full.headers.get("accept-ranges")).toBe("bytes");
 		expect(new Uint8Array(await full.arrayBuffer())).toEqual(bytes);
 
-		const part = await media("Day 1/take #1.mp4", { range: "bytes=10-19" });
+		const part = await media({
+			path: "Day 1/take #1.mp4",
+			headers: { range: "bytes=10-19" },
+		});
 		expect(part.status).toBe(206);
 		expect(part.headers.get("content-range")).toBe("bytes 10-19/100");
 		expect(new Uint8Array(await part.arrayBuffer())).toEqual(
 			bytes.slice(10, 20),
 		);
 
-		const suffix = await media("Day 1/take #1.mp4", { range: "bytes=-5" });
+		const suffix = await media({
+			path: "Day 1/take #1.mp4",
+			headers: { range: "bytes=-5" },
+		});
 		expect(new Uint8Array(await suffix.arrayBuffer())).toEqual(bytes.slice(95));
 
 		expect(
-			(await media("Day 1/take #1.mp4", { range: "bytes=200-" })).status,
+			(
+				await media({
+					path: "Day 1/take #1.mp4",
+					headers: { range: "bytes=200-" },
+				})
+			).status,
 		).toBe(416);
 	});
 
@@ -84,7 +101,7 @@ describe("media route", () => {
 			(await fetch(url, { headers: { cookie: `${SESSION_COOKIE}=${TOKEN}` } }))
 				.status,
 		).toBe(200);
-		expect((await media("escape.mp4")).status).toBe(404);
+		expect((await media({ path: "escape.mp4" })).status).toBe(404);
 		expect(
 			(
 				await fetch(`${server.origin}${BRIDGE_PATHS.media}..%2Fsecret.mp4`, {
@@ -92,7 +109,7 @@ describe("media route", () => {
 				})
 			).status,
 		).toBe(404);
-		expect((await media("notes.txt")).status).toBe(404);
+		expect((await media({ path: "notes.txt" })).status).toBe(404);
 	});
 
 	test("the session endpoint sets the cookie only for the editor's origin with the token", async () => {
