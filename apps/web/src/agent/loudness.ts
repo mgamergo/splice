@@ -1,7 +1,7 @@
 import {
 	type AudioSource,
-	mergeSourceRanges,
 	type SourceGain,
+	sortSourceRanges,
 } from "@splice/bridge/ops";
 import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
@@ -55,7 +55,11 @@ function audibleClips({
 	});
 }
 
-/** Each project item's audible source ranges in a sequence, for measuring loudness. */
+/**
+ * Each project item's audible source ranges in a sequence, one per clip, for
+ * measuring loudness. Missing items are listed, so the report can say they
+ * were skipped.
+ */
 export function collectAudioSources({
 	tracks,
 	projectItems,
@@ -78,6 +82,7 @@ export function collectAudioSources({
 			source = {
 				projectItemId: clip.mediaId,
 				path: item && isDiskMedia(item.file) ? item.file.path : null,
+				missing: item?.missing === true,
 				clipIds: [],
 				ranges: [],
 			};
@@ -93,7 +98,7 @@ export function collectAudioSources({
 	}
 	return Array.from(sources.values(), (source) => ({
 		...source,
-		ranges: mergeSourceRanges(source.ranges),
+		ranges: sortSourceRanges(source.ranges),
 	}));
 }
 

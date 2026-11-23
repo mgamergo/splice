@@ -22,6 +22,7 @@ import {
 	loudnessMeasurementSchema,
 	type MeasureLoudness,
 	measureLoudnessInput,
+	MissingFootageError,
 	planSourceGains,
 	type SourceLoudness,
 } from "./loudness";
@@ -92,13 +93,15 @@ function loudnessReport({
 	targetLufs: number;
 	sources: SourceLoudness[];
 }) {
-	const limited = sources.flatMap((source) =>
-		"gain" in source && source.gain.limitedBy
-			? [
-					`${source.path}: ${source.gain.limitedBy === "true_peak" ? "true peak capped" : "gain limit reached"} at ${source.gain.expectedLufs} LUFS`,
-				]
-			: [],
-	);
+	const limited = sources.flatMap((source) => {
+		if (!("gain" in source) || !source.gain.limitedBy) return [];
+		const { limitedBy, expectedLufs } = source.gain;
+		const reason =
+			limitedBy === "true_peak" ? "true peak capped" : "gain limit reached";
+		return [
+			`${source.path}: ${reason}${expectedLufs === null ? " (too short to measure loudness)" : ` at ${expectedLufs} LUFS`}`,
+		];
+	});
 	return { targetLufs, sources, ...(limited.length > 0 && { limited }) };
 }
 
@@ -106,8 +109,19 @@ function loudnessReport({
 export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 	const server = new McpServer({ name: SERVER_NAME, version: "0.1.0" });
 	const measure: MeasureLoudness = async (params) => {
-		const result = await rpc({ method: "loudness.measure", params });
-		return loudnessMeasurementSchema.parse(result);
+		try {
+			const result = await rpc({ method: "loudness.measure", params });
+			return loudnessMeasurementSchema.parse(result);
+		} catch (error) {
+			// The file left Footage after the editor last checked it.
+			if (
+				error instanceof RpcCallError &&
+				z.object({ missingFootage: z.literal(true) }).safeParse(error.data)
+					.success
+			)
+				throw new MissingFootageError(error.message);
+			throw error;
+		}
 	};
 
 	server.registerTool(

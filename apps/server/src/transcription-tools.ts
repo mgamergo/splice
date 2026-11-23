@@ -140,7 +140,7 @@ export function run({
  */
 export const SOURCE_TIMELINE_FILTER = "aresample=async=1:first_pts=0";
 
-/** Reads only local files in the formats Footage holds, mapping the first audio stream. */
+/** Reads only local files in the formats Footage holds. */
 export function ffmpegInputArgs({ source }: { source: string }): string[] {
 	return [
 		"-nostats",
@@ -150,8 +150,6 @@ export function ffmpegInputArgs({ source }: { source: string }): string[] {
 		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
 		"-i",
 		source,
-		"-map",
-		"0:a:0",
 	];
 }
 
@@ -168,6 +166,8 @@ export function ffmpegArgs({
 		"-loglevel",
 		"error",
 		...ffmpegInputArgs({ source }),
+		"-map",
+		"0:a:0",
 		"-af",
 		SOURCE_TIMELINE_FILTER,
 		"-ac",
