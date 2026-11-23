@@ -19,6 +19,7 @@ import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
 import type { ExportFormat, ExportQuality } from "@/export";
 import { CanvasRenderer } from "./canvas-renderer";
+import { VideoCache } from "@/services/video-cache/service";
 
 type ExportParams = {
 	width: number;
@@ -67,6 +68,9 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			width,
 			height,
 			fps,
+			// Its own decoders: the preview, still live during export, would
+			// otherwise move them between the clips export is reading.
+			videoCache: new VideoCache(),
 		});
 
 		this.format = format;
@@ -80,6 +84,18 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 	}
 
 	async export({
+		rootNode,
+	}: {
+		rootNode: RootNode;
+	}): Promise<ArrayBuffer | null> {
+		try {
+			return await this.render({ rootNode });
+		} finally {
+			this.renderer.videoCache.clearAll();
+		}
+	}
+
+	private async render({
 		rootNode,
 	}: {
 		rootNode: RootNode;

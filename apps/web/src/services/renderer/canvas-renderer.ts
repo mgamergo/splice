@@ -4,6 +4,7 @@ import { createCanvasSurface } from "./canvas-utils";
 import { buildFrameDescriptor } from "./compositor/frame-descriptor";
 import { wasmCompositor } from "./compositor/wasm-compositor";
 import { resolveRenderTree } from "./resolve";
+import { VideoCache, videoCache } from "@/services/video-cache/service";
 import {
 	measureSpanAsync,
 	measureSpanSync,
@@ -14,6 +15,8 @@ export type CanvasRendererParams = {
 	width: number;
 	height: number;
 	fps: FrameRate;
+	/** Where video frames are decoded; defaults to the cache the preview shares. */
+	videoCache?: VideoCache;
 };
 
 export class CanvasRenderer {
@@ -22,8 +25,10 @@ export class CanvasRenderer {
 	width: number;
 	height: number;
 	fps: FrameRate;
+	readonly videoCache: VideoCache;
 
-	constructor({ width, height, fps }: CanvasRendererParams) {
+	constructor({ width, height, fps, videoCache: cache }: CanvasRendererParams) {
+		this.videoCache = cache ?? videoCache;
 		this.width = width;
 		this.height = height;
 		this.fps = fps;

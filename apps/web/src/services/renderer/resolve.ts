@@ -19,7 +19,7 @@ import {
 } from "@/text/measure-clip";
 import { resolveColorAtTime, resolveOpacityAtTime } from "@/animation/values";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
-import { videoCache } from "@/services/video-cache/service";
+import type { VideoCache } from "@/services/video-cache/service";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
 import {
@@ -51,9 +51,11 @@ import type {
  * it plays (plus keyframe lead-in), not the rest of the file.
  */
 function getVideoFrameAt({
+	cache,
 	params,
 	clipTime,
 }: {
+	cache: VideoCache;
 	params: Pick<
 		VideoNode["params"],
 		"mediaId" | "file" | "trimStart" | "retime" | "duration"
@@ -64,7 +66,7 @@ function getVideoFrameAt({
 		mediaTimeToSeconds({ time: roundMediaTime({ time: ticks }) });
 	const sourceTime = (time: number) =>
 		params.trimStart + getSourceTimeAtClipTime({ clipTime: time, retime: params.retime });
-	return videoCache.getFrameAt({
+	return cache.getFrameAt({
 		mediaId: params.mediaId,
 		file: params.file,
 		time: toSeconds(sourceTime(clipTime)),
@@ -223,7 +225,11 @@ async function resolveVideoNode({
 		return null;
 	}
 
-	const frame = await getVideoFrameAt({ params: node.params, clipTime });
+	const frame = await getVideoFrameAt({
+		cache: context.renderer.videoCache,
+		params: node.params,
+		clipTime,
+	});
 	if (!frame) {
 		return null;
 	}
@@ -404,7 +410,11 @@ async function resolveBlurBackgroundNode({
 		return null;
 	}
 
-	const backdropSource = await resolveBackdropSource({ node, clipTime });
+	const backdropSource = await resolveBackdropSource({
+		node,
+		clipTime,
+		cache: context.renderer.videoCache,
+	});
 	if (!backdropSource) {
 		return null;
 	}
@@ -429,12 +439,14 @@ async function resolveBlurBackgroundNode({
 async function resolveBackdropSource({
 	node,
 	clipTime,
+	cache,
 }: {
 	node: BlurBackgroundNode;
 	clipTime: number;
+	cache: VideoCache;
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
-		const frame = await getVideoFrameAt({ params: node.params, clipTime });
+		const frame = await getVideoFrameAt({ cache, params: node.params, clipTime });
 		if (!frame) {
 			return null;
 		}
