@@ -144,12 +144,14 @@ const audioSources = [
 	{
 		projectItemId: "rec-1",
 		path: "quiet.wav",
+		missing: false,
 		clipIds: ["c1", "c2"],
 		ranges: [{ start: 2, end: 9 }],
 	},
 	{
 		projectItemId: "rec-2",
 		path: "loud.wav",
+		missing: false,
 		clipIds: ["c3"],
 		ranges: [{ start: 0, end: 5 }],
 	},
