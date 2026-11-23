@@ -1,3 +1,4 @@
+import { rebuildCaptions, withoutCaptionTrack } from "@/agent/captions";
 import type { EditOp } from "@splice/bridge/ops";
 import {
 	Command,
@@ -53,10 +54,14 @@ export class EditRemovalMarkerCommand extends Command {
 			throw new RemovalTakeError("That stored take is no longer available.");
 		}
 		const remaining = badTakes.filter((_, index) => index !== edit.takeIndex);
+		// Derived captions neither block nor follow the take edit; they're rebuilt after.
+		const sourceTracks = sequence.captions
+			? withoutCaptionTrack({ tracks: sequence.tracks })
+			: sequence.tracks;
 		const swap =
 			edit.op === "swap_take" && chosen
 				? swapTakeClips({
-						tracks: sequence.tracks,
+						tracks: sourceTracks,
 						marker,
 						best: resolveTake({ take: bestTake, projectItems }),
 						chosen: resolveTake({ take: chosen, projectItems }),
@@ -65,7 +70,7 @@ export class EditRemovalMarkerCommand extends Command {
 				: undefined;
 		const update = swap ?? {
 			...restoreTakeClips({
-				tracks: sequence.tracks,
+				tracks: sourceTracks,
 				takes: badTakes.flatMap((take, index) =>
 					edit.takeIndex === undefined || index === edit.takeIndex
 						? [
@@ -139,10 +144,14 @@ export class EditRemovalMarkerCommand extends Command {
 			})
 			.sort((a, b) => a.time - b.time);
 
-		const tracks =
-			edit.op === "restore_takes" && (!chosen || remaining.length === 0)
-				? clearBestTake({ tracks: update.tracks, markerId: marker.id })
-				: update.tracks;
+		const tracks = rebuildCaptions({
+			sequence,
+			tracks:
+				edit.op === "restore_takes" && (!chosen || remaining.length === 0)
+					? clearBestTake({ tracks: update.tracks, markerId: marker.id })
+					: update.tracks,
+			canvasSize: editor.project.getActive().settings.canvasSize,
+		});
 		this.before = editor.sequences.getSequences();
 		this.after = updateSequenceInArray({
 			sequences: this.before,

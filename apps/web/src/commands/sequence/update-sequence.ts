@@ -1,10 +1,10 @@
 import { Command, createClipSelectionResult } from "@/commands/base-command";
 import type { EditorCore } from "@/core";
-import type { SequenceTracks, TSequence } from "@/timeline";
+import type { TSequence } from "@/timeline";
 import { updateSequenceInArray } from "@/timeline/sequences";
 
-/** Swaps in a sequence's rebuilt tracks as one undoable command. */
-export class ReplaceSequenceTracksCommand extends Command {
+/** Applies a rebuilt part of one sequence as one undoable command. */
+export class UpdateSequenceCommand extends Command {
 	readonly ignoresRippleToggle = true;
 	private before: TSequence[] = [];
 
@@ -12,7 +12,7 @@ export class ReplaceSequenceTracksCommand extends Command {
 		private readonly options: {
 			editor: EditorCore;
 			sequenceId: string;
-			tracks: SequenceTracks;
+			updates: Partial<Pick<TSequence, "tracks" | "captions">>;
 			label: string;
 		},
 	) {
@@ -24,13 +24,13 @@ export class ReplaceSequenceTracksCommand extends Command {
 	}
 
 	execute() {
-		const { editor, sequenceId, tracks } = this.options;
+		const { editor, sequenceId, updates } = this.options;
 		this.before = editor.sequences.getSequences();
 		editor.sequences.setSequences({
 			sequences: updateSequenceInArray({
 				sequences: this.before,
 				sequenceId,
-				updates: { tracks },
+				updates,
 			}),
 		});
 		return createClipSelectionResult([]);

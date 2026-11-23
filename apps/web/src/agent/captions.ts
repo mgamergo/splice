@@ -6,10 +6,12 @@ import {
 } from "@/subtitles/build-subtitle-text-clip";
 import type { SubtitleCue, SubtitleStyleOverrides } from "@/subtitles/types";
 import { buildEmptyTrack } from "@/timeline/placement";
+import { calculateTotalDuration } from "@/timeline";
 import type {
 	AudioClip,
 	SequenceTracks,
 	TextTrack,
+	TSequence,
 	VideoClip,
 } from "@/timeline/types";
 import { generateUUID } from "@/utils/id";
@@ -45,31 +47,25 @@ export interface TimelineWord {
 
 type SourceClip = VideoClip | AudioClip;
 
+/**
+ * The clips whose sound carries each recording's words: video with its own
+ * audio (even if hidden) and audio clips. A video whose audio was extracted
+ * is skipped, because the extracted clip says the words where it now sits.
+ */
 function sourceClips({ tracks }: { tracks: SequenceTracks }) {
-	const byItem = new Map<
-		string,
-		{ video: SourceClip[]; audio: SourceClip[] }
-	>();
+	const byItem = new Map<string, SourceClip[]>();
 	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
 		for (const clip of track.clips) {
 			if (
 				(clip.type !== "video" && clip.type !== "audio") ||
-				!("mediaId" in clip)
+				!("mediaId" in clip) ||
+				(clip.type === "video" && clip.isSourceAudioEnabled === false)
 			)
 				continue;
-			if (clip.type === "video" && clip.hidden) continue;
-			const entry = byItem.get(clip.mediaId) ?? { video: [], audio: [] };
-			entry[clip.type].push(clip);
-			byItem.set(clip.mediaId, entry);
+			byItem.set(clip.mediaId, [...(byItem.get(clip.mediaId) ?? []), clip]);
 		}
 	}
-	// A video clip and the audio extracted from it show the same words once.
-	return new Map(
-		[...byItem].map(([id, { video, audio }]) => [
-			id,
-			video.length ? video : audio,
-		]),
-	);
+	return byItem;
 }
 
 /**
@@ -86,6 +82,9 @@ export function mapWordsToTimeline({
 }): TimelineWord[] {
 	const clipsByItem = sourceClips({ tracks });
 	const words: TimelineWord[] = [];
+	// The same word heard from two clips at one time (e.g. a copy on another
+	// track) is captioned once.
+	const seen = new Set<string>();
 	for (const { projectItemId, words: sourceWords } of sources) {
 		for (const clip of clipsByItem.get(projectItemId) ?? []) {
 			const trimStart = mediaTimeToSeconds({ time: clip.trimStart });
@@ -113,7 +112,7 @@ export function mapWordsToTimeline({
 						}),
 					}),
 				});
-			for (const word of sourceWords) {
+			for (const [index, word] of sourceWords.entries()) {
 				const text = word.text.trim();
 				const wordEnd = Math.max(word.end, word.start + MIN_WORD_SECONDS);
 				const middle = (word.start + wordEnd) / 2;
@@ -123,7 +122,11 @@ export function mapWordsToTimeline({
 					toTimeline(Math.max(word.start, trimStart)),
 				);
 				const end = Math.min(clipEnd, toTimeline(Math.min(wordEnd, sourceOut)));
-				if (end > start) words.push({ start, end, text });
+				const key = `${projectItemId}:${index}:${Math.round(start * 1000)}`;
+				if (end > start && !seen.has(key)) {
+					seen.add(key);
+					words.push({ start, end, text });
+				}
 			}
 		}
 	}
@@ -205,7 +208,21 @@ function styleOverrides({
 	};
 }
 
-/** Returns the tracks with the Captions track replaced by one built from the words. */
+export function withoutCaptionTrack({
+	tracks,
+}: {
+	tracks: SequenceTracks;
+}): SequenceTracks {
+	return {
+		...tracks,
+		overlay: tracks.overlay.filter(({ name }) => name !== CAPTION_TRACK_NAME),
+	};
+}
+
+/**
+ * Returns the tracks with the Captions track rebuilt from the words, ending
+ * where the sequence's other content ends.
+ */
 export function withCaptionTrack({
 	tracks,
 	captions,
@@ -215,12 +232,29 @@ export function withCaptionTrack({
 	captions: CaptionsRequest;
 	canvasSize: { width: number; height: number };
 }): { tracks: SequenceTracks; captionCount: number } {
-	const words = mapWordsToTimeline({ tracks, sources: captions.sources });
+	const content = withoutCaptionTrack({ tracks });
+	const words = mapWordsToTimeline({
+		tracks: content,
+		sources: captions.sources,
+	});
 	if (!words.length)
 		throw new CaptionError(
 			"No transcript words fall inside the sequence's clips. Transcribe the recordings on this sequence first.",
 		);
-	const cues = buildCaptionCues({ words, style: captions.style });
+	const contentEnd = mediaTimeToSeconds({
+		time: calculateTotalDuration({ tracks: content }),
+	});
+	const cues = buildCaptionCues({ words, style: captions.style }).flatMap(
+		(cue) =>
+			cue.startTime < contentEnd
+				? [
+						{
+							...cue,
+							duration: Math.min(cue.duration, contentEnd - cue.startTime),
+						},
+					]
+				: [],
+	);
 	const ctx = createMeasurementContext();
 	const track: TextTrack = {
 		...buildEmptyTrack({
@@ -234,13 +268,30 @@ export function withCaptionTrack({
 		})),
 	};
 	return {
-		tracks: {
-			...tracks,
-			overlay: [
-				track,
-				...tracks.overlay.filter(({ name }) => name !== CAPTION_TRACK_NAME),
-			],
-		},
+		tracks: { ...content, overlay: [track, ...content.overlay] },
 		captionCount: cues.length,
 	};
+}
+
+/**
+ * Captions are derived from the sequence's stored transcript words, so edits
+ * that move takes rebuild them instead of rippling stale words around.
+ */
+export function rebuildCaptions({
+	sequence,
+	tracks,
+	canvasSize,
+}: {
+	sequence: TSequence;
+	tracks: SequenceTracks;
+	canvasSize: { width: number; height: number };
+}): SequenceTracks {
+	if (!sequence.captions) return tracks;
+	try {
+		return withCaptionTrack({ tracks, captions: sequence.captions, canvasSize })
+			.tracks;
+	} catch (error) {
+		if (!(error instanceof CaptionError)) throw error;
+		return withoutCaptionTrack({ tracks });
+	}
 }

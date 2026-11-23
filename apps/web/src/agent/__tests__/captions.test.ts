@@ -5,7 +5,12 @@ import {
 	mapWordsToTimeline,
 } from "@/agent/captions";
 import { EditorApi } from "@/agent/editor-api";
-import { audioClip, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
+import {
+	audioClip,
+	s,
+	setUpEditor,
+	videoClip,
+} from "@/agent/__tests__/fixtures";
 import { buildDefaultSequence } from "@/timeline/sequences";
 import type { SequenceTracks, TextClip } from "@/timeline";
 
@@ -146,6 +151,52 @@ describe("mapWordsToTimeline", () => {
 	});
 });
 
+describe("mapWordsToTimeline follows the audio", () => {
+	test("uses extracted audio where it was moved, and hidden video that still plays its audio", () => {
+		const tracks = tracksWith({});
+		tracks.main = {
+			...tracks.main,
+			clips: [
+				{
+					...videoClip({ id: "separated", start: 0, duration: 4 }),
+					isSourceAudioEnabled: false,
+				},
+				{
+					...videoClip({ id: "hidden", start: 10, duration: 4, trimStart: 20 }),
+					hidden: true,
+				},
+			],
+		};
+		tracks.audio = [
+			{
+				id: "a1",
+				name: "A1",
+				type: "audio",
+				muted: false,
+				clips: [
+					{
+						...audioClip({ id: "moved", start: 5, duration: 4 }),
+						mediaId: "rec",
+					},
+				],
+			} as SequenceTracks["audio"][number],
+		];
+		const words = mapWordsToTimeline({
+			tracks,
+			sources: [
+				{
+					projectItemId: "rec",
+					words: [word(1, 1.5, "moved"), word(21, 21.5, "hidden")],
+				},
+			],
+		});
+		expect(rounded(words)).toEqual([
+			[6, 6.5, "moved"],
+			[11, 11.5, "hidden"],
+		]);
+	});
+});
+
 describe("buildCaptionCues", () => {
 	test("groups up to three words, breaks at punctuation and pauses, and holds until the next caption", () => {
 		const cues = buildCaptionCues({
@@ -275,6 +326,16 @@ describe("EditorApi captions", () => {
 		expect(captionTracks(editor)[0].clips).toHaveLength(2);
 		editor.command.undo();
 		expect(captionTracks(editor)).toHaveLength(0);
+	});
+
+	test("ends the last caption where the sequence's content ends", () => {
+		const { editor, api } = setUp();
+		api.addCaptions({
+			expectedRevision: api.getRevision(),
+			sources: [{ projectItemId: "rec", words: [word(4.6, 4.9, "end")] }],
+		});
+		const [clip] = captionTracks(editor)[0].clips;
+		expect(clip.startTime + clip.duration).toBe(s(5));
 	});
 
 	test("refuses when no transcript word falls inside the sequence", () => {

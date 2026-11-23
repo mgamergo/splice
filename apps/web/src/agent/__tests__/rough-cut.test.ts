@@ -823,3 +823,46 @@ test("burns in captions for the kept words inside the same undo step", () => {
 	expect(editor.sequences.getSequences()).toHaveLength(before);
 	expect(active().name).toBe("Raw");
 });
+
+test("captions follow a Swap and back instead of blocking it", () => {
+	raw();
+	const captions = {
+		sources: [
+			{
+				projectItemId: first,
+				words: [{ start: 9, end: 9.5, text: "retake" }],
+			},
+			{
+				projectItemId: second,
+				words: [{ start: 4.5, end: 5, text: "keeper" }],
+			},
+		],
+	};
+	expect(
+		api.roughCut({
+			sections: [section],
+			expectedRevision: api.getRevision(),
+			captions,
+		}),
+	).toMatchObject({ ok: true, captionCount: 1 });
+	const words = () =>
+		active()
+			.tracks.overlay.filter(({ name }) => name === "Captions")
+			.flatMap(({ clips }) => clips.map((clip) => clip.name));
+	const contents = () => api.getDigest().match(/"(retake|keeper)"\]/g);
+	expect(contents()).toEqual(['"keeper"]']);
+	const markerId = active().markers[0]?.id;
+	if (!markerId) throw new Error("No removal marker");
+	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
+		ok: true,
+	});
+	expect(contents()).toEqual(['"retake"]']);
+	// Swapping back is the shorter take, with captions rippled out of its way.
+	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
+		ok: true,
+	});
+	expect(contents()).toEqual(['"keeper"]']);
+	expect(words()).toHaveLength(1);
+	expect(apply({ op: "restore_takes", markerId })).toMatchObject({ ok: true });
+	expect(contents()?.sort()).toEqual(['"keeper"]', '"retake"]']);
+});

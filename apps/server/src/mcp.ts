@@ -62,7 +62,12 @@ async function guard(
 }
 
 const itemsSchema = z.array(
-	z.object({ id: z.string(), path: z.string().nullable() }),
+	z.object({
+		id: z.string(),
+		type: z.string(),
+		path: z.string().nullable(),
+		missing: z.boolean(),
+	}),
 );
 const transcriptWordsSchema = z.object({
 	transcripts: z.array(
@@ -87,10 +92,14 @@ async function captionSources({
 }): Promise<CaptionsRequest["sources"]> {
 	const items = itemsSchema
 		.parse(await rpc({ method: "editor.listItems" }))
-		.flatMap(({ id, path }) => (path ? [{ id, path }] : []));
+		.flatMap(({ id, type, path, missing }) =>
+			path && !missing && (type === "video" || type === "audio")
+				? [{ id, path }]
+				: [],
+		);
 	if (!items.length)
 		throw new Error(
-			"No project items reference Footage. Import recordings with items_import first.",
+			"No available recordings in this project reference Footage. Import them with items_import first.",
 		);
 	const { transcripts } = transcriptWordsSchema.parse(
 		await rpc({

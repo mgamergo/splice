@@ -336,8 +336,10 @@ export function createTranscriptionJobs({
 			}> = [];
 			const missing: string[] = [];
 			for (const path of new Set(parsed.data.paths)) {
-				const { cachePath } = await identifySource({ path });
-				const transcript = await readCache({ cachePath });
+				// An unreadable or non-media path just has no words.
+				const transcript = await identifySource({ path })
+					.then(({ cachePath }) => readCache({ cachePath }))
+					.catch(() => null);
 				if (!transcript) {
 					missing.push(path);
 					continue;

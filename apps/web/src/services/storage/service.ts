@@ -1,3 +1,4 @@
+import { captionsRequestSchema } from "@splice/bridge/ops";
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
 import { removalMarkerDataSchema } from "@splice/bridge/ops";
@@ -126,7 +127,9 @@ class StorageService {
 			version: this.config.version,
 		});
 
-		const projectItemsAdapter = new OPFSAdapter(`splice-media-files-${projectId}`);
+		const projectItemsAdapter = new OPFSAdapter(
+			`splice-media-files-${projectId}`,
+		);
 
 		return { mediaMetadataAdapter, projectItemsAdapter };
 	}
@@ -147,7 +150,11 @@ class StorageService {
 		return isStorageQuotaExceededError({ error });
 	}
 
-	private stripAudioBuffers({ tracks }: { tracks: SequenceTracks }): SequenceTracks {
+	private stripAudioBuffers({
+		tracks,
+	}: {
+		tracks: SequenceTracks;
+	}): SequenceTracks {
 		return {
 			...tracks,
 			audio: tracks.audio.map((track) => ({
@@ -164,15 +171,18 @@ class StorageService {
 		const duration =
 			project.metadata.duration ??
 			getProjectDurationFromSequences({ sequences: project.sequences });
-		const serializedSequences: SerializedSequence[] = project.sequences.map((sequence) => ({
-			id: sequence.id,
-			name: sequence.name,
-			isMain: sequence.isMain,
-			tracks: this.stripAudioBuffers({ tracks: sequence.tracks }),
-			markers: sequence.markers,
-			createdAt: sequence.createdAt.toISOString(),
-			updatedAt: sequence.updatedAt.toISOString(),
-		}));
+		const serializedSequences: SerializedSequence[] = project.sequences.map(
+			(sequence) => ({
+				id: sequence.id,
+				name: sequence.name,
+				isMain: sequence.isMain,
+				tracks: this.stripAudioBuffers({ tracks: sequence.tracks }),
+				markers: sequence.markers,
+				...(sequence.captions && { captions: sequence.captions }),
+				createdAt: sequence.createdAt.toISOString(),
+				updatedAt: sequence.updatedAt.toISOString(),
+			}),
+		);
 
 		const serializedProject: SerializedProject = {
 			metadata: {
@@ -233,6 +243,7 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: sequence.tracks,
 				markers: normalizeMarkers({ raw: sequence.markers }),
+				captions: captionsRequestSchema.safeParse(sequence.captions).data,
 				createdAt: new Date(sequence.createdAt),
 				updatedAt: new Date(sequence.updatedAt),
 			})) ?? [];
@@ -307,7 +318,8 @@ class StorageService {
 					time:
 						serializedProject.metadata.duration ??
 						getProjectDurationFromSequences({
-							sequences: (serializedProject.sequences ?? []) as unknown as TSequence[],
+							sequences: (serializedProject.sequences ??
+								[]) as unknown as TSequence[],
 						}),
 				}),
 				createdAt: new Date(serializedProject.metadata.createdAt),

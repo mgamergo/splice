@@ -74,9 +74,11 @@ describe("splice mcp tools", () => {
 			if (method === "editor.getState") return { project: { format } };
 			if (method === "editor.listItems")
 				return [
-					{ id: "rec", path: "rec.mp4" },
-					{ id: "logo", path: null },
-					{ id: "other", path: "other.mp4" },
+					{ id: "rec", type: "video", path: "rec.mp4", missing: false },
+					{ id: "logo", type: "image", path: "logo.png", missing: false },
+					{ id: "gone", type: "video", path: "gone.mp4", missing: true },
+					{ id: "pasted", type: "video", path: null, missing: false },
+					{ id: "other", type: "audio", path: "other.mp4", missing: false },
 				];
 			if (method === "transcript.words")
 				return {

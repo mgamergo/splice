@@ -6,7 +6,7 @@ import {
 } from "@/agent/rough-cut";
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
 import { CaptionError, withCaptionTrack } from "@/agent/captions";
-import { ReplaceSequenceTracksCommand } from "@/commands/sequence/replace-sequence-tracks";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	addCaptionsRequestSchema,
 	rawSequenceRequestSchema,
@@ -189,7 +189,7 @@ export class EditorApi {
 					})
 				: null;
 			const sequence = captioned
-				? { ...cut.sequence, tracks: captioned.tracks }
+				? { ...cut.sequence, tracks: captioned.tracks, captions }
 				: cut.sequence;
 			return {
 				...this.addPreparedSequence({ sequence, label }),
@@ -228,10 +228,10 @@ export class EditorApi {
 			});
 			const label = "Agent: captions";
 			this.editor.command.execute({
-				command: new ReplaceSequenceTracksCommand({
+				command: new UpdateSequenceCommand({
 					editor: this.editor,
 					sequenceId: sequence.id,
-					tracks,
+					updates: { tracks, captions: { sources, style } },
 					label,
 				}),
 			});
