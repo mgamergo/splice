@@ -420,10 +420,36 @@ export function rebuildCaptions({
 		tracks: withoutCaptionTrack({ tracks: sequence.tracks }),
 		sources: captions.sources,
 	});
-	const unanchored = (time: number) =>
-		!oldWords.some(
-			({ start }) => Math.abs(start - seconds(time)) < SAME_TIME_SECONDS,
+	const sameTime = (a: number, b: number) =>
+		Math.abs(a - b) < SAME_TIME_SECONDS;
+	/** The latest start before `at` that several words share. */
+	const runStartBefore = (at: number) =>
+		oldWords
+			.filter(({ start }) => start < at - SAME_TIME_SECONDS)
+			.findLast(
+				({ start }, _, earlier) =>
+					earlier.filter((word) => sameTime(word.start, start)).length > 1,
+			)?.start;
+	/**
+	 * Whether a caption starting here is a later caption of a run of words
+	 * that share a start: after the run's start, before its hold ends, and at
+	 * no word's own start.
+	 */
+	const isStaggered = (time: number) => {
+		const at = seconds(time);
+		const runStart = runStartBefore(at);
+		if (runStart === undefined) return false;
+		const runEnd =
+			Math.max(
+				...oldWords
+					.filter(({ start }) => start >= runStart - SAME_TIME_SECONDS && start < at)
+					.map(({ end }) => end),
+			) + CAPTION_HOLD_SECONDS;
+		return (
+			at < runEnd - SAME_TIME_SECONDS &&
+			!oldWords.some(({ start }) => sameTime(start, at))
 		);
+	};
 	const keptEnd = Math.max(
 		0,
 		...before.map((clip) => seconds(clip.startTime + clip.duration)),
@@ -431,10 +457,10 @@ export function rebuildCaptions({
 	const runCrosses = previous.clips.some(
 		(clip) =>
 			!before.includes(clip) &&
-			Math.abs(seconds(clip.startTime) - keptEnd) < SAME_TIME_SECONDS &&
-			unanchored(clip.startTime),
+			sameTime(seconds(clip.startTime), keptEnd) &&
+			isStaggered(clip.startTime),
 	);
-	const runStart = oldWords.filter(({ start }) => start < keptEnd).at(-1)?.start;
+	const runStart = runStartBefore(keptEnd);
 	if (runCrosses && runStart !== undefined)
 		before = before.filter(
 			(clip) => seconds(clip.startTime) < runStart - SAME_TIME_SECONDS,
@@ -446,7 +472,7 @@ export function rebuildCaptions({
 	// after a caption the edit replaced belongs to a run being rebuilt.
 	while (
 		kept.length &&
-		unanchored(kept[0].startTime) &&
+		isStaggered(kept[0].startTime) &&
 		previous.clips.some(
 			(clip) =>
 				!kept.includes(clip) &&

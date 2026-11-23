@@ -16,6 +16,7 @@ import {
 	videoClip,
 } from "@/agent/__tests__/fixtures";
 import { buildDefaultSequence } from "@/timeline/sequences";
+import { mediaTimeToSeconds } from "@/wasm";
 import type { SequenceTracks, TextClip } from "@/timeline";
 
 // eslint-disable-next-line opencut/prefer-object-params -- terse test data
@@ -459,8 +460,8 @@ describe("rebuildCaptions", () => {
 	// 1.0–1.2 s and "w2" at 1.2–1.4 s. "z" follows at 5 s.
 	function stackedSequence({
 		correct = false,
-		moveZ = false,
-	}: { correct?: boolean; moveZ?: boolean } = {}) {
+		moveZ,
+	}: { correct?: boolean; moveZ?: number } = {}) {
 		const content = tracksWith({});
 		content.main = {
 			...content.main,
@@ -482,8 +483,8 @@ describe("rebuildCaptions", () => {
 		const edit = (clip: TextClip): TextClip =>
 			correct && clip.params.content === "w2"
 				? { ...clip, params: { ...clip.params, content: "W2!" } }
-				: moveZ && clip.params.content === "z"
-					? { ...clip, startTime: s(5.1), params: { ...clip.params, content: "Z!" } }
+				: moveZ !== undefined && clip.params.content === "z"
+					? { ...clip, startTime: s(moveZ), params: { ...clip.params, content: "Z!" } }
 					: clip;
 		const sequence = {
 			...buildDefaultSequence({ name: "S", isMain: true }),
@@ -505,7 +506,15 @@ describe("rebuildCaptions", () => {
 			if (track?.type !== "text") throw new Error("No Captions track");
 			return track.clips.map((clip) => clip.params.content);
 		};
-		return { sequence, texts };
+		const timed = (window: { start: number; end: number; delta: number }) => {
+			const [track] = rebuildCaptions({ sequence, tracks: content, canvasSize, window }).overlay;
+			if (track?.type !== "text") throw new Error("No Captions track");
+			return track.clips.map((clip) => [
+				clip.params.content,
+				Math.round(mediaTimeToSeconds({ time: clip.startTime }) * 1000) / 1000,
+			]);
+		};
+		return { sequence, texts, timed };
 	}
 
 	test("rebuilds a run of stacked words whose tail the window removed", () => {
@@ -523,8 +532,21 @@ describe("rebuildCaptions", () => {
 	});
 
 	test("keeps a caption moved off its word's start outside the window", () => {
-		const { texts } = stackedSequence({ moveZ: true });
-		expect(texts({ start: s(2), end: s(3), delta: 0 })).toEqual(["w1", "w2", "Z!"]);
+		const { timed } = stackedSequence({ moveZ: 5.1 });
+		expect(timed({ start: s(2), end: s(3), delta: 0 })).toEqual([
+			["w1", 1],
+			["w2", 1.2],
+			["Z!", 5.1],
+		]);
+	});
+
+	test("keeps a moved caption right after a run the edit rebuilds", () => {
+		const { timed } = stackedSequence({ moveZ: 1.4 });
+		expect(timed({ start: s(1.2), end: s(1.4), delta: 0 })).toEqual([
+			["w1", 1],
+			["w2", 1.2],
+			["Z!", 1.4],
+		]);
 	});
 
 	test("rebuilds a run of stacked words whose head the window removed", () => {
