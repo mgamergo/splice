@@ -139,20 +139,18 @@ export class SequencesManager {
 		updates,
 	}: {
 		time: MediaTime;
-		updates: Partial<Omit<Marker, "time">>;
+		updates: Partial<Pick<Marker, "note" | "color" | "duration">>;
 	}): Promise<void> {
 		const command = new UpdateMarkerCommand({ time, updates });
 		this.editor.command.execute({ command });
 	}
 
-	async moveMarker({
-		fromTime,
-		toTime,
-	}: {
+	async moveMarker(move: {
 		fromTime: MediaTime;
 		toTime: MediaTime;
+		markerId?: string;
 	}): Promise<void> {
-		const command = new MoveMarkerCommand({ fromTime, toTime });
+		const command = new MoveMarkerCommand(move);
 		this.editor.command.execute({ command });
 	}
 

@@ -81,6 +81,8 @@ export function buildSeparatedAudioClip({
 		type: "audio",
 		sourceType: "upload",
 		mediaId: sourceClip.mediaId,
+		bestTakeMarkerIds: sourceClip.bestTakeMarkerIds,
+		sourceAudioGroupId: sourceClip.sourceAudioGroupId,
 		name: sourceClip.name,
 		duration: sourceClip.duration,
 		startTime: sourceClip.startTime,

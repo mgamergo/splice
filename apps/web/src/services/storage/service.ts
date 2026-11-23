@@ -1,5 +1,6 @@
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
+import { removalMarkerDataSchema } from "@splice/bridge/ops";
 import { mediaUrlForPath } from "@splice/bridge";
 import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
 import type { DiskMedia, ProjectItem } from "@/media/types";
@@ -23,7 +24,7 @@ import { isSupportedProjectFormat } from "./format";
 import type { Marker, SequenceTracks, TSequence } from "@/timeline";
 import { roundMediaTime } from "@/wasm";
 
-function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
+export function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
 	if (!Array.isArray(raw)) return [];
 	return raw
 		.map((item): Marker | null => {
@@ -38,7 +39,8 @@ function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
 			) {
 				return null;
 			}
-			return {
+			const parsed = removalMarkerDataSchema.safeParse(obj.data);
+			const fields = {
 				time: roundMediaTime({ time: obj.time }),
 				...(typeof obj.note === "string" && { note: obj.note }),
 				...(typeof obj.color === "string" && { color: obj.color }),
@@ -46,6 +48,9 @@ function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
 					duration: roundMediaTime({ time: obj.duration }),
 				}),
 			};
+			return parsed.success && typeof obj.id === "string" && obj.id
+				? { ...fields, id: obj.id, data: parsed.data }
+				: fields;
 		})
 		.filter((b): b is Marker => b !== null);
 }

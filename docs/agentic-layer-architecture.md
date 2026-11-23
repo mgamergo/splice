@@ -88,6 +88,8 @@ type EditOp =
   | { op: "ripple_delete"; ranges: Range[]; tracks?: TrackRef[] }
   | { op: "set_params"; target: ClipRef; params: Record<string, ParamValue> }
   | { op: "add_marker"; at: TimeSpec; name: string; data?: RemovalMarkerData }
+  | { op: "restore_takes"; markerId: string; takeIndex?: number }
+  | { op: "swap_take"; markerId: string; takeIndex: number }
   | { op: "add_text"; text: string; at: TimeSpec; duration: TimeSpec; style?: TextStyle }
   | { op: "add_effect"; target: ClipRef; effect: string; params?: Record<string, ParamValue> };
 // …one variant per command the agent needs; more are added as features need them.
@@ -113,7 +115,7 @@ project "Episode 12" horizontal 1920x1080 @30fps, revision 41
 sequence "Rough Cut" 00:08:12.10
 V1: [c1 rec-01.mkv 0.00–18.20 (src 4.00–22.20)] [c2 rec-01.mkv 18.20–41.00 (src 63.10–85.90)] …
 A1: (linked audio)
-markers: 18.20 removal "Intro" (3 takes stored)
+markers: 18.20 removal "Intro" (3 takes stored) [m1]
 project items: rec-01.mkv (42:10, 1080p, audio), rec-02.mkv (06:30)
 ```
 
@@ -134,6 +136,10 @@ project items: rec-01.mkv (42:10, 1080p, audio), rec-02.mkv (06:30)
 | Captions (Shorts) | tab | Word-by-word captions from the same transcript. |
 
 A **removal marker** stores the bad takes it replaced, as source ranges. **Restore** and **Swap** apply ordinary undoable edits built from that data, so they keep working after any amount of later editing.
+
+Source ranges use `projectItemId`, `sourceIn`, and `sourceOut`, with in and out measured in source seconds. `restore_takes` restores all stored takes in order when `takeIndex` is omitted. Both ops use zero-based indices.
+
+Swap replaces the nearest contiguous run of tracked clips that still show the best take's source range. When you add a removal marker within one frame of the best take, the marker tracks the original clips across splits and moves. A marker placed farther away supports Restore. It replaces only the surviving portion of a trimmed best take with the entire chosen take. The original best take’s full source range goes back into the marker. Swap leaves the sequence intact if it cannot identify the best take or its paired extracted audio, or if rippling would overlap clips on another track.
 
 ## 6. The bridge (`splice` ↔ tab)
 

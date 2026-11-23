@@ -50,7 +50,15 @@ export function buildSequenceDigest({
 		lines.push(`A${index + 1} (${track.id}): ${clips || "(empty)"}`);
 	});
 	const markers = sequence.markers
-		.map((marker) => `${formatSeconds({ time: marker.time })}${marker.note ? ` "${marker.note}"` : ""}`)
+		.map((marker) => {
+			const time = formatSeconds({ time: marker.time });
+			if (marker.data) {
+				const { sectionName, badTakes } = marker.data;
+				const count = badTakes.length;
+				return `${time} removal ${JSON.stringify(sectionName)} (${count} ${count === 1 ? "take" : "takes"} stored) [${marker.id}]`;
+			}
+			return `${time}${marker.note ? ` ${JSON.stringify(marker.note)}` : ""}`;
+		})
 		.join(", ");
 	lines.push(`markers: ${markers || "(none)"}`);
 	return lines.join("\n");

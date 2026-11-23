@@ -59,8 +59,8 @@ function rippleDeleteClips<TClip extends TimelineClip>({
 
 /**
  * Removes the given time ranges from every track and closes the gaps, the way
- * Premiere's ripple delete does. Markers inside a range are removed and later
- * markers move with the clips. Ranges are in sequence time before any removal.
+ * Premiere's ripple delete does. Removal markers in the cut move to its start
+ * so their stored takes stay available. Later markers move with the clips.
  */
 export function rippleDeleteRanges({
 	tracks,
@@ -89,7 +89,8 @@ export function rippleDeleteRanges({
 		const length = subMediaTime({ a: range.end, b: range.start });
 		nextMarkers = nextMarkers.flatMap((marker): Marker[] => {
 			if (marker.time < range.start) return [marker];
-			if (marker.time < range.end) return [];
+			if (marker.time < range.end)
+				return marker.data ? [{ ...marker, time: range.start }] : [];
 			return [{ ...marker, time: subMediaTime({ a: marker.time, b: length }) }];
 		});
 	}

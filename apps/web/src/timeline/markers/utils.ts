@@ -1,6 +1,12 @@
 import type { Marker } from "@/timeline";
 import type { FrameRate } from "opencut-wasm";
-import { addMediaTime, roundFrameTime, type MediaTime } from "@/wasm";
+import {
+	addMediaTime,
+	minMediaTime,
+	maxMediaTime,
+	roundFrameTime,
+	type MediaTime,
+} from "@/wasm";
 
 function markerTimeEqual({
 	markerTime,
@@ -31,9 +37,17 @@ export function isMarkerAtTime({
 	markers: Marker[];
 	frameTime: MediaTime;
 }): boolean {
-	return markers.some((marker) =>
-		markerTimeEqual({ markerTime: marker.time, frameTime }),
-	);
+	return findOrdinaryMarkerIndex({ markers, time: frameTime }) !== -1;
+}
+
+function findOrdinaryMarkerIndex({
+	markers,
+	time,
+}: {
+	markers: Marker[];
+	time: MediaTime;
+}) {
+	return markers.findIndex((marker) => !marker.data && marker.time === time);
 }
 
 export function toggleMarkerInArray({
@@ -43,7 +57,7 @@ export function toggleMarkerInArray({
 	markers: Marker[];
 	frameTime: MediaTime;
 }): Marker[] {
-	const markerIndex = findMarkerIndex({ markers, frameTime });
+	const markerIndex = findOrdinaryMarkerIndex({ markers, time: frameTime });
 
 	if (markerIndex !== -1) {
 		return markers.filter((_, index) => index !== markerIndex);
@@ -55,27 +69,27 @@ export function toggleMarkerInArray({
 
 export function removeMarkerFromArray({
 	markers,
-	frameTime,
+	time,
 }: {
 	markers: Marker[];
-	frameTime: MediaTime;
+	time: MediaTime;
 }): Marker[] {
-	return markers.filter(
-		(marker) =>
-			!markerTimeEqual({ markerTime: marker.time, frameTime }),
-	);
+	const index = findOrdinaryMarkerIndex({ markers, time });
+	return index === -1
+		? markers
+		: markers.filter((_, position) => position !== index);
 }
 
 export function updateMarkerInArray({
 	markers,
-	frameTime,
+	time,
 	updates,
 }: {
 	markers: Marker[];
-	frameTime: MediaTime;
-	updates: Partial<Omit<Marker, "time">>;
+	time: MediaTime;
+	updates: Partial<Pick<Marker, "note" | "color" | "duration">>;
 }): Marker[] {
-	const index = findMarkerIndex({ markers, frameTime });
+	const index = findOrdinaryMarkerIndex({ markers, time });
 	if (index === -1) {
 		return markers;
 	}
@@ -90,12 +104,16 @@ export function moveMarkerInArray({
 	markers,
 	fromTime,
 	toTime,
+	markerId,
 }: {
 	markers: Marker[];
 	fromTime: MediaTime;
 	toTime: MediaTime;
+	markerId?: string;
 }): Marker[] {
-	const index = findMarkerIndex({ markers, frameTime: fromTime });
+	const index = markers.findIndex((marker) =>
+		markerId ? marker.id === markerId : !marker.id && marker.time === fromTime,
+	);
 	if (index === -1) {
 		return markers;
 	}
@@ -141,5 +159,20 @@ export function getMarkersActiveAtTime({
 				? addMediaTime({ a: start, b: marker.duration })
 				: start;
 		return time >= start && time <= end;
+	});
+}
+
+export function clampMarkerDragTime({
+	time,
+	duration,
+	markerTime,
+}: {
+	time: MediaTime;
+	duration: MediaTime;
+	markerTime: MediaTime;
+}): MediaTime {
+	return minMediaTime({
+		a: time,
+		b: maxMediaTime({ a: duration, b: markerTime }),
 	});
 }
