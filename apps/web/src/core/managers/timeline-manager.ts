@@ -753,10 +753,11 @@ export class TimelineManager {
 			before: committedTracks,
 			after: afterTracks,
 		});
-		this.editor.command.push({ command });
 		this.previewOverlay.clear();
 		this.previewTracks = null;
 		this.updateTracks(afterTracks);
+		// After the update, so revision listeners see the committed tracks.
+		this.editor.command.push({ command });
 	}
 
 	discardPreview(): void {

@@ -8,10 +8,12 @@
   "scripts": {
     "dev:web": "turbo run dev --filter=@splice/web",
     "build:web": "turbo run build --filter=@splice/web",
-    "lint:web": "eslint apps/web/src --ext .ts,.tsx",
-    "lint:web:fix": "eslint apps/web/src --ext .ts,.tsx --fix",
-    "typecheck": "tsc --noEmit -p apps/web",
-    "test": "bun test"
+    "lint": "eslint apps/web/src apps/server/src packages/bridge/src --ext .ts,.tsx",
+    "lint:fix": "eslint apps/web/src apps/server/src packages/bridge/src --ext .ts,.tsx --fix",
+    "typecheck": "tsc --noEmit -p apps/web && tsc --noEmit -p apps/server && tsc --noEmit -p packages/bridge",
+    "test": "bun test",
+    "splice": "bun apps/server/src/cli.ts",
+    "splice:mcp": "bun apps/server/src/cli.ts mcp"
   },
   "dependencies": {
     "@types/react": "^19.2.10",

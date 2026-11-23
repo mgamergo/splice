@@ -23,6 +23,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ShortcutsDialog } from "@/actions/components/shortcuts-dialog";
 import Image from "next/image";
 import { cn } from "@/utils/ui";
+import { AgentIndicator } from "@/bridge/components/agent-indicator";
 
 export function EditorHeader() {
 	return (
@@ -32,6 +33,7 @@ export function EditorHeader() {
 				<EditableProjectName />
 			</div>
 			<nav className="flex items-center gap-2">
+				<AgentIndicator />
 				<ExportButton />
 				<ThemeToggle />
 			</nav>

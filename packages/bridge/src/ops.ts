@@ -6,7 +6,10 @@ export const timeSpecSchema = z.union([
 	z.strictObject({ timecode: z.string().min(1) }),
 ]);
 
-const rangeSchema = z.strictObject({ start: timeSpecSchema, end: timeSpecSchema });
+const rangeSchema = z.strictObject({
+	start: timeSpecSchema,
+	end: timeSpecSchema,
+});
 
 export const editOpSchema = z.discriminatedUnion("op", [
 	z.strictObject({
@@ -32,9 +35,23 @@ export const editOpSchema = z.discriminatedUnion("op", [
 ]);
 
 export const applyRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.describe(
+			"The id of the sequence the ops were planned against, from the digest",
+		),
+	expectedRevision: z
+		.number()
+		.int()
+		.nonnegative()
+		.describe("The revision the ops were planned against, from the digest"),
+	label: z
+		.string()
+		.min(1)
+		.max(120)
+		.describe('Short undo label shown to the creator, e.g. "Remove bad takes"'),
 	ops: z.array(editOpSchema).min(1),
-	expectedRevision: z.number().int().nonnegative(),
-	label: z.string().min(1).max(120),
 });
 
 export type TimeSpec = z.infer<typeof timeSpecSchema>;

@@ -1,5 +1,5 @@
 import { buildSequenceDigest } from "@/agent/digest";
-import { type ApplyRequest, applyRequestSchema, type EditOp } from "@/agent/ops";
+import { type ApplyRequest, applyRequestSchema, type EditOp } from "@splice/bridge/ops";
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";
@@ -70,6 +70,25 @@ export class EditorApi {
 		}
 		if (!this.editor.project.getActive() || !this.editor.sequences.getActiveSequenceOrNull()) {
 			return { ok: false, code: "NO_PROJECT", message: "No project is open", revision };
+		}
+		if (this.editor.timeline.isPreviewActive()) {
+			// Applying now would wipe the creator's uncommitted drag.
+			return {
+				ok: false,
+				code: "REVISION_CONFLICT",
+				message: "The creator is in the middle of an edit. Wait a moment, re-read the sequence and plan again.",
+				revision,
+			};
+		}
+		const activeSequenceId = this.editor.sequences.getActiveSequence().id;
+		if (parsed.data.sequenceId !== activeSequenceId) {
+			return {
+				ok: false,
+				code: "REVISION_CONFLICT",
+				message: `The creator switched to another sequence (${activeSequenceId}). Re-read it and plan again.`,
+				revision,
+				digest: this.getDigest(),
+			};
 		}
 		if (parsed.data.expectedRevision !== revision) {
 			return {

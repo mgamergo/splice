@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEditor } from "@/editor/use-editor";
+import { useCaptureBridgeToken } from "@/bridge/use-agent-bridge";
 import { useProjectsStore } from "./store";
 import type {
 	TProjectMetadata,
@@ -85,6 +86,7 @@ const VIEW_MODE_OPTIONS = [
 ];
 
 export default function ProjectsPage() {
+	useCaptureBridgeToken();
 	const { searchQuery, sortKey, sortOrder, viewMode } = useProjectsStore();
 	const editor = useEditor();
 	const sortOption: TProjectSortOption = `${sortKey}-${sortOrder}`;

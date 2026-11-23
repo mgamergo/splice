@@ -1,5 +1,5 @@
 import type { FrameRate } from "opencut-wasm";
-import type { TimeSpec } from "@/agent/ops";
+import type { TimeSpec } from "@splice/bridge/ops";
 import {
 	type MediaTime,
 	mediaTimeFromSeconds,
