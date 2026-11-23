@@ -6,12 +6,12 @@ const TOKEN = "test-token";
 const running: RunningServer[] = [];
 const sockets: WebSocket[] = [];
 
-afterEach(async () => {
+afterEach(() => {
 	for (const socket of sockets.splice(0)) {
 		socket.close();
 	}
 	for (const server of running.splice(0)) {
-		await server.stop();
+		server.stop();
 	}
 });
 
@@ -177,7 +177,7 @@ describe("editor proxy", () => {
 			expect(await response.text()).toBe("page /editor/abc");
 			expect((await fetch(`${server.origin}/splice/unknown`)).status).toBe(404);
 		} finally {
-			await upstream.stop(true);
+			void upstream.stop(true);
 		}
 	});
 });

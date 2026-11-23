@@ -35,11 +35,11 @@ export interface StartServerOptions {
 }
 
 export interface RunningServer {
-	server: Server;
+	server: Server<SocketData>;
 	bridge: TabBridge;
 	/** `http://127.0.0.1:<port>` */
 	origin: string;
-	stop(): Promise<void>;
+	stop(): void;
 }
 
 function rpcResult({ id, result }: { id: RpcId | null; result: unknown }): RpcResponse {
@@ -261,8 +261,9 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 		server,
 		bridge,
 		origin: `http://127.0.0.1:${server.port}`,
-		async stop() {
-			await server.stop(true);
+		stop() {
+			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
+			void server.stop(true);
 		},
 	};
 }

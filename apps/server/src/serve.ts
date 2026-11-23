@@ -20,9 +20,9 @@ export async function serve({ config, dev }: { config: SpliceConfig; dev: boolea
 		session: { port: config.port, pid: process.pid, token, startedAt: new Date().toISOString() },
 	});
 
-	const shutdown = async () => {
+	const shutdown = () => {
 		webHost.stop();
-		await running.stop();
+		running.stop();
 		process.exit(0);
 	};
 	process.on("SIGINT", shutdown);
@@ -32,7 +32,7 @@ export async function serve({ config, dev }: { config: SpliceConfig; dev: boolea
 		await webHost.ready;
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
-		await running.stop();
+		running.stop();
 		process.exit(1);
 	}
 	console.log(`\nSplice is running. Data folder: ${config.root}`);
