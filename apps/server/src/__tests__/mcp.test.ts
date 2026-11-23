@@ -200,7 +200,7 @@ describe("loudness tools", () => {
 					sections,
 					sourceGains: [
 						{ projectItemId: "rec-1", gainDb: 14 },
-						{ projectItemId: "rec-2", gainDb: 1.5 },
+						{ projectItemId: "rec-2", gainDb: 1.45 },
 					],
 				},
 			],
@@ -268,7 +268,7 @@ describe("loudness tools", () => {
 				label: "Agent: normalize loudness",
 				ops: [
 					{ op: "set_gain", clipIds: ["c1", "c2"], gainDb: 12 },
-					{ op: "set_gain", clipIds: ["c3"], gainDb: 1.5 },
+					{ op: "set_gain", clipIds: ["c3"], gainDb: 1.45 },
 				],
 			},
 		]);

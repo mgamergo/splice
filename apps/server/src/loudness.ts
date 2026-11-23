@@ -116,6 +116,12 @@ export function parseEbur128Summary(log: string): LoudnessMeasurement {
 	return { integratedLufs: integrated, truePeakDbtp: peak, lraLu: lra };
 }
 
+/**
+ * FFmpeg prints the true peak to 0.1 dB, so the real peak can be up to this
+ * much above the reading. Gains leave room for it to keep the cap.
+ */
+export const PEAK_READING_MARGIN_DB = 0.05;
+
 export interface LoudnessGain {
 	gainDb: number;
 	/** Integrated loudness after the gain. */
@@ -142,7 +148,9 @@ export function loudnessGain({
 	if (integratedLufs === null) return null;
 	const wanted = targetLufs - integratedLufs;
 	const headroom =
-		truePeakDbtp === null ? Infinity : maxTruePeakDbtp - truePeakDbtp;
+		truePeakDbtp === null
+			? Infinity
+			: maxTruePeakDbtp - truePeakDbtp - PEAK_READING_MARGIN_DB;
 	let gain = Math.min(wanted, headroom, CLIP_GAIN_DB.max);
 	let limitedBy: LoudnessGain["limitedBy"] =
 		gain === wanted ? null : gain === headroom ? "true_peak" : "max_gain";

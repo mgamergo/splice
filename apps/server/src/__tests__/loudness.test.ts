@@ -8,6 +8,7 @@ import {
 	ebur128Args,
 	loudnessCacheKey,
 	loudnessGain,
+	PEAK_READING_MARGIN_DB,
 	parseEbur128Summary,
 	planSourceGains,
 } from "../loudness";
@@ -83,9 +84,9 @@ test("caps the gain so the true peak stays at or below -1 dBTP", () => {
 		measurement: { integratedLufs: -18, truePeakDbtp: -3.37, lraLu: 6 },
 	});
 	expect(capped).toEqual({
-		gainDb: 2.37,
-		expectedLufs: -15.6,
-		expectedTruePeakDbtp: -1,
+		gainDb: 2.32,
+		expectedLufs: -15.7,
+		expectedTruePeakDbtp: -1.1,
 		limitedBy: "true_peak",
 	});
 	// A peak already above the cap is brought down even if that lowers loudness.
@@ -93,13 +94,16 @@ test("caps the gain so the true peak stays at or below -1 dBTP", () => {
 		loudnessGain({
 			measurement: { integratedLufs: -20, truePeakDbtp: 0.4, lraLu: 6 },
 		}),
-	).toMatchObject({ gainDb: -1.4, limitedBy: "true_peak" });
-	// Rounding never lifts the peak over the cap.
-	for (const truePeakDbtp of [-4.123, -7.0049, -2.0001]) {
+	).toMatchObject({ gainDb: -1.45, limitedBy: "true_peak" });
+	// Neither FFmpeg's 0.1 dB peak reading nor rounding the gain lifts the
+	// real peak over the cap.
+	for (const truePeakDbtp of [-4.123, -7.0049, -2.0001, -4.3]) {
 		const gain = loudnessGain({
 			measurement: { integratedLufs: -30, truePeakDbtp, lraLu: 0 },
 		});
-		expect(truePeakDbtp + (gain?.gainDb ?? 0)).toBeLessThanOrEqual(-1);
+		expect(
+			truePeakDbtp + PEAK_READING_MARGIN_DB + (gain?.gainDb ?? 0),
+		).toBeLessThanOrEqual(-1);
 	}
 });
 
@@ -249,13 +253,15 @@ test("plans one gain per measurable source and says why others were skipped", as
 		{ path: "quiet.wav", ranges: [{ start: 0, end: 4 }] },
 		{ path: "silent.wav", ranges: [{ start: 0, end: 1 }] },
 	]);
-	expect(plan.sourceGains).toEqual([{ projectItemId: "quiet", gainDb: 11.5 }]);
+	expect(plan.sourceGains).toEqual([
+		{ projectItemId: "quiet", gainDb: 11.45 },
+	]);
 	expect(plan.sources.map((source) => "skipped" in source)).toEqual([
 		false,
 		true,
 		true,
 	]);
 	expect(plan.sources[0]).toMatchObject({
-		gain: { gainDb: 11.5, limitedBy: "true_peak", expectedLufs: -16.5 },
+		gain: { gainDb: 11.45, limitedBy: "true_peak", expectedLufs: -16.5 },
 	});
 });
