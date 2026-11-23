@@ -120,6 +120,7 @@ test("collects each recording's audible source ranges, merged, with its Footage 
 		{
 			projectItemId: first,
 			path: `Day 1/${first}.mov`,
+			noiseReduction: false,
 			clipIds: ["a", "b", "c"],
 			ranges: [
 				{ start: 0, end: 3 },
@@ -129,6 +130,7 @@ test("collects each recording's audible source ranges, merged, with its Footage 
 		{
 			projectItemId: "browser",
 			path: null,
+			noiseReduction: false,
 			clipIds: ["d"],
 			ranges: [{ start: 0, end: 1 }],
 		},
@@ -151,12 +153,14 @@ test("a planned rough cut reports what it keeps without changing anything", () =
 			{
 				projectItemId: first,
 				path: `Day 1/${first}.mov`,
+				noiseReduction: false,
 				clipIds: [expect.any(String)],
 				ranges: [{ start: 0, end: 8 }],
 			},
 			{
 				projectItemId: second,
 				path: `Day 1/${second}.mov`,
+				noiseReduction: false,
 				clipIds: [expect.any(String)],
 				ranges: [{ start: 2, end: 12 }],
 			},

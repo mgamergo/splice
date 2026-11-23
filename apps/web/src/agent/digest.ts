@@ -3,6 +3,7 @@ import { formatSeconds } from "@/agent/time";
 import type { TProject } from "@/project/types";
 import { getSourceSpanAtClipTime } from "@/retime";
 import { canClipHaveAudio, isRetimableClip } from "@/timeline";
+import { isNoiseReduced } from "@/timeline/audio-state";
 import type { TimelineClip, TSequence } from "@/timeline";
 import { addMediaTime, roundMediaTime } from "@/wasm";
 
@@ -22,6 +23,7 @@ function describeClip({ clip }: { clip: TimelineClip }): string {
 	const volume = canClipHaveAudio(clip) ? clip.params.volume : undefined;
 	if (typeof volume === "number" && volume !== 0)
 		text += ` gain ${formatGain(volume)}`;
+	if (canClipHaveAudio(clip) && isNoiseReduced({ clip })) text += " denoised";
 	return `${text}]`;
 }
 

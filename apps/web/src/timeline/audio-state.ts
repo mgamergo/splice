@@ -38,6 +38,15 @@ export function isClipMuted({
 	return clip.params.muted === true;
 }
 
+/** Whether the clip plays its recording's noise-reduced render. Off by default. */
+export function isNoiseReduced({
+	clip,
+}: {
+	clip: AudioCapableClip;
+}): boolean {
+	return clip.params.noiseReduction === true;
+}
+
 export function hasAnimatedVolume({
 	clip,
 }: {

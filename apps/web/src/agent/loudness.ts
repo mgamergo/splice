@@ -18,7 +18,11 @@ import {
 	type VideoClip,
 	updateClipInSequenceTracks,
 } from "@/timeline";
-import { hasAnimatedVolume, isClipMuted } from "@/timeline/audio-state";
+import {
+	hasAnimatedVolume,
+	isClipMuted,
+	isNoiseReduced,
+} from "@/timeline/audio-state";
 import { addMediaTime, mediaTimeToSeconds, roundMediaTime } from "@/wasm";
 
 export class LoudnessError extends Error {}
@@ -27,10 +31,10 @@ export function formatGain(gainDb: number): string {
 	return `${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)} dB`;
 }
 
-type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
+export type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
 
 /** Clips whose project item audio reaches playback and export, in track order. */
-function audibleClips({
+export function audibleClips({
 	tracks,
 	projectItems,
 }: {
@@ -55,7 +59,11 @@ function audibleClips({
 	});
 }
 
-/** Each project item's audible source ranges in a sequence, for measuring loudness. */
+/**
+ * Each project item's audible source ranges in a sequence, for measuring
+ * loudness. Clips of one item with noise reduction on and off are separate
+ * sources, since they sound different.
+ */
 export function collectAudioSources({
 	tracks,
 	projectItems,
@@ -72,16 +80,21 @@ export function collectAudioSources({
 			}),
 		});
 		if (span <= 0) continue;
-		let source = sources.get(clip.mediaId);
+		const item = projectItems.find(({ id }) => id === clip.mediaId);
+		const path = item && isDiskMedia(item.file) ? item.file.path : null;
+		// Browser-stored items have no noise-reduced render to play.
+		const noiseReduction = path !== null && isNoiseReduced({ clip });
+		const key = `${clip.mediaId}:${noiseReduction}`;
+		let source = sources.get(key);
 		if (!source) {
-			const item = projectItems.find(({ id }) => id === clip.mediaId);
 			source = {
 				projectItemId: clip.mediaId,
-				path: item && isDiskMedia(item.file) ? item.file.path : null,
+				path,
+				noiseReduction,
 				clipIds: [],
 				ranges: [],
 			};
-			sources.set(clip.mediaId, source);
+			sources.set(key, source);
 		}
 		source.clipIds.push(clip.id);
 		source.ranges.push({

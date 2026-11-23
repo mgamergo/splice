@@ -109,6 +109,15 @@ export const editOpSchema = z.discriminatedUnion("op", [
 		clipIds: z.array(z.string().min(1)).min(1),
 		gainDb: gainDbSchema,
 	}),
+	z.strictObject({
+		op: z.literal("set_noise_reduction"),
+		clipIds: z.array(z.string().min(1)).min(1),
+		enabled: z
+			.boolean()
+			.describe(
+				"Play and export these clips' audio from splice's noise-reduced render of the recording",
+			),
+	}),
 ]);
 
 export const applyRequestSchema = z.strictObject({
@@ -151,6 +160,13 @@ const targetLufs = z
 		`Integrated loudness target in LUFS. Defaults to ${DEFAULT_TARGET_LUFS}.`,
 	);
 
+const loudnessOption = z
+	.union([z.strictObject({ targetLufs }), z.literal(false)])
+	.optional()
+	.describe(
+		`Normalizes each recording's kept audio to ${DEFAULT_TARGET_LUFS} LUFS, or targetLufs, in the same undo step. Pass false to keep source levels.`,
+	);
+
 export const roughCutRequestSchema = z.strictObject({
 	sequenceId: z
 		.string()
@@ -172,11 +188,12 @@ export const roughCutRequestSchema = z.strictObject({
 			}),
 		)
 		.min(1),
-	loudness: z
-		.union([z.strictObject({ targetLufs }), z.literal(false)])
+	loudness: loudnessOption,
+	noiseReduction: z
+		.boolean()
 		.optional()
 		.describe(
-			`Normalizes each recording's kept audio to ${DEFAULT_TARGET_LUFS} LUFS, or targetLufs, in the same undo step. Pass false to keep source levels.`,
+			"Turns noise reduction on for every recording in the cut, in the same undo step. Off by default.",
 		),
 });
 
@@ -211,6 +228,21 @@ export const normalizeLoudnessRequestSchema = z.strictObject({
 	label: applyRequestSchema.shape.label.optional(),
 });
 
+export const noiseReductionRequestSchema = z.strictObject({
+	expectedRevision,
+	enabled: z.boolean().describe("true turns noise reduction on, false off"),
+	projectItemIds: z
+		.array(z.string().min(1))
+		.min(1)
+		.max(200)
+		.optional()
+		.describe(
+			"Recordings to change. Defaults to every recording heard in the active sequence.",
+		),
+	loudness: loudnessOption,
+	label: applyRequestSchema.shape.label.optional(),
+});
+
 export const sourceRangeSchema = z
 	.strictObject({
 		start: z.number().nonnegative().describe("Source seconds"),
@@ -240,6 +272,8 @@ export const audioSourceSchema = z.strictObject({
 	projectItemId: z.string(),
 	/** The Footage path, or null for items stored in the browser. */
 	path: z.string().nullable(),
+	/** Whether these clips play the noise-reduced render. */
+	noiseReduction: z.boolean(),
 	clipIds: z.array(z.string()),
 	/** Sorted, merged source ranges. */
 	ranges: z.array(sourceRangeSchema),
@@ -257,6 +291,7 @@ export type TakePlacement = z.infer<typeof takePlacementSchema>;
 export type Take = z.infer<typeof takeSchema>;
 export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
 export type SourceGain = z.infer<typeof sourceGainSchema>;
+export type NoiseReductionRequest = z.infer<typeof noiseReductionRequestSchema>;
 export type SourceRange = z.infer<typeof sourceRangeSchema>;
 export type AudioSource = z.infer<typeof audioSourceSchema>;
 

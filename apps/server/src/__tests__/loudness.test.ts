@@ -13,6 +13,10 @@ import {
 	planSourceGains,
 } from "../loudness";
 
+const noRenders = {
+	ensure: () => Promise.reject(new Error("must not reduce noise")),
+};
+
 const fixture = (name: string) =>
 	Bun.file(join(import.meta.dir, "fixtures", name)).text();
 
@@ -149,6 +153,7 @@ test("measures once per file and ranges, in any order, and remeasures a changed 
 		const calls: unknown[] = [];
 		const meter = createLoudnessMeter({
 			root,
+			noiseReduction: noRenders,
 			measure: async ({ ranges }) => {
 				calls.push(ranges);
 				return { integratedLufs: -20, truePeakDbtp: -6, lraLu: 3 };
@@ -165,6 +170,7 @@ test("measures once per file and ranges, in any order, and remeasures a changed 
 		]);
 		expect(first).toEqual({
 			path: "take.wav",
+			noiseReduction: false,
 			ranges: [
 				{ start: 0, end: 3 },
 				{ start: 4, end: 6 },
@@ -202,6 +208,7 @@ test("refuses paths outside Footage and files that aren't audio or video", async
 		await writeFile(join(root, "Footage", "notes.txt"), "text");
 		const meter = createLoudnessMeter({
 			root,
+			noiseReduction: noRenders,
 			measure: () => {
 				throw new Error("must not measure");
 			},
@@ -226,18 +233,21 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "quiet",
 				path: "quiet.wav",
+				noiseReduction: false,
 				clipIds: ["a", "b"],
 				ranges: [{ start: 0, end: 4 }],
 			},
 			{
 				projectItemId: "browser",
 				path: null,
+				noiseReduction: false,
 				clipIds: ["c"],
 				ranges: [{ start: 0, end: 1 }],
 			},
 			{
 				projectItemId: "silent",
 				path: "silent.wav",
+				noiseReduction: false,
 				clipIds: ["d"],
 				ranges: [{ start: 0, end: 1 }],
 			},
@@ -250,8 +260,16 @@ test("plans one gain per measurable source and says why others were skipped", as
 		},
 	});
 	expect(measured).toEqual([
-		{ path: "quiet.wav", ranges: [{ start: 0, end: 4 }] },
-		{ path: "silent.wav", ranges: [{ start: 0, end: 1 }] },
+		{
+			path: "quiet.wav",
+			ranges: [{ start: 0, end: 4 }],
+			noiseReduction: false,
+		},
+		{
+			path: "silent.wav",
+			ranges: [{ start: 0, end: 1 }],
+			noiseReduction: false,
+		},
 	]);
 	expect(plan.sourceGains).toEqual([{ projectItemId: "quiet", gainDb: 11.45 }]);
 	expect(plan.sources.map((source) => "skipped" in source)).toEqual([

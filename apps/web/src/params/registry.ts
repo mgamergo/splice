@@ -171,6 +171,13 @@ const audioClipParams: ClipParamDefinition[] = [
 		default: false,
 		keyframable: false,
 	},
+	{
+		key: "noiseReduction",
+		label: "Reduce noise",
+		type: "boolean",
+		default: false,
+		keyframable: false,
+	},
 ];
 
 const textClipParams: ClipParamDefinition[] = [

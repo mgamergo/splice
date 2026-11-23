@@ -19,6 +19,7 @@ import {
 	SOURCE_TIMELINE_FILTER,
 } from "./transcription-tools";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import { NOISE_REDUCTION_VERSION, type NoiseReducer } from "./noise-reduction";
 
 export const measureLoudnessInput = {
 	path: footagePath,
@@ -29,6 +30,12 @@ export const measureLoudnessInput = {
 		.optional()
 		.describe(
 			"Source ranges in seconds to measure together, e.g. what a cut keeps. Defaults to the whole file.",
+		),
+	noiseReduction: z
+		.boolean()
+		.optional()
+		.describe(
+			"Measure the audio after noise reduction, as clips with it on play and export.",
 		),
 };
 const measureSchema = z.object(measureLoudnessInput);
@@ -47,16 +54,18 @@ export function loudnessCacheKey({
 	size,
 	mtimeMs,
 	ranges,
+	noiseReduction = false,
 }: {
 	path: string;
 	size: number;
 	mtimeMs: number;
 	ranges: SourceRange[] | null;
+	noiseReduction?: boolean;
 }): string {
 	// Bump the version when the measurement changes.
-	return createHash("sha256")
-		.update(JSON.stringify([1, path, size, mtimeMs, ranges]))
-		.digest("hex");
+	const key: unknown[] = [1, path, size, mtimeMs, ranges];
+	if (noiseReduction) key.push({ noiseReduction: NOISE_REDUCTION_VERSION });
+	return createHash("sha256").update(JSON.stringify(key)).digest("hex");
 }
 
 function seconds(value: number): string {
@@ -173,11 +182,13 @@ export function loudnessGain({
 export type MeasureLoudness = (request: {
 	path: string;
 	ranges: SourceRange[];
+	noiseReduction: boolean;
 }) => Promise<LoudnessMeasurement>;
 
 export type SourceLoudness = {
 	projectItemId: string;
 	path: string | null;
+	noiseReduction: boolean;
 } & (
 	| { measured: LoudnessMeasurement; gain: LoudnessGain }
 	| { skipped: string }
@@ -196,28 +207,30 @@ export async function planSourceGains({
 	const sourceGains: SourceGain[] = [];
 	const sources: SourceLoudness[] = [];
 	// One at a time: each measurement already decodes a whole file.
-	for (const { projectItemId, path, ranges } of audioSources) {
+	for (const { projectItemId, path, ranges, noiseReduction } of audioSources) {
 		if (path === null) {
 			sources.push({
 				projectItemId,
 				path,
+				noiseReduction,
 				skipped:
 					"Stored in the browser, not under Footage, so it can't be measured.",
 			});
 			continue;
 		}
-		const measured = await measure({ path, ranges });
+		const measured = await measure({ path, ranges, noiseReduction });
 		const gain = loudnessGain({ measurement: measured, targetLufs });
 		if (!gain) {
 			sources.push({
 				projectItemId,
 				path,
+				noiseReduction,
 				skipped: "Silent or shorter than 400 ms.",
 			});
 			continue;
 		}
 		sourceGains.push({ projectItemId, gainDb: gain.gainDb });
-		sources.push({ projectItemId, path, measured, gain });
+		sources.push({ projectItemId, path, noiseReduction, measured, gain });
 	}
 	return { sourceGains, sources };
 }
@@ -260,16 +273,17 @@ export async function runEbur128({
 }
 
 /**
- * Measures Footage loudness with FFmpeg, cached under Cache/loudness.
- *
- * Noise reduction (off by default, see docs/decisions.md) isn't built yet.
- * It changes loudness, so when it lands, measure its output, not the source.
+ * Measures Footage loudness with FFmpeg, cached under Cache/loudness. Noise
+ * reduction lowers loudness, so with it on, the noise-reduced render is
+ * measured instead of the source.
  */
 export function createLoudnessMeter({
 	root,
+	noiseReduction,
 	measure = runEbur128,
 }: {
 	root: string;
+	noiseReduction: Pick<NoiseReducer, "ensure">;
 	measure?: typeof runEbur128;
 }) {
 	const stop = new AbortController();
@@ -280,38 +294,45 @@ export function createLoudnessMeter({
 		Promise<LoudnessMeasurement & { cached: boolean }>
 	>();
 
-	async function identify({
-		path,
-		ranges,
-	}: {
+	type Target = {
 		path: string;
 		ranges: SourceRange[] | null;
-	}) {
+		denoised: boolean;
+	};
+
+	async function identify({ path, ranges, denoised }: Target) {
 		const { source, info } = await resolveRecording({ root, path });
 		const key = loudnessCacheKey({
 			path,
 			size: info.size,
 			mtimeMs: info.mtimeMs,
 			ranges,
+			noiseReduction: denoised,
 		});
 		return { source, key, cachePath: join(cacheDir, `${key}.json`) };
 	}
 
 	async function measureAndCache({
-		path,
-		ranges,
+		target,
 		source,
 		key,
 		cachePath,
 	}: {
-		path: string;
-		ranges: SourceRange[] | null;
+		target: Target;
 		source: string;
 		key: string;
 		cachePath: string;
 	}): Promise<LoudnessMeasurement> {
-		const measurement = await measure({ root, source, ranges, signal });
-		const current = await identify({ path, ranges });
+		const input = target.denoised
+			? (await noiseReduction.ensure({ path: target.path })).file
+			: source;
+		const measurement = await measure({
+			root,
+			source: input,
+			ranges: target.ranges,
+			signal,
+		});
+		const current = await identify(target);
 		if (current.key !== key)
 			throw new Error("Footage changed while measuring. Measure it again.");
 		await mkdir(cacheDir, { recursive: true });
@@ -330,11 +351,12 @@ export function createLoudnessMeter({
 		async measure(params: unknown) {
 			const parsed = measureSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			const { path } = parsed.data;
+			const { path, noiseReduction: denoised = false } = parsed.data;
 			const ranges = parsed.data.ranges
 				? mergeSourceRanges(parsed.data.ranges)
 				: null;
-			const { source, key, cachePath } = await identify({ path, ranges });
+			const target = { path, ranges, denoised };
+			const { source, key, cachePath } = await identify(target);
 			signal.throwIfAborted();
 			let pending = active.get(key);
 			if (!pending) {
@@ -343,8 +365,7 @@ export function createLoudnessMeter({
 						? { ...cached, cached: true }
 						: {
 								...(await measureAndCache({
-									path,
-									ranges,
+									target,
 									source,
 									key,
 									cachePath,
@@ -355,7 +376,7 @@ export function createLoudnessMeter({
 				active.set(key, pending);
 				void pending.catch(() => undefined).finally(() => active.delete(key));
 			}
-			return { path, ranges, ...(await pending) };
+			return { path, ranges, noiseReduction: denoised, ...(await pending) };
 		},
 
 		async stop() {
