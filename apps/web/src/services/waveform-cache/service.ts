@@ -106,12 +106,7 @@ async function buildDiskWaveformSummary({
 			throw new Error(`No audio track in ${sourceKey}`);
 		}
 		const sink = new AudioBufferSink(track);
-		async function* chunks() {
-			for await (const { buffer } of sink.buffers()) {
-				yield buffer;
-			}
-		}
-		return await buildStreamedWaveformSummary({ sourceKey, chunks: chunks() });
+		return await buildStreamedWaveformSummary({ sourceKey, chunks: sink.buffers() });
 	} finally {
 		input.dispose();
 	}

@@ -61,7 +61,11 @@ export async function resolveFootagePath({
 	try {
 		const footage = await realpath(join(root, FOOTAGE_FOLDER));
 		const resolved = await realpath(join(footage, ...segments));
-		return isInside({ parent: footage, child: resolved }) ? resolved : null;
+		if (!isInside({ parent: footage, child: resolved })) {
+			return null;
+		}
+		// A directory named like a video must not look like a present file.
+		return (await stat(resolved)).isFile() ? resolved : null;
 	} catch {
 		return null;
 	}

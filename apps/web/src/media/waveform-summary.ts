@@ -66,7 +66,8 @@ export async function buildStreamedWaveformSummary({
 	bucketSize = DEFAULT_SOURCE_WAVEFORM_BUCKET_SIZE,
 }: {
 	sourceKey: string;
-	chunks: AsyncIterable<AudioBuffer>;
+	/** Decoded audio with its start time in the source, in seconds. */
+	chunks: AsyncIterable<{ buffer: AudioBuffer; timestamp: number }>;
 	bucketSize?: number;
 }): Promise<SourceWaveformSummary> {
 	const safeBucketSize = Math.max(1, Math.floor(bucketSize));
@@ -75,8 +76,22 @@ export async function buildStreamedWaveformSummary({
 	let totalSamples = 0;
 	let bucketPeak = 0;
 	let bucketFill = 0;
-	for await (const buffer of chunks) {
+	const pushBucket = () => {
+		amplitudes.push(bucketPeak);
+		bucketPeak = 0;
+		bucketFill = 0;
+	};
+	for await (const { buffer, timestamp } of chunks) {
 		sampleRate ||= buffer.sampleRate;
+		// A delayed start or a gap is silence in playback, so it is in the waveform too.
+		let gap = Math.round(timestamp * sampleRate) - totalSamples;
+		while (gap > 0) {
+			const take = Math.min(gap, safeBucketSize - bucketFill);
+			bucketFill += take;
+			totalSamples += take;
+			gap -= take;
+			if (bucketFill === safeBucketSize) pushBucket();
+		}
 		const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) =>
 			buffer.getChannelData(c),
 		);
@@ -86,11 +101,7 @@ export async function buildStreamedWaveformSummary({
 				if (abs > bucketPeak) bucketPeak = abs;
 			}
 			bucketFill++;
-			if (bucketFill === safeBucketSize) {
-				amplitudes.push(bucketPeak);
-				bucketPeak = 0;
-				bucketFill = 0;
-			}
+			if (bucketFill === safeBucketSize) pushBucket();
 		}
 		totalSamples += buffer.length;
 	}

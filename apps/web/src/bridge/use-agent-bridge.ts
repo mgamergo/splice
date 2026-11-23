@@ -57,7 +57,11 @@ export function useAgentBridge(): void {
 				api,
 				isBlocked: isAgentBlocked,
 			}),
-			onStatus: store.setStatus,
+			onStatus: (status) => {
+				store.setStatus(status);
+				// A restarted splice has a new media key.
+				if (status === "connected") void ensureMediaSession();
+			},
 			onRequest: (method) => {
 				if (method === "editor.apply" && !isAgentBlocked()) {
 					store.markEdit();

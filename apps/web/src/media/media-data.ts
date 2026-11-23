@@ -1,7 +1,7 @@
 import { isFootagePath, mediaUrlForPath } from "@splice/bridge";
 import { BlobSource, UrlSource, type Source } from "mediabunny";
 import { ensureMediaSession } from "@/bridge/media-session";
-import type { DiskMedia, MediaData } from "./types";
+import type { DiskMedia, MediaData, ProjectItem } from "./types";
 
 export function isDiskMedia(data: MediaData): data is DiskMedia {
 	return !(data instanceof Blob) && data.kind === "disk";
@@ -19,16 +19,13 @@ export function createMediaSource(data: MediaData): Source {
 		: new BlobSource(data);
 }
 
-/** All of a project item's bytes; only for files small enough to hold in memory. */
-export async function readMediaBytes(data: MediaData): Promise<ArrayBuffer> {
-	if (!isDiskMedia(data)) {
-		return data.arrayBuffer();
-	}
-	const response = await fetch(data.url, { credentials: "same-origin" });
-	if (!response.ok) {
-		throw new Error(`Couldn't read ${data.path} (${response.status})`);
-	}
-	return response.arrayBuffer();
+/**
+ * Items whose bytes can be read. A disk item whose file left Footage keeps its
+ * clips in the sequence, but renderers and the audio mix skip it, so one missing
+ * file doesn't break every frame it overlaps.
+ */
+export function playableProjectItems(items: ProjectItem[]): ProjectItem[] {
+	return items.filter((item) => !item.missing);
 }
 
 /** Looks up a file under Footage through `splice`, or returns null if it's gone. */

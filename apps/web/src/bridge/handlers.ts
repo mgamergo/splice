@@ -62,7 +62,7 @@ export function createTabHandlers({
 					parsed.error.issues.map((issue) => issue.message).join("; "),
 				);
 			}
-			return importDiskItems({ editor, paths: parsed.data.paths });
+			return importDiskItems({ editor, paths: parsed.data.paths, isBlocked });
 		},
 	};
 }

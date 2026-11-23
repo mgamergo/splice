@@ -21,7 +21,7 @@ import {
 	resolveFootagePath,
 	serveFile,
 } from "./footage";
-import { tokensMatch } from "./session";
+import { createToken, tokensMatch } from "./session";
 import { BridgeError, TabBridge } from "./tab-bridge";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
@@ -132,6 +132,9 @@ export function startServer({
 	isUpstreamReady = () => true,
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
+	// What the media cookie carries: it only opens footage, never the RPC endpoint,
+	// since browsers share cookies across ports on the same host. New each start.
+	const mediaKey = createToken();
 
 	async function handleRpc(request: Request): Promise<Response> {
 		if (request.method !== "POST") {
@@ -224,19 +227,23 @@ export function startServer({
 		}
 	}
 
-	/** Whether a request carries the token, as a bearer token or the session cookie. */
-	function isAuthorized(request: Request): boolean {
+	function hasBearerToken(request: Request): boolean {
 		const auth = request.headers.get("authorization");
-		if (auth?.startsWith("Bearer ")) {
-			return tokensMatch({
-				expected: token,
-				actual: auth.slice("Bearer ".length),
-			});
-		}
 		return tokensMatch({
 			expected: token,
-			actual: readCookie({ request, name: SESSION_COOKIE }),
+			actual: auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null,
 		});
+	}
+
+	/** Media accepts the bridge token (for `splice mcp` and tests) or the media cookie. */
+	function isMediaAuthorized(request: Request): boolean {
+		return (
+			hasBearerToken(request) ||
+			tokensMatch({
+				expected: mediaKey,
+				actual: readCookie({ request, name: SESSION_COOKIE }),
+			})
+		);
 	}
 
 	/** Trades the tab's token for an HttpOnly cookie, so media elements can load footage. */
@@ -258,13 +265,13 @@ export function startServer({
 		) {
 			return new Response("Forbidden", { status: 403 });
 		}
-		if (!isAuthorized(request)) {
+		if (!hasBearerToken(request)) {
 			return new Response("Unauthorized", { status: 401 });
 		}
 		return new Response(null, {
 			status: 204,
 			headers: {
-				"set-cookie": `${SESSION_COOKIE}=${token}; Path=/splice; HttpOnly; SameSite=Strict`,
+				"set-cookie": `${SESSION_COOKIE}=${mediaKey}; Path=${BRIDGE_PATHS.media}; HttpOnly; SameSite=Strict`,
 			},
 		});
 	}
@@ -279,7 +286,7 @@ export function startServer({
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			return new Response("Method not allowed", { status: 405 });
 		}
-		if (!isAuthorized(request)) {
+		if (!isMediaAuthorized(request)) {
 			return new Response("Unauthorized", { status: 401 });
 		}
 		let path: string;
@@ -453,6 +460,8 @@ export function startServer({
 					: new Response("Upgrade failed", { status: 400 });
 			}
 			if (url.pathname === BRIDGE_PATHS.rpc) {
+				// Imports can outlast Bun's idle timeout; the bridge call has its own deadline.
+				srv.timeout(request, 0);
 				return handleRpc(request);
 			}
 			if (url.pathname === BRIDGE_PATHS.session) {

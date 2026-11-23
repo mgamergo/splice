@@ -103,6 +103,43 @@ async function describe({
 	return { ...base, ...(await readImage({ url: media.url })) };
 }
 
+/** Imports in flight, by project and path, so overlapping requests share one item. */
+const inFlight = new Map<string, Promise<ProjectItem>>();
+
+async function importOne({
+	editor,
+	projectId,
+	path,
+	isBlocked,
+}: {
+	editor: EditorCore;
+	projectId: string;
+	path: string;
+	isBlocked: () => boolean;
+}): Promise<ProjectItem> {
+	const media = await probeDiskMedia({ path });
+	if (!media) {
+		throw new Error("Not found in the Footage folder");
+	}
+	const type = mediaTypeOf({ mime: media.type });
+	if (!type) {
+		throw new Error(`Unsupported file type ${media.type}`);
+	}
+	const projectItem = await describe({ media, type });
+	// Probing takes a while; the creator may have stopped the agent or switched projects.
+	if (isBlocked()) {
+		throw new Error("The creator stopped the agent");
+	}
+	if (editor.project.getActiveOrNull()?.metadata.id !== projectId) {
+		throw new Error("The creator opened another project during the import");
+	}
+	const item = await editor.media.addProjectItem({ projectId, projectItem });
+	if (!item) {
+		throw new Error("Couldn't save the project item");
+	}
+	return item;
+}
+
 /**
  * Adds files under the Footage folder to the open project as project items that
  * reference the files in place. Importing a path that's already an item returns it.
@@ -110,16 +147,23 @@ async function describe({
 export async function importDiskItems({
 	editor,
 	paths,
+	isBlocked,
 }: {
 	editor: EditorCore;
 	paths: string[];
+	isBlocked: () => boolean;
 }): Promise<ImportItemsResult> {
 	const project = editor.project.getActiveOrNull();
 	if (!project) {
 		throw new Error("No project is open");
 	}
+	const projectId = project.metadata.id;
 	const result: ImportItemsResult = { imported: [], failed: [] };
 	for (const path of paths) {
+		if (isBlocked()) {
+			result.failed.push({ path, error: "The creator stopped the agent" });
+			continue;
+		}
 		const existing = editor.media
 			.getProjectItems()
 			.find((item) => isDiskMedia(item.file) && item.file.path === path);
@@ -127,23 +171,16 @@ export async function importDiskItems({
 			result.imported.push(summarizeItem(existing));
 			continue;
 		}
+		const key = `${projectId}\n${path}`;
+		let pending = inFlight.get(key);
+		if (!pending) {
+			pending = importOne({ editor, projectId, path, isBlocked }).finally(() =>
+				inFlight.delete(key),
+			);
+			inFlight.set(key, pending);
+		}
 		try {
-			const media = await probeDiskMedia({ path });
-			if (!media) {
-				throw new Error("Not found in the Footage folder");
-			}
-			const type = mediaTypeOf({ mime: media.type });
-			if (!type) {
-				throw new Error(`Unsupported file type ${media.type}`);
-			}
-			const item = await editor.media.addProjectItem({
-				projectId: project.metadata.id,
-				projectItem: await describe({ media, type }),
-			});
-			if (!item) {
-				throw new Error("Couldn't save the project item");
-			}
-			result.imported.push(summarizeItem(item));
+			result.imported.push(summarizeItem(await pending));
 		} catch (error) {
 			result.failed.push({
 				path,

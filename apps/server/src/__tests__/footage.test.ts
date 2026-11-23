@@ -18,6 +18,7 @@ beforeAll(async () => {
 	await writeFile(join(root, "Footage", "notes.txt"), "not media");
 	await writeFile(join(root, "secret.mp4"), "outside");
 	await symlink(join(root, "secret.mp4"), join(root, "Footage", "escape.mp4"));
+	await mkdir(join(root, "Footage", "folder.mp4"));
 	server = startServer({ port: 0, token: TOKEN, root, upstream: null });
 });
 
@@ -97,10 +98,11 @@ describe("media route", () => {
 	test("refuses requests without the token or cookie, and paths outside Footage", async () => {
 		const url = `${server.origin}${mediaUrlForPath("Day 1/take #1.mp4")}`;
 		expect((await fetch(url)).status).toBe(401);
+		// The cookie carries a media-only key, never the bridge token.
 		expect(
 			(await fetch(url, { headers: { cookie: `${SESSION_COOKIE}=${TOKEN}` } }))
 				.status,
-		).toBe(200);
+		).toBe(401);
 		expect((await media({ path: "escape.mp4" })).status).toBe(404);
 		expect(
 			(
@@ -110,6 +112,7 @@ describe("media route", () => {
 			).status,
 		).toBe(404);
 		expect((await media({ path: "notes.txt" })).status).toBe(404);
+		expect((await media({ path: "folder.mp4" })).status).toBe(404);
 	});
 
 	test("the session endpoint sets the cookie only for the editor's origin with the token", async () => {
@@ -135,7 +138,20 @@ describe("media route", () => {
 			authorization: `Bearer ${TOKEN}`,
 		});
 		expect(ok.status).toBe(204);
-		expect(ok.headers.get("set-cookie")).toContain("HttpOnly");
-		expect(ok.headers.get("set-cookie")).toContain("SameSite=Strict");
+		const cookie = ok.headers.get("set-cookie") ?? "";
+		expect(cookie).toContain("HttpOnly");
+		expect(cookie).toContain("SameSite=Strict");
+		expect(cookie).toContain(`Path=${BRIDGE_PATHS.media}`);
+		expect(cookie).not.toContain(TOKEN);
+		const key = cookie.split(";")[0];
+		const url = `${server.origin}${mediaUrlForPath("Day 1/take #1.mp4")}`;
+		expect((await fetch(url, { headers: { cookie: key } })).status).toBe(200);
+		// The media key opens footage only, never the RPC endpoint.
+		const rpc = await fetch(`${server.origin}${BRIDGE_PATHS.rpc}`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${key.split("=")[1]}` },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "server.status" }),
+		});
+		expect(rpc.status).toBe(401);
 	});
 });

@@ -20,7 +20,7 @@ import { canTrackHaveAudio } from "@/timeline";
 import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, AudioBufferSink } from "mediabunny";
-import { createMediaSource, isDiskMedia } from "@/media/media-data";
+import { createMediaSource, isDiskMedia, playableProjectItems } from "@/media/media-data";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	computeRmsBuckets,
@@ -100,7 +100,7 @@ export function collectAudibleCandidates({
 	projectItems: ProjectItem[];
 }): AudibleClipCandidate[] {
 	const allTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
-	const mediaMap = new Map(projectItems.map((a) => [a.id, a]));
+	const mediaMap = new Map(playableProjectItems(projectItems).map((a) => [a.id, a]));
 	const candidates: AudibleClipCandidate[] = [];
 
 	for (const track of allTracks) {
@@ -145,7 +145,7 @@ export async function collectAudioClips({
 }): Promise<CollectedAudioClip[]> {
 	const candidates = collectAudibleCandidates({ tracks, projectItems });
 	const mediaMap = new Map<string, ProjectItem>(
-		projectItems.map((media) => [media.id, media]),
+		playableProjectItems(projectItems).map((media) => [media.id, media]),
 	);
 	const pendingClips: Array<Promise<CollectedAudioClip | null>> = [];
 
@@ -495,7 +495,7 @@ export async function collectAudioMixSources({
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const audioMixSources: AudioMixSource[] = [];
 	const mediaMap = new Map<string, ProjectItem>(
-		projectItems.map((projectItem) => [projectItem.id, projectItem]),
+		playableProjectItems(projectItems).map((projectItem) => [projectItem.id, projectItem]),
 	);
 	const pendingLibrarySources: Array<Promise<AudioMixSource | null>> = [];
 
@@ -558,7 +558,7 @@ export async function collectAudioClipSources({
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const clips: AudioClipSource[] = [];
 	const mediaMap = new Map<string, ProjectItem>(
-		projectItems.map((projectItem) => [projectItem.id, projectItem]),
+		playableProjectItems(projectItems).map((projectItem) => [projectItem.id, projectItem]),
 	);
 	const pendingLibraryClips: Array<Promise<AudioClipSource | null>> = [];
 
