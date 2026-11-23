@@ -7,6 +7,7 @@ import {
 import type { SubtitleCue, SubtitleStyleOverrides } from "@/subtitles/types";
 import { buildEmptyTrack } from "@/timeline/placement";
 import { calculateTotalDuration } from "@/timeline";
+import { isClipMuted } from "@/timeline/audio-state";
 import type {
 	AudioClip,
 	SequenceTracks,
@@ -32,6 +33,11 @@ const CAPTION_HOLD_SECONDS = 0.3;
 const CAPTION_BREAK_GAP_SECONDS = 0.5;
 /** whisper.cpp sometimes gives a word no duration; it still gets shown. */
 const MIN_WORD_SECONDS = 0.08;
+/**
+ * The shortest caption shown: three frames at 30 fps. Captions stacked on one
+ * time merge rather than flash by unseen.
+ */
+const MIN_CAPTION_SECONDS = 0.1;
 const SENTENCE_END = /[.!?,;:…]["')\]]*$/;
 
 export class CaptionError extends Error {}
@@ -59,6 +65,7 @@ function sourceClips({ tracks }: { tracks: SequenceTracks }) {
 			if (
 				(clip.type !== "video" && clip.type !== "audio") ||
 				!("mediaId" in clip) ||
+				isClipMuted({ clip }) ||
 				(clip.type === "video" && clip.isSourceAudioEnabled === false)
 			)
 				continue;
@@ -175,9 +182,24 @@ export function buildCaptionCues({
 			nextStart,
 			Math.max(...run.map((group) => group.at(-1)!.end)) + CAPTION_HOLD_SECONDS,
 		);
-		const share = (end - start) / run.length;
-		for (const [offset, group] of run.entries()) {
-			const text = group.map(({ text }) => text).join(" ");
+		// Too many to show each for MIN_CAPTION_SECONDS: merge neighbours.
+		const count = Math.max(
+			1,
+			Math.min(
+				run.length,
+				Math.floor((end - start) / MIN_CAPTION_SECONDS + 1e-9),
+			),
+		);
+		const share = (end - start) / count;
+		for (let offset = 0; offset < count; offset++) {
+			const text = run
+				.slice(
+					Math.floor((offset * run.length) / count),
+					Math.floor(((offset + 1) * run.length) / count),
+				)
+				.flat()
+				.map(({ text }) => text)
+				.join(" ");
 			cues.push({
 				text: style.uppercase ? text.toUpperCase() : text,
 				startTime: start + offset * share,
@@ -220,8 +242,71 @@ export function withoutCaptionTrack({
 }): SequenceTracks {
 	return {
 		...tracks,
-		overlay: tracks.overlay.filter(({ name }) => name !== CAPTION_TRACK_NAME),
+		overlay: tracks.overlay.filter((track) => !isCaptionTrack(track)),
 	};
+}
+
+function isCaptionTrack(
+	track: SequenceTracks["overlay"][number],
+): track is TextTrack {
+	return track.type === "text" && track.name === CAPTION_TRACK_NAME;
+}
+
+/**
+ * Caption clips for the words heard in [from, until) on the timeline, ending
+ * by `until` and where the content ends. Words outside the range don't join
+ * a caption inside it, so neighbouring kept captions never repeat a word.
+ */
+function captionClips({
+	content,
+	captions,
+	canvasSize,
+	from = 0,
+	until = Number.POSITIVE_INFINITY,
+}: {
+	content: SequenceTracks;
+	captions: CaptionsRequest;
+	canvasSize: { width: number; height: number };
+	from?: number;
+	until?: number;
+}): TextTrack["clips"] {
+	const words = mapWordsToTimeline({
+		tracks: content,
+		sources: captions.sources,
+	}).filter(({ start }) => start >= from && start < until);
+	const end = Math.min(
+		until,
+		mediaTimeToSeconds({ time: calculateTotalDuration({ tracks: content }) }),
+	);
+	const ctx = createMeasurementContext();
+	return buildCaptionCues({ words, style: captions.style })
+		.filter((cue) => cue.startTime < end)
+		.map((cue, index) => ({
+			...buildSubtitleTextClip({
+				index,
+				caption: {
+					...cue,
+					duration: Math.min(cue.duration, end - cue.startTime),
+				},
+				canvasSize,
+				ctx,
+			}),
+			id: generateUUID(),
+		}));
+}
+
+/** Recordings on the timeline whose words weren't given, so got no captions. */
+function uncaptionedItemIds({
+	content,
+	captions,
+}: {
+	content: SequenceTracks;
+	captions: CaptionsRequest;
+}): string[] {
+	const given = new Set(captions.sources.map(({ projectItemId }) => projectItemId));
+	return [...sourceClips({ tracks: content }).keys()].filter(
+		(id) => !given.has(id),
+	);
 }
 
 /**
@@ -236,45 +321,29 @@ export function withCaptionTrack({
 	tracks: SequenceTracks;
 	captions: CaptionsRequest;
 	canvasSize: { width: number; height: number };
-}): { tracks: SequenceTracks; captionCount: number } {
+}): {
+	tracks: SequenceTracks;
+	captionCount: number;
+	uncaptionedItemIds: string[];
+} {
 	const content = withoutCaptionTrack({ tracks });
-	const words = mapWordsToTimeline({
-		tracks: content,
-		sources: captions.sources,
-	});
-	if (!words.length)
+	const clips = captionClips({ content, captions, canvasSize });
+	if (!clips.length)
 		throw new CaptionError(
 			"No transcript words fall inside the sequence's clips. Transcribe the recordings on this sequence first.",
 		);
-	const contentEnd = mediaTimeToSeconds({
-		time: calculateTotalDuration({ tracks: content }),
-	});
-	const cues = buildCaptionCues({ words, style: captions.style }).flatMap(
-		(cue) =>
-			cue.startTime < contentEnd
-				? [
-						{
-							...cue,
-							duration: Math.min(cue.duration, contentEnd - cue.startTime),
-						},
-					]
-				: [],
-	);
-	const ctx = createMeasurementContext();
 	const track: TextTrack = {
 		...buildEmptyTrack({
 			id: generateUUID(),
 			type: "text",
 			name: CAPTION_TRACK_NAME,
 		}),
-		clips: cues.map((caption, index) => ({
-			...buildSubtitleTextClip({ index, caption, canvasSize, ctx }),
-			id: generateUUID(),
-		})),
+		clips,
 	};
 	return {
 		tracks: { ...content, overlay: [track, ...content.overlay] },
-		captionCount: cues.length,
+		captionCount: clips.length,
+		uncaptionedItemIds: uncaptionedItemIds({ content, captions }),
 	};
 }
 
@@ -295,26 +364,23 @@ export function rebuildCaptions({
 	/** The edited range in the old timeline, and how much later content moved. */
 	window: { start: number; end: number; delta: number };
 }): SequenceTracks {
-	if (!sequence.captions) return tracks;
-	let fresh: TextTrack | undefined;
-	try {
-		fresh = withCaptionTrack({
-			tracks,
-			captions: sequence.captions,
-			canvasSize,
-		}).tracks.overlay[0] as TextTrack;
-	} catch (error) {
-		if (!(error instanceof CaptionError)) throw error;
-	}
+	const { captions } = sequence;
+	if (!captions) return tracks;
 	const content = withoutCaptionTrack({ tracks });
-	const previous = sequence.tracks.overlay.find(
-		(track): track is TextTrack =>
-			track.type === "text" && track.name === CAPTION_TRACK_NAME,
-	);
-	if (!previous)
-		return fresh
-			? { ...content, overlay: [fresh, ...content.overlay] }
-			: content;
+	const previous = sequence.tracks.overlay.find(isCaptionTrack);
+	if (!previous) {
+		const clips = captionClips({ content, captions, canvasSize });
+		if (!clips.length) return content;
+		const track: TextTrack = {
+			...buildEmptyTrack({
+				id: generateUUID(),
+				type: "text",
+				name: CAPTION_TRACK_NAME,
+			}),
+			clips,
+		};
+		return { ...content, overlay: [track, ...content.overlay] };
+	}
 
 	const before = previous.clips.filter(
 		(clip) => clip.startTime + clip.duration <= window.start,
@@ -326,27 +392,17 @@ export function rebuildCaptions({
 			startTime: roundMediaTime({ time: clip.startTime + window.delta }),
 		}));
 	// Fresh captions fill the gap between the kept ones, including any that
-	// straddled the window's edges.
-	const from = Math.max(
-		0,
-		...before.map((clip) => clip.startTime + clip.duration),
-	);
+	// straddled the window's edges, from only the words heard in the gap.
+	const from = mediaTimeToSeconds({
+		time: roundMediaTime({
+			time: Math.max(0, ...before.map((clip) => clip.startTime + clip.duration)),
+		}),
+	});
 	const until = Math.min(
 		Number.POSITIVE_INFINITY,
-		...after.map((clip) => clip.startTime),
+		...after.map((clip) => mediaTimeToSeconds({ time: clip.startTime })),
 	);
-	const between = (fresh?.clips ?? []).flatMap((clip) =>
-		clip.startTime >= from && clip.startTime < until
-			? [
-					{
-						...clip,
-						duration: roundMediaTime({
-							time: Math.min(clip.duration, until - clip.startTime),
-						}),
-					},
-				]
-			: [],
-	);
+	const between = captionClips({ content, captions, canvasSize, from, until });
 	return {
 		...content,
 		overlay: [

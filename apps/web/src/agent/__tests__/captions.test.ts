@@ -3,7 +3,11 @@ import {
 	buildCaptionCues,
 	CAPTION_TRACK_NAME,
 	mapWordsToTimeline,
+	rebuildCaptions,
+	withCaptionTrack,
+	withoutCaptionTrack,
 } from "@/agent/captions";
+import { buildEmptyTrack } from "@/timeline/placement";
 import { EditorApi } from "@/agent/editor-api";
 import {
 	audioClip,
@@ -222,6 +226,35 @@ describe("mapWordsToTimeline edge cases", () => {
 		});
 		expect(rounded(words)).toEqual([[4.97, 4.989, "ok"]]);
 	});
+
+	test("skips clips muted on their own", () => {
+		const tracks = tracksWith({});
+		const clip = videoClip({ id: "v", start: 0, duration: 5 });
+		tracks.main = {
+			...tracks.main,
+			clips: [{ ...clip, params: { ...clip.params, muted: true } }],
+		};
+		expect(
+			mapWordsToTimeline({
+				tracks,
+				sources: [{ projectItemId: "rec", words: [word(1, 1.5, "muted")] }],
+			}),
+		).toEqual([]);
+	});
+});
+
+describe("withoutCaptionTrack", () => {
+	test("removes only the text track named Captions", () => {
+		const tracks = tracksWith({
+			overlay: [
+				{ ...buildEmptyTrack({ id: "c", type: "text", name: CAPTION_TRACK_NAME }) },
+				{ ...buildEmptyTrack({ id: "v", type: "video", name: CAPTION_TRACK_NAME }) },
+			],
+		});
+		expect(
+			withoutCaptionTrack({ tracks }).overlay.map(({ id }) => id),
+		).toEqual(["v"]);
+	});
 });
 
 describe("buildCaptionCues", () => {
@@ -250,7 +283,7 @@ describe("buildCaptionCues", () => {
 		]);
 	});
 
-	test("many words on one time share their gap without delaying the next caption", () => {
+	test("many words on one time merge so each caption stays up long enough to see", () => {
 		const stacked = Array.from({ length: 8 }, (_, index) =>
 			word(1, 1, `w${index}`),
 		);
@@ -258,9 +291,15 @@ describe("buildCaptionCues", () => {
 			words: [...stacked, word(1.3, 1.6, "next")],
 			style: { wordsPerCaption: 1 },
 		});
-		expect(cues).toHaveLength(9);
+		expect(cues.map(({ text }) => text)).toEqual([
+			"w0 w1",
+			"w2 w3 w4",
+			"w5 w6 w7",
+			"next",
+		]);
+		for (const cue of cues) expect(cue.duration).toBeGreaterThanOrEqual(0.1);
+		expect(cues[2].startTime + cues[2].duration).toBeCloseTo(1.3);
 		expect(cues.at(-1)).toMatchObject({ text: "next", startTime: 1.3 });
-		expect(cues[7].startTime + cues[7].duration).toBeCloseTo(1.3);
 	});
 
 	test("staggers captions whose words share one time instead of dropping them", () => {
@@ -388,5 +427,68 @@ describe("EditorApi captions", () => {
 		expect(result).toMatchObject({ ok: false, code: "INVALID_OP" });
 		expect(api.getRevision()).toBe(before);
 		expect(captionTracks(editor)).toHaveLength(0);
+	});
+});
+
+describe("rebuildCaptions", () => {
+	test("captions only the words in the edited gap, so none repeat or go missing at its edges", () => {
+		const content = tracksWith({});
+		content.main = {
+			...content.main,
+			clips: [videoClip({ id: "v", start: 0, duration: 10 })],
+		};
+		const canvasSize = { width: 1080, height: 1920 };
+		const intro = word(0, 0.4, "Intro");
+		const following = word(3.1, 3.5, "Following.");
+		// Before the edit only these two were heard: "Intro" 0–0.7 and
+		// "Following." from 3.1, which the creator corrected by hand.
+		const old = withCaptionTrack({
+			tracks: content,
+			captions: { sources: [{ projectItemId: "rec", words: [intro, following] }] },
+			canvasSize,
+		}).tracks;
+		const [track] = old.overlay;
+		if (track?.type !== "text") throw new Error("No Captions track");
+		const oldTrack = {
+			...track,
+			clips: track.clips.map((clip) =>
+				clip.params.content === "Following."
+					? { ...clip, params: { ...clip.params, content: "Corrected." } }
+					: clip,
+			),
+		};
+		const sequence = {
+			...buildDefaultSequence({ name: "S", isMain: true }),
+			tracks: { ...old, overlay: [oldTrack] },
+			captions: {
+				sources: [
+					{
+						projectItemId: "rec",
+						// "Back" would join "Intro", and "Replacement" would join
+						// "Following.", if the gap's words were grouped with theirs.
+						words: [
+							intro,
+							word(0.8, 1, "Back"),
+							word(2.7, 3, "Replacement"),
+							following,
+						],
+					},
+				],
+			},
+		};
+		const rebuilt = rebuildCaptions({
+			sequence,
+			tracks: content,
+			canvasSize,
+			window: { start: s(0.7), end: s(3.1), delta: 0 },
+		});
+		const [captions] = rebuilt.overlay;
+		if (captions?.type !== "text") throw new Error("No Captions track");
+		expect(captions.clips.map((clip) => clip.params.content)).toEqual([
+			"Intro",
+			"Back",
+			"Replacement",
+			"Corrected.",
+		]);
 	});
 });

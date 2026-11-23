@@ -194,7 +194,10 @@ export class EditorApi {
 			return {
 				...this.addPreparedSequence({ sequence, label }),
 				sections: cut.sections,
-				...(captioned && { captionCount: captioned.captionCount }),
+				...(captioned && {
+					captionCount: captioned.captionCount,
+					uncaptionedItemIds: captioned.uncaptionedItemIds,
+				}),
 			};
 		} catch (error) {
 			if (
@@ -221,7 +224,7 @@ export class EditorApi {
 				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
 			);
 		try {
-			const { tracks, captionCount } = withCaptionTrack({
+			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
 				tracks: sequence.tracks,
 				captions: { sources, style },
 				canvasSize: this.editor.project.getActive().settings.canvasSize,
@@ -241,6 +244,7 @@ export class EditorApi {
 				revision: this.getRevision(),
 				label,
 				captionCount,
+				uncaptionedItemIds,
 			};
 		} catch (error) {
 			if (!(error instanceof CaptionError)) throw error;

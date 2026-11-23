@@ -87,8 +87,8 @@ const stateSchema = z.object({
 /** Word timings for every project item whose recording has a cached transcript. */
 async function captionSources({ rpc }: { rpc: RpcCall }): Promise<{
 	sources: CaptionsRequest["sources"];
-	/** Recordings with no cached transcript, so no captions. */
-	uncaptioned: string[];
+	/** Footage path per recording, to name the ones that got no captions. */
+	pathById: Map<string, string>;
 }> {
 	const items = itemsSchema
 		.parse(await rpc({ method: "editor.listItems" }))
@@ -126,30 +126,38 @@ async function captionSources({ rpc }: { rpc: RpcCall }): Promise<{
 		);
 	return {
 		sources,
-		uncaptioned: [
-			...new Set(
-				items.flatMap(({ path }) =>
-					wordsByPath.get(path)?.length ? [] : [path],
-				),
-			),
-		],
+		pathById: new Map(items.map(({ id, path }) => [id, path])),
 	};
 }
 
-/** Tells the agent which recordings got no captions, so it can transcribe them and run captions_add. */
+const captionedResultSchema = z
+	.object({ uncaptionedItemIds: z.array(z.string()).optional() })
+	.passthrough();
+
+/**
+ * Tells the agent which recordings on the sequence got no captions because
+ * they have no transcript, so it can transcribe them and run captions_add.
+ */
 function withCaptionWarning({
 	result,
-	uncaptioned,
+	pathById,
 }: {
 	result: unknown;
-	uncaptioned: string[];
+	pathById: Map<string, string>;
 }): unknown {
-	if (!uncaptioned.length || typeof result !== "object" || result === null)
-		return result;
+	const parsed = captionedResultSchema.safeParse(result);
+	if (!parsed.success) return result;
+	const { uncaptionedItemIds, ...rest } = parsed.data;
+	const uncaptioned = [
+		...new Set(
+			(uncaptionedItemIds ?? []).map((id) => pathById.get(id) ?? id),
+		),
+	];
+	if (!uncaptioned.length) return rest;
 	return {
-		...result,
+		...rest,
 		uncaptionedRecordings: uncaptioned,
-		warning: `No captions for ${uncaptioned.length} recording(s) without a transcript. Transcribe them, then run captions_add.`,
+		warning: `No captions for ${uncaptioned.length} recording(s) on this sequence without a transcript. Transcribe them, then run captions_add.`,
 	};
 }
 
@@ -324,7 +332,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 							method: "editor.roughCut",
 							params: { ...args, captions },
 						}),
-						uncaptioned: found?.uncaptioned ?? [],
+						pathById: found?.pathById ?? new Map(),
 					}),
 				);
 			}),
@@ -340,14 +348,14 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		},
 		(args) =>
 			guard(async () => {
-				const { sources, uncaptioned } = await captionSources({ rpc });
+				const { sources, pathById } = await captionSources({ rpc });
 				return editorResult(
 					withCaptionWarning({
 						result: await rpc({
 							method: "editor.addCaptions",
 							params: { ...args, sources },
 						}),
-						uncaptioned,
+						pathById,
 					}),
 				);
 			}),

@@ -87,7 +87,8 @@ describe("splice mcp tools", () => {
 					],
 					missing: ["other.mp4"],
 				};
-			return { ok: true, revision: 4 };
+			// The tab reports "other" is on the sequence but got no words.
+			return { ok: true, revision: 4, uncaptionedItemIds: ["other"] };
 		};
 	}
 
@@ -99,10 +100,12 @@ describe("splice mcp tools", () => {
 			arguments: { ...roughCutArgs, captionStyle: { uppercase: true } },
 		});
 		expect(result.isError).toBeFalsy();
-		expect(JSON.parse(textOf(result))).toMatchObject({
+		const output = JSON.parse(textOf(result));
+		expect(output).toMatchObject({
 			uncaptionedRecordings: ["other.mp4"],
 			warning: expect.stringContaining("captions_add"),
 		});
+		expect(output).not.toHaveProperty("uncaptionedItemIds");
 		expect(
 			calls.find(([method]) => method === "transcript.words")?.[1],
 		).toEqual({ paths: ["rec.mp4", "other.mp4"] });
@@ -165,6 +168,8 @@ describe("splice mcp tools", () => {
 		});
 		expect(result.isError).toBeFalsy();
 		expect(batches).toEqual([200, 200, 50]);
+		// Untranscribed recordings the sequence doesn't use aren't flagged.
+		expect(JSON.parse(textOf(result))).not.toHaveProperty("warning");
 	});
 
 	test("captions_add fails clearly when nothing is transcribed", async () => {
