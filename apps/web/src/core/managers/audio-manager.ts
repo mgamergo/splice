@@ -8,6 +8,7 @@ import {
 	hasAnimatedVolume,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
+import { createMediaSource } from "@/media/media-data";
 import {
 	getClipTimeAtSourceTime,
 	getSourceTimeAtClipTime,
@@ -16,7 +17,6 @@ import {
 import {
 	ALL_FORMATS,
 	AudioBufferSink,
-	BlobSource,
 	Input,
 	type WrappedAudioBuffer,
 } from "mediabunny";
@@ -595,7 +595,7 @@ export class AudioManager {
 		}
 
 		const input = new Input({
-			source: new BlobSource(clip.file),
+			source: createMediaSource(clip.file),
 			formats: ALL_FORMATS,
 		});
 
@@ -679,7 +679,7 @@ export class AudioManager {
 
 		try {
 			const input = new Input({
-				source: new BlobSource(clip.file),
+				source: createMediaSource(clip.file),
 				formats: ALL_FORMATS,
 			});
 			const audioTrack = await input.getPrimaryAudioTrack();

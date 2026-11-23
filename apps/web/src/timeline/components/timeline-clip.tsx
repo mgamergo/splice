@@ -999,10 +999,12 @@ function AudioClipContent({
 
 	const audioBuffer =
 		clip.sourceType === "library" ? clip.buffer : undefined;
+	// A missing disk file has no waveform to draw.
+	const playableItem = projectItem?.missing ? undefined : projectItem;
 	const audioUrl =
-		clip.sourceType === "library" ? clip.sourceUrl : projectItem?.url;
+		clip.sourceType === "library" ? clip.sourceUrl : playableItem?.url;
 	const sourceFile =
-		clip.sourceType === "upload" ? projectItem?.file : undefined;
+		clip.sourceType === "upload" ? playableItem?.file : undefined;
 	const sourceKey =
 		clip.sourceType === "upload"
 			? buildWaveformSourceKey({ kind: "media", id: clip.mediaId })

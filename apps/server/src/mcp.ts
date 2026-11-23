@@ -1,4 +1,5 @@
 import { applyRequestSchema } from "@splice/bridge/ops";
+import { z } from "zod";
 import { BRIDGE_PATHS, SERVER_NAME } from "@splice/bridge";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -88,6 +89,59 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					"ok" in result &&
 					result.ok === true;
 				return ok ? text(result) : { ...text(result), isError: true };
+			}),
+	);
+
+	server.registerTool(
+		"footage_list",
+		{
+			title: "List footage on disk",
+			description:
+				"Lists the importable video, audio and image files under the Splice Footage folder (paths relative to it, with forward slashes), with size and modification time. Recording order usually follows modifiedAt.",
+			inputSchema: {},
+		},
+		() => guard(async () => text(await rpc({ method: "footage.list" }))),
+	);
+
+	server.registerTool(
+		"items_list",
+		{
+			title: "List project items",
+			description:
+				"Lists the open project's project items: id, name, type, duration in seconds, Footage path (for items on disk) and whether the file is missing.",
+			inputSchema: {},
+		},
+		() => guard(async () => text(await rpc({ method: "editor.listItems" }))),
+	);
+
+	server.registerTool(
+		"items_import",
+		{
+			title: "Import footage as project items",
+			description:
+				"Adds files under the Footage folder to the open project. The project references the files in place; nothing is copied. Paths come from footage_list. Importing a path that is already a project item returns the existing item.",
+			inputSchema: {
+				paths: z
+					.array(z.string().min(1))
+					.min(1)
+					.max(200)
+					.describe("Paths relative to the Footage folder, from footage_list"),
+			},
+		},
+		(args) =>
+			guard(async () => {
+				const result = await rpc({
+					method: "editor.importItems",
+					params: args,
+				});
+				const failed =
+					typeof result === "object" &&
+					result !== null &&
+					"failed" in result &&
+					Array.isArray(result.failed)
+						? result.failed.length
+						: 0;
+				return failed > 0 ? { ...text(result), isError: true } : text(result);
 			}),
 	);
 

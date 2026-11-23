@@ -9,7 +9,11 @@ import {
 	type RpcResponse,
 	type TabMethod,
 } from "@splice/bridge";
-import { AgentBlockedError, type TabHandlers } from "./handlers";
+import {
+	AgentBlockedError,
+	InvalidParamsError,
+	type TabHandlers,
+} from "./handlers";
 
 export type BridgeStatus =
 	/** Waiting for `splice`, or reconnecting after it went away. */
@@ -173,18 +177,16 @@ export class AgentBridgeClient {
 			}
 			return;
 		}
-		socket.send(
-			JSON.stringify(
-				this.answer({
-					id: message.id,
-					method: message.method,
-					params: message.params,
-				}),
-			),
-		);
+		void this.answer({
+			id: message.id,
+			method: message.method,
+			params: message.params,
+		}).then((response) => {
+			if (socket.readyState === OPEN) socket.send(JSON.stringify(response));
+		});
 	}
 
-	private answer({
+	private async answer({
 		id,
 		method,
 		params,
@@ -192,7 +194,7 @@ export class AgentBridgeClient {
 		id: number | string;
 		method: string;
 		params: unknown;
-	}): RpcResponse {
+	}): Promise<RpcResponse> {
 		if (!isTabMethod(method)) {
 			return {
 				jsonrpc: "2.0",
@@ -208,9 +210,16 @@ export class AgentBridgeClient {
 			return {
 				jsonrpc: "2.0",
 				id,
-				result: this.options.handlers[method](params) ?? null,
+				result: (await this.options.handlers[method](params)) ?? null,
 			};
 		} catch (error) {
+			if (error instanceof InvalidParamsError) {
+				return {
+					jsonrpc: "2.0",
+					id,
+					error: { code: RPC_ERRORS.INVALID_PARAMS, message: error.message },
+				};
+			}
 			if (error instanceof AgentBlockedError) {
 				return {
 					jsonrpc: "2.0",

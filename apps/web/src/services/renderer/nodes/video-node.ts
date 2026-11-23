@@ -3,10 +3,11 @@ import {
 	type ResolvedVisualSourceNodeState,
 	type VisualNodeParams,
 } from "./visual-node";
+import type { MediaData } from "@/media/types";
 
 export interface VideoNodeParams extends VisualNodeParams {
 	url: string;
-	file: File;
+	file: MediaData;
 	mediaId: string;
 }
 

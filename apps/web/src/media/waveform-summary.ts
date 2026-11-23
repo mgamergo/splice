@@ -56,6 +56,69 @@ export function buildWaveformSourceKey({
 	return `${kind}:${id}`;
 }
 
+/**
+ * Builds a summary from decoded chunks as they arrive, so an hour-long recording
+ * never has to sit in memory as one AudioBuffer.
+ */
+export async function buildStreamedWaveformSummary({
+	sourceKey,
+	chunks,
+	bucketSize = DEFAULT_SOURCE_WAVEFORM_BUCKET_SIZE,
+}: {
+	sourceKey: string;
+	/** Decoded audio with its start time in the source, in seconds. */
+	chunks: AsyncIterable<{ buffer: AudioBuffer; timestamp: number }>;
+	bucketSize?: number;
+}): Promise<SourceWaveformSummary> {
+	const safeBucketSize = Math.max(1, Math.floor(bucketSize));
+	const amplitudes: number[] = [];
+	let sampleRate = 0;
+	let totalSamples = 0;
+	let bucketPeak = 0;
+	let bucketFill = 0;
+	const pushBucket = () => {
+		amplitudes.push(bucketPeak);
+		bucketPeak = 0;
+		bucketFill = 0;
+	};
+	for await (const { buffer, timestamp } of chunks) {
+		sampleRate ||= buffer.sampleRate;
+		// A delayed start or a gap is silence in playback, so it is in the waveform too.
+		let gap = Math.round(timestamp * sampleRate) - totalSamples;
+		while (gap > 0) {
+			const take = Math.min(gap, safeBucketSize - bucketFill);
+			bucketFill += take;
+			totalSamples += take;
+			gap -= take;
+			if (bucketFill === safeBucketSize) pushBucket();
+		}
+		const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) =>
+			buffer.getChannelData(c),
+		);
+		// Samples before source time zero, or overlapping ones already counted, aren't played.
+		const first = Math.min(buffer.length, Math.max(0, -gap));
+		for (let i = first; i < buffer.length; i++) {
+			for (const data of channels) {
+				const abs = Math.abs(data[i]);
+				if (abs > bucketPeak) bucketPeak = abs;
+			}
+			bucketFill++;
+			if (bucketFill === safeBucketSize) pushBucket();
+		}
+		totalSamples += buffer.length - first;
+	}
+	if (bucketFill > 0 || amplitudes.length === 0) {
+		amplitudes.push(bucketPeak);
+	}
+	return {
+		sourceKey,
+		sampleRate,
+		totalSamples,
+		bucketSize: safeBucketSize,
+		amplitudes: Float32Array.from(amplitudes),
+	};
+}
+
 export function buildSourceWaveformSummary({
 	sourceKey,
 	buffer,

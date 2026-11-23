@@ -17,6 +17,7 @@ import {
 	readBlendModeFromParams,
 	readOpacityFromParams,
 } from "@/rendering";
+import { playableProjectItems } from "@/media/media-data";
 
 const PREVIEW_MAX_IMAGE_SIZE = 2048;
 
@@ -232,7 +233,9 @@ export function buildScene({
 	isPreview,
 }: BuildSceneParams) {
 	const rootNode = new RootNode({ duration });
-	const mediaMap = new Map(projectItems.map((m) => [m.id, m]));
+	const mediaMap = new Map(
+		playableProjectItems(projectItems).map((m) => [m.id, m]),
+	);
 
 	const visibleTracks = [
 		...tracks.overlay.filter((track) => !("hidden" in track && track.hidden)),

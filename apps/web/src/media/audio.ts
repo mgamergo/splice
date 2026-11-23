@@ -6,7 +6,7 @@ import type {
 	SequenceTracks,
 } from "@/timeline";
 import { shouldMaintainPitch } from "@/retime/rate";
-import type { ProjectItem } from "@/media/types";
+import type { MediaData, ProjectItem } from "@/media/types";
 import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
 import type { AudioCapableClip } from "@/timeline/audio-state";
 import {
@@ -19,7 +19,8 @@ import { canClipHaveAudio, hasMediaId } from "@/timeline/clip-utils";
 import { canTrackHaveAudio } from "@/timeline";
 import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
-import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
+import { Input, ALL_FORMATS, AudioBufferSink } from "mediabunny";
+import { createMediaSource, isDiskMedia, playableProjectItems } from "@/media/media-data";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	computeRmsBuckets,
@@ -99,7 +100,7 @@ export function collectAudibleCandidates({
 	projectItems: ProjectItem[];
 }): AudibleClipCandidate[] {
 	const allTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
-	const mediaMap = new Map(projectItems.map((a) => [a.id, a]));
+	const mediaMap = new Map(playableProjectItems(projectItems).map((a) => [a.id, a]));
 	const candidates: AudibleClipCandidate[] = [];
 
 	for (const track of allTracks) {
@@ -144,7 +145,7 @@ export async function collectAudioClips({
 }): Promise<CollectedAudioClip[]> {
 	const candidates = collectAudibleCandidates({ tracks, projectItems });
 	const mediaMap = new Map<string, ProjectItem>(
-		projectItems.map((media) => [media.id, media]),
+		playableProjectItems(projectItems).map((media) => [media.id, media]),
 	);
 	const pendingClips: Array<Promise<CollectedAudioClip | null>> = [];
 
@@ -252,7 +253,8 @@ async function resolveAudioBufferForProjectItem({
 	projectItem: ProjectItem;
 	audioContext: AudioContext;
 }): Promise<AudioBuffer | null> {
-	if (projectItem.type === "audio") {
+	// Uploaded audio decodes in one go; long recordings on disk stream through mediabunny.
+	if (projectItem.type === "audio" && !isDiskMedia(projectItem.file)) {
 		try {
 			const arrayBuffer = await projectItem.file.arrayBuffer();
 			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
@@ -263,7 +265,7 @@ async function resolveAudioBufferForProjectItem({
 	}
 
 	const input = new Input({
-		source: new BlobSource(projectItem.file),
+		source: createMediaSource(projectItem.file),
 		formats: ALL_FORMATS,
 	});
 
@@ -340,7 +342,7 @@ async function resolveAudioBufferForProjectItem({
 
 interface AudioMixSource {
 	timelineClip: AudioCapableClip;
-	file: File;
+	file: MediaData;
 	startTime: number;
 	duration: number;
 	trimStart: number;
@@ -353,7 +355,7 @@ export interface AudioClipSource {
 	timelineClip: AudioCapableClip;
 	id: string;
 	sourceKey: string;
-	file: File;
+	file: MediaData;
 	startTime: number;
 	duration: number;
 	trimStart: number;
@@ -493,7 +495,7 @@ export async function collectAudioMixSources({
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const audioMixSources: AudioMixSource[] = [];
 	const mediaMap = new Map<string, ProjectItem>(
-		projectItems.map((projectItem) => [projectItem.id, projectItem]),
+		playableProjectItems(projectItems).map((projectItem) => [projectItem.id, projectItem]),
 	);
 	const pendingLibrarySources: Array<Promise<AudioMixSource | null>> = [];
 
@@ -556,7 +558,7 @@ export async function collectAudioClipSources({
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const clips: AudioClipSource[] = [];
 	const mediaMap = new Map<string, ProjectItem>(
-		projectItems.map((projectItem) => [projectItem.id, projectItem]),
+		playableProjectItems(projectItems).map((projectItem) => [projectItem.id, projectItem]),
 	);
 	const pendingLibraryClips: Array<Promise<AudioClipSource | null>> = [];
 

@@ -11,6 +11,8 @@ export class MediaManager {
 	private projectItems: ProjectItem[] = [];
 	private isLoading = false;
 	private listeners = new Set<() => void>();
+	/** Changes whenever the library is cleared (a project closes or another loads). */
+	private generation = 0;
 
 	constructor(private editor: EditorCore) {}
 
@@ -31,9 +33,12 @@ export class MediaManager {
 
 		try {
 			await storageService.saveProjectItem({ projectId, projectItem: newProjectItem });
-			this.editor.project.ratchetFpsForImportedMedia({
-				importedProjectItems: [newProjectItem],
-			});
+			// The save is async; don't change another project's frame rate.
+			if (this.editor.project.getActiveOrNull()?.metadata.id === projectId) {
+				this.editor.project.ratchetFpsForImportedMedia({
+					importedProjectItems: [newProjectItem],
+				});
+			}
 			return newProjectItem;
 		} catch (error) {
 			console.error("Failed to save project item:", error);
@@ -94,6 +99,13 @@ export class MediaManager {
 			});
 			this.projectItems = projectItems;
 			this.notify();
+			const missing = projectItems.filter((item) => item.missing);
+			if (missing.length > 0) {
+				toast.warning(
+					`${missing.length} project ${missing.length === 1 ? "item is" : "items are"} missing from the Footage folder`,
+					{ description: missing.map((item) => item.name).join(", ") },
+				);
+			}
 		} catch (error) {
 			console.error("Failed to load project items:", error);
 		} finally {
@@ -143,7 +155,16 @@ export class MediaManager {
 		});
 
 		this.projectItems = [];
+		this.generation++;
 		this.notify();
+	}
+
+	/**
+	 * Lets async work, like an agent import, detect that the library it started
+	 * against was cleared, even before the next project becomes active.
+	 */
+	getGeneration(): number {
+		return this.generation;
 	}
 
 	getProjectItems(): ProjectItem[] {

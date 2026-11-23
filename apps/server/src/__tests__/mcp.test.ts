@@ -29,11 +29,14 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
 }
 
 describe("splice mcp tools", () => {
-	test("lists the Phase 2 tools", async () => {
+	test("lists the tools", async () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			"editor_status",
+			"footage_list",
+			"items_import",
+			"items_list",
 			"sequence_apply",
 			"sequence_get",
 		]);
