@@ -276,18 +276,6 @@ export const sourceRangeSchema = z
 		message: "End must be after start",
 	});
 
-/**
- * Sorts source ranges, so the same audio always reads the same. Repeats and
- * overlaps stay: audio that plays twice counts twice toward loudness.
- */
-export function sortSourceRanges(
-	ranges: Array<z.infer<typeof sourceRangeSchema>>,
-): Array<z.infer<typeof sourceRangeSchema>> {
-	return ranges
-		.map(({ start, end }) => ({ start, end }))
-		.sort((a, b) => a.start - b.start || a.end - b.end);
-}
-
 /** The audible audio of one project item in a sequence, in source seconds. */
 export const audioSourceSchema = z.strictObject({
 	projectItemId: z.string(),
@@ -296,7 +284,10 @@ export const audioSourceSchema = z.strictObject({
 	/** The file has left Footage, so playback skips it until it's relinked. */
 	missing: z.boolean(),
 	clipIds: z.array(z.string()),
-	/** Sorted source ranges, one per clip, so repeated audio counts each time. */
+	/**
+	 * Source ranges, one per clip in the order they play, so repeated audio
+	 * counts each time and joins are measured as heard.
+	 */
 	ranges: z.array(sourceRangeSchema),
 });
 

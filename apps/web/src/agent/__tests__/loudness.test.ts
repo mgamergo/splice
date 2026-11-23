@@ -72,7 +72,7 @@ const volumes = () =>
 		"volume" in clip.params ? clip.params.volume : undefined,
 	]);
 
-test("collects each recording's audible source ranges, one per clip, with its Footage path", () => {
+test("collects each recording's audible source ranges, one per clip in playing order, with its Footage path", () => {
 	const clip = ({
 		id,
 		start,
@@ -129,11 +129,12 @@ test("collects each recording's audible source ranges, one per clip, with its Fo
 			path: `Day 1/${first}.mov`,
 			missing: false,
 			clipIds: ["a", "b", "c", "e"],
+			// In the order the clips play.
 			ranges: [
+				{ start: 4, end: 6 },
 				{ start: 0, end: 3 },
-				{ start: 4, end: 6 },
-				{ start: 4, end: 6 },
 				{ start: 6, end: 7 },
+				{ start: 4, end: 6 },
 			],
 		},
 		{

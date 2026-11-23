@@ -198,7 +198,7 @@ test("the cache key covers the file's identity and the measured ranges", () => {
 	}
 });
 
-test("measures once per file and ranges, in any order, and remeasures a changed file", async () => {
+test("measures once per file and ordered ranges, and remeasures a changed file", async () => {
 	const root = await mkdtemp(join(tmpdir(), "splice-loudness-"));
 	try {
 		await mkdir(join(root, "Footage"));
@@ -223,11 +223,7 @@ test("measures once per file and ranges, in any order, and remeasures a changed 
 		]);
 		expect(first).toEqual({
 			path: "take.wav",
-			ranges: [
-				{ start: 0, end: 2 },
-				{ start: 1.5, end: 3 },
-				{ start: 4, end: 6 },
-			],
+			ranges,
 			integratedLufs: -20,
 			truePeakDbtp: -6,
 			lraLu: 3,
@@ -235,19 +231,23 @@ test("measures once per file and ranges, in any order, and remeasures a changed 
 		});
 		expect(joined).toEqual(first);
 		expect(
-			await meter.measure({ path: "take.wav", ranges: [...ranges].reverse() }),
+			await meter.measure({ path: "take.wav", ranges: ranges.map((r) => ({ ...r })) }),
 		).toMatchObject({ integratedLufs: -20, cached: true });
+		// Played in another order, the joins differ, so it's measured again.
+		expect(
+			await meter.measure({ path: "take.wav", ranges: [...ranges].reverse() }),
+		).toMatchObject({ cached: false });
 		expect(await meter.measure({ path: "take.wav" })).toMatchObject({
 			ranges: null,
 			cached: false,
 		});
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 
 		await utimes(file, new Date(), new Date(Date.now() + 10_000));
 		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
 			cached: false,
 		});
-		expect(calls).toHaveLength(3);
+		expect(calls).toHaveLength(4);
 		await meter.stop();
 	} finally {
 		await rm(root, { recursive: true, force: true });

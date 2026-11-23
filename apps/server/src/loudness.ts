@@ -5,7 +5,6 @@ import {
 	MAX_TRUE_PEAK_DBTP,
 	type SourceGain,
 	type SourceRange,
-	sortSourceRanges,
 	sourceRangeSchema,
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
@@ -449,9 +448,9 @@ export function createLoudnessMeter({
 			const parsed = measureSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const { path } = parsed.data;
-			const ranges = parsed.data.ranges
-				? sortSourceRanges(parsed.data.ranges)
-				: null;
+			// Order matters: ranges play back to back, as they play in the sequence.
+			const ranges =
+				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
 			const { source, key, cachePath } = await identify({ path, ranges });
 			signal.throwIfAborted();
 			let pending = active.get(key);
