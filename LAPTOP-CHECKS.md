@@ -4,7 +4,9 @@ Checks that can only run on the creator's laptop (Windows, Radeon 860M, RTX 5050
 
 ## Pending
 
-_None._
+- **`splice` on Windows** (Phase 2). After `bun run build:web`, `bun run splice` creates `D:\Splice\` with `Footage`, `Projects`, `Cache`, `Profile`, `Exports` and `Tools`, and prints the editor link. Opening it in Chrome on the Radeon 860M shows "Agent connected" in the editor header after creating a project.
+- **Clean shutdown on Windows** (Phase 2). Ctrl+C in the `splice` terminal also ends the editor's Next.js server: nothing is left listening on port 7421 (`netstat -ano | findstr 7421`).
+- **`splice mcp` from T3 Code** (Phase 2). With `splice` not running, the first `editor_status` call starts it in the background. After opening the link, `sequence_apply` with an `add_marker` op shows the marker on the timeline straight away. The background `splice` keeps running when T3 Code restarts the MCP server.
 
 ## Verified
 
