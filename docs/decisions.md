@@ -118,3 +118,9 @@ Cut the footage first, then add editable zooms and basic cards. Review how this 
 Keep the chosen style with the project. Offer a preview before applying updated style defaults and preserve properties the creator adjusted. Repeated visual corrections can inform reversible framing preferences separately from take-selection preferences. Keep one-off corrections local to the project.
 
 First review an exported passage with a search, a menu transition and a visible state change at normal speed. Check that the viewer can follow the action, read the control and see the result. Keep failed passages as regression examples. Then test responsiveness, recovery and MP4/SRT sync on a real 30–45 minute laptop project.
+
+### Screenshot access for editing agents
+
+By default, Splice inspects recording frames locally. The editing agent can receive timestamps, target rectangles and short observations, including relevant visible UI text. A hosted model can therefore receive these observations even when screenshots stay on the laptop.
+
+The creator can enable access to selected frames for an individual project. With this enabled, the editing agent can request a screenshot to resolve an uncertain observation. Choose the local vision model after comparing candidates on real laptop footage.
