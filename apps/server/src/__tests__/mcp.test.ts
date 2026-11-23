@@ -327,6 +327,13 @@ describe("noise reduction tools", () => {
 			missing: false,
 			clipIds: ["c5"],
 			ranges: [{ start: 0, end: 1 }],
+		},		{
+			projectItemId: "gone",
+			path: "gone.wav",
+			noiseReduction: false,
+			missing: true,
+			clipIds: ["c6"],
+			ranges: [{ start: 0, end: 1 }],
 		},
 	];
 	const denoised: Record<string, object> = {
@@ -393,7 +400,10 @@ describe("noise reduction tools", () => {
 		// Both of rec-1's sources are measured together, as one denoised recording.
 		expect(calls[3][1]).toEqual({
 			path: "quiet.wav",
-			ranges: [{ start: 2, end: 12 }],
+			ranges: [
+				{ start: 2, end: 9 },
+				{ start: 8, end: 12 },
+			],
 			noiseReduction: true,
 		});
 		expect(calls.at(-1)).toEqual([
@@ -433,6 +443,10 @@ describe("noise reduction tools", () => {
 					projectItemId: "browser",
 					reason:
 						"Stored in the browser, not under Footage, so splice can't reduce its noise.",
+				},
+				{
+					projectItemId: "gone",
+					reason: expect.stringContaining("Missing from Footage"),
 				},
 			],
 		});
@@ -517,7 +531,26 @@ describe("noise reduction tools", () => {
 			message: "Nothing to change.",
 			skipped: [{ projectItemId: "browser" }],
 		});
+		const gone = await client.callTool({
+			name: "noise_reduction",
+			arguments: {
+				expectedRevision: 7,
+				enabled: true,
+				projectItemIds: ["gone"],
+			},
+		});
+		expect(gone.isError).toBe(true);
+		expect(JSON.parse(textOf(gone))).toMatchObject({
+			message: "Nothing to change.",
+			skipped: [
+				{
+					projectItemId: "gone",
+					reason: expect.stringContaining("Missing from Footage"),
+				},
+			],
+		});
 		expect(calls.map(([method]) => method)).toEqual([
+			"editor.audioSources",
 			"editor.audioSources",
 			"editor.audioSources",
 		]);

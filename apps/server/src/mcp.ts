@@ -4,11 +4,11 @@ import {
 	audioSourceSchema,
 	DEFAULT_TARGET_LUFS,
 	MAX_TRUE_PEAK_DBTP,
-	mergeSourceRanges,
 	noiseReductionRequestSchema,
 	normalizeLoudnessRequestSchema,
 	rawSequenceRequestSchema,
 	roughCutRequestSchema,
+	sortSourceRanges,
 	takesListRequestSchema,
 } from "@splice/bridge/ops";
 import { z } from "zod";
@@ -127,7 +127,7 @@ export function sourcesByRecording({
 			continue;
 		}
 		recording.clipIds = [...recording.clipIds, ...source.clipIds];
-		recording.ranges = mergeSourceRanges([
+		recording.ranges = sortSourceRanges([
 			...recording.ranges,
 			...source.ranges,
 		]);
@@ -156,8 +156,8 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 	/** Renders ahead, so playback starts at once and FFmpeg errors surface here. */
 	const renderNoiseReduction = async (audioSources: AudioSource[]) => {
 		const paths = new Set(
-			audioSources.flatMap(({ path, noiseReduction }) =>
-				noiseReduction && path !== null ? [path] : [],
+			audioSources.flatMap(({ path, missing, noiseReduction }) =>
+				noiseReduction && path !== null && !missing ? [path] : [],
 			),
 		);
 		const recordings: unknown[] = [];
@@ -453,14 +453,16 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 				});
 				// Only Footage items have a render to play; turning off always works.
 				const changing = recordings.filter(
-					({ path }) => !enabled || path !== null,
+					({ path, missing }) => !enabled || (path !== null && !missing),
 				);
 				const skipped = recordings
 					.filter((recording) => !changing.includes(recording))
-					.map(({ projectItemId }) => ({
+					.map(({ projectItemId, path }) => ({
 						projectItemId,
 						reason:
-							"Stored in the browser, not under Footage, so splice can't reduce its noise.",
+							path === null
+								? "Stored in the browser, not under Footage, so splice can't reduce its noise."
+								: "Missing from Footage, so playback skips it. Relink it first.",
 					}));
 				if (changing.length === 0)
 					return fail({ message: "Nothing to change.", skipped });
