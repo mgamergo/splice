@@ -6,10 +6,15 @@ const EDITING_WINDOW_MS = 2_000;
 /** Stop survives reloads and new tabs until the creator allows the agent again. */
 export const BLOCKED_STORAGE_KEY = "splice-agent-blocked";
 
+/** Browser storage, or null while pre-rendering on the server (Node 25 warns on touching it there). */
+function getStorage(): Storage | null {
+	return typeof window === "undefined" ? null : window.localStorage;
+}
+
 /** The Stop flag shared by every tab, or null when storage is unavailable. */
 function readStoredBlocked(): boolean | null {
 	try {
-		const storage = globalThis.localStorage;
+		const storage = getStorage();
 		return storage ? storage.getItem(BLOCKED_STORAGE_KEY) === "true" : null;
 	} catch {
 		return null;
@@ -29,9 +34,9 @@ export function isAgentBlocked(): boolean {
 function writeBlocked(blocked: boolean): boolean {
 	try {
 		if (blocked) {
-			globalThis.localStorage?.setItem(BLOCKED_STORAGE_KEY, "true");
+			getStorage()?.setItem(BLOCKED_STORAGE_KEY, "true");
 		} else {
-			globalThis.localStorage?.removeItem(BLOCKED_STORAGE_KEY);
+			getStorage()?.removeItem(BLOCKED_STORAGE_KEY);
 		}
 		return true;
 	} catch {
