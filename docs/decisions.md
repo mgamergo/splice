@@ -148,3 +148,11 @@ Finalizing the cut from T3 Code or Splice saves the exact version the creator re
 HyperFrames may choose passages to embellish within the approved timing. Ask the creator before extending a shot or moving narration. Each graphic is individually selectable in Splice. Support moving, trimming, hiding, deleting and requesting a revision to one graphic in place. Manual editing of its internal shapes and keyframes can wait.
 
 The basic graphics pass can track a visibly identifiable UI control through movement. A highlight follows its target and disappears when the target leaves view.
+
+### Horizontal captions and final mix
+
+Group word timings into readable SRT cues at natural phrase boundaries. Follow the audible narration through picture-only repairs and retain deliberately kept filler words. The creator can correct a cue, play its passage from the caption list, or preview selectable captions during playback. Export a clean horizontal MP4 with a separate SRT.
+
+Mute replacement audio by default during a picture-only repair. Let the creator bring in a specific sound from the replacement take. Duck music across spoken passages, including short pauses, and let it rise gently during longer quiet passages. Allow a passage override to keep application sounds audible.
+
+Measure the complete mix, including narration, application sounds and optional music. Target −14 LUFS with a peak ceiling and use the adjusted mix for both final preview and export.
