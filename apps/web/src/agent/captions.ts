@@ -412,16 +412,30 @@ export function rebuildCaptions({
 		(clip) => clip.startTime + clip.duration <= window.start,
 	);
 	// Captions of words that share a start show one after another, so a run of
-	// them can straddle the window's edge. Rebuild the whole run rather than
-	// keep part of it and lose or repeat its other words.
+	// them can straddle the window's edge. A staggered caption starts at no
+	// word's start; if one continues straight after the kept captions, rebuild
+	// its whole run rather than keep part of it and lose its other words.
+	const oldWords = mapWordsToTimeline({
+		tracks: withoutCaptionTrack({ tracks: sequence.tracks }),
+		sources: captions.sources,
+	});
 	const keptEnd = Math.max(
 		0,
 		...before.map((clip) => seconds(clip.startTime + clip.duration)),
 	);
-	const lastHeard = words.filter(({ start }) => start < keptEnd).at(-1);
-	if (lastHeard && startsAt(lastHeard.start).length > 1)
+	const runCrosses = previous.clips.some(
+		(clip) =>
+			!before.includes(clip) &&
+			Math.abs(seconds(clip.startTime) - keptEnd) < SAME_TIME_SECONDS &&
+			!oldWords.some(
+				({ start }) =>
+					Math.abs(start - seconds(clip.startTime)) < SAME_TIME_SECONDS,
+			),
+	);
+	const runStart = oldWords.filter(({ start }) => start < keptEnd).at(-1)?.start;
+	if (runCrosses && runStart !== undefined)
 		before = before.filter(
-			(clip) => seconds(clip.startTime) < lastHeard.start - SAME_TIME_SECONDS,
+			(clip) => seconds(clip.startTime) < runStart - SAME_TIME_SECONDS,
 		);
 	const after = previous.clips
 		.filter((clip) => clip.startTime >= window.end)

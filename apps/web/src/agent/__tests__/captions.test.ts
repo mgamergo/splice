@@ -457,7 +457,7 @@ describe("EditorApi captions", () => {
 describe("rebuildCaptions", () => {
 	// Two words heard together at 1.0 s show one after another: "w1" at
 	// 1.0–1.2 s and "w2" at 1.2–1.4 s. "z" follows at 5 s.
-	function stackedSequence() {
+	function stackedSequence({ correct = false }: { correct?: boolean } = {}) {
 		const content = tracksWith({});
 		content.main = {
 			...content.main,
@@ -473,9 +473,25 @@ describe("rebuildCaptions", () => {
 			style: { wordsPerCaption: 1 },
 		};
 		const canvasSize = { width: 1080, height: 1920 };
+		const built = withCaptionTrack({ tracks: content, captions, canvasSize }).tracks;
 		const sequence = {
 			...buildDefaultSequence({ name: "S", isMain: true }),
-			tracks: withCaptionTrack({ tracks: content, captions, canvasSize }).tracks,
+			// The creator may have corrected "w2" by hand.
+			tracks: {
+				...built,
+				overlay: built.overlay.map((track) =>
+					track.type === "text" && correct
+						? {
+								...track,
+								clips: track.clips.map((clip) =>
+									clip.params.content === "w2"
+										? { ...clip, params: { ...clip.params, content: "W2!" } }
+										: clip,
+								),
+							}
+						: track,
+				),
+			},
 			captions,
 		};
 		const texts = (window: { start: number; end: number; delta: number }) => {
@@ -498,6 +514,11 @@ describe("rebuildCaptions", () => {
 			track?.type === "text" && track.clips.map((clip) => clip.params.content),
 		).toEqual(["w1", "w2", "z"]);
 		expect(texts({ start: s(1.2), end: s(1.4), delta: 0 })).toEqual(["w1", "w2", "z"]);
+	});
+
+	test("keeps a hand-corrected run of stacked words the window doesn't touch", () => {
+		const { texts } = stackedSequence({ correct: true });
+		expect(texts({ start: s(2), end: s(3), delta: 0 })).toEqual(["w1", "W2!", "z"]);
 	});
 
 	test("rebuilds a run of stacked words whose head the window removed", () => {
