@@ -166,7 +166,7 @@ describe("splice mcp tools", () => {
 	test("captions_add fails clearly when nothing is transcribed", async () => {
 		const client = await connect(async ({ method }) => {
 			if (method === "editor.listItems")
-				return [{ id: "rec", path: "rec.mp4" }];
+				return [{ id: "rec", type: "video", path: "rec.mp4", missing: false }];
 			if (method === "transcript.words")
 				return { transcripts: [], missing: ["rec.mp4"] };
 			throw new Error(`unexpected ${method}`);
