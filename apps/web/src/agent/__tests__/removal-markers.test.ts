@@ -220,6 +220,112 @@ describe("removal markers", () => {
 		expect(api.getRevision()).toBe(5);
 	});
 
+	test("restores and swaps takes at the gain the recording plays at", () => {
+		const id = cutWithMarker();
+		const tracks = () => editor.sequences.getActiveSequence().tracks;
+		const volumes = () =>
+			[...tracks().main.clips, ...tracks().audio.flatMap((t) => t.clips)].map(
+				(clip) => ("params" in clip ? clip.params.volume : undefined),
+			);
+		expect(
+			apply({
+				ops: [
+					{
+						op: "set_gain",
+						clipIds: tracks().main.clips.map((clip) => clip.id),
+						gainDb: 6.5,
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			apply({ ops: [{ op: "restore_takes", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: true });
+		expect(volumes().length).toBeGreaterThan(2);
+		expect(new Set(volumes())).toEqual(new Set([6.5]));
+		editor.command.undo();
+
+		const { main } = tracks();
+		editor.command.execute({
+			command: new ToggleSourceAudioSeparationCommand({
+				trackId: main.id,
+				clipId: main.clips[0].id,
+			}),
+		});
+		expect(
+			apply({
+				ops: [
+					{
+						op: "set_gain",
+						clipIds: [...tracks().main.clips, ...tracks().audio[0].clips].map(
+							(clip) => clip.id,
+						),
+						gainDb: -3,
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: true });
+		const audio = tracks().audio[0].clips;
+		expect(audio.length).toBeGreaterThan(1);
+		for (const clip of audio) expect(clip.params.volume).toBe(-3);
+	});
+
+	test("a take swapped out and back keeps its gain when no other clip of its recording is left", () => {
+		const recording = editor.media.getProjectItems()[0];
+		editor.media.setProjectItems({
+			projectItems: [recording, { ...recording, id: "other", name: "Other" }],
+		});
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [videoClip({ id: "best", start: 0, duration: 2, trimStart: 4 })],
+			},
+		});
+		const main = () => editor.sequences.getActiveSequence().tracks.main.clips;
+		expect(
+			apply({
+				ops: [
+					{
+						op: "add_marker",
+						at: { seconds: 1 },
+						data: {
+							kind: "removal",
+							sectionName: "Intro",
+							bestTake,
+							badTakes: [{ projectItemId: "other", sourceIn: 0, sourceOut: 3 }],
+						},
+					},
+					{ op: "set_gain", clipIds: ["best"], gainDb: 18.1 },
+				],
+			}),
+		).toMatchObject({ ok: true });
+		const id = markers()[0]?.id ?? "";
+
+		const swap = () =>
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] });
+		expect(swap()).toMatchObject({ ok: true });
+		expect(main().map((clip) => [clip.mediaId, clip.params.volume])).toEqual([
+			["other", 0],
+		]);
+		// The marker keeps the gain the swapped-out take played at, on disk too.
+		const saved = normalizeMarkers({
+			raw: JSON.parse(JSON.stringify(markers())),
+		});
+		expect(saved[0]?.data?.badTakePlacements).toEqual([
+			[{ trackId: expect.any(String), volume: 18.1 }],
+		]);
+
+		expect(swap()).toMatchObject({ ok: true });
+		expect(main().map((clip) => [clip.mediaId, clip.params.volume])).toEqual([
+			["rec", 18.1],
+		]);
+	});
+
 	test("swaps aligned extracted audio together with its video", () => {
 		const { main } = editor.sequences.getActiveSequence().tracks;
 		editor.command.execute({

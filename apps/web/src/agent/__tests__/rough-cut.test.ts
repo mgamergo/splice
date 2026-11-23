@@ -793,3 +793,112 @@ test("rejects a take duplicated across tracks quickly instead of listing every p
 	).toThrow("multiple places");
 	expect(performance.now() - started).toBeLessThan(1_000);
 });
+
+test("burns in captions for the kept words inside the same undo step", () => {
+	raw();
+	const before = editor.sequences.getSequences().length;
+	const result = api.roughCut({
+		sections: [section],
+		expectedRevision: api.getRevision(),
+		captions: {
+			sources: [
+				{
+					projectItemId: second,
+					words: [
+						{ start: 1, end: 1.4, text: "cut" },
+						{ start: 4.5, end: 5, text: "We" },
+						{ start: 5, end: 5.4, text: "applied" },
+					],
+				},
+			],
+		},
+	});
+	expect(result).toMatchObject({ ok: true, captionCount: 1 });
+	const captions = active().tracks.overlay.find(
+		({ name }) => name === "Captions",
+	);
+	expect(captions?.clips).toHaveLength(1);
+	expect(editor.sequences.getSequences()).toHaveLength(before + 1);
+	editor.command.undo();
+	expect(editor.sequences.getSequences()).toHaveLength(before);
+	expect(active().name).toBe("Raw");
+});
+
+test("captions follow a Swap and back instead of blocking it", () => {
+	raw();
+	const captions = {
+		sources: [
+			{
+				projectItemId: first,
+				words: [{ start: 9, end: 9.5, text: "retake" }],
+			},
+			{
+				projectItemId: second,
+				words: [
+					{ start: 4.5, end: 5, text: "keeper" },
+					{ start: 10, end: 10.5, text: "later" },
+				],
+			},
+		],
+	};
+	expect(
+		api.roughCut({
+			sections: [section],
+			expectedRevision: api.getRevision(),
+			captions,
+		}),
+	).toMatchObject({ ok: true, captionCount: 2 });
+	// The creator corrects a caption after the marker by hand.
+	const fixed = active();
+	editor.sequences.setSequences({
+		sequences: editor.sequences.getSequences().map((sequence) =>
+			sequence.id !== fixed.id
+				? sequence
+				: {
+						...sequence,
+						tracks: {
+							...sequence.tracks,
+							overlay: sequence.tracks.overlay.map((track) =>
+								track.type === "text" && track.name === "Captions"
+									? {
+											...track,
+											clips: track.clips.map((clip) =>
+												clip.params.content === "later"
+													? {
+															...clip,
+															params: { ...clip.params, content: "Later!" },
+														}
+													: clip,
+											),
+										}
+									: track,
+							),
+						},
+					},
+		),
+	});
+	const words = () =>
+		active()
+			.tracks.overlay.filter(({ name }) => name === "Captions")
+			.flatMap(({ clips }) => clips.map((clip) => clip.name));
+	const contents = () => api.getDigest().match(/"(retake|keeper)"\]/g);
+	const corrected = () => api.getDigest().includes('"Later!"]');
+	expect(contents()).toEqual(['"keeper"]']);
+	const markerId = active().markers[0]?.id;
+	if (!markerId) throw new Error("No removal marker");
+	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
+		ok: true,
+	});
+	expect(contents()).toEqual(['"retake"]']);
+	expect(corrected()).toBe(true);
+	// Swapping back is the shorter take, with captions rippled out of its way.
+	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
+		ok: true,
+	});
+	expect(contents()).toEqual(['"keeper"]']);
+	expect(words()).toHaveLength(2);
+	expect(corrected()).toBe(true);
+	expect(apply({ op: "restore_takes", markerId })).toMatchObject({ ok: true });
+	expect(corrected()).toBe(true);
+	expect(contents()?.sort()).toEqual(['"keeper"]', '"retake"]']);
+});
