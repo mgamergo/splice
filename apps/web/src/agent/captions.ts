@@ -420,14 +420,18 @@ export function rebuildCaptions({
 		tracks: withoutCaptionTrack({ tracks: sequence.tracks }),
 		sources: captions.sources,
 	});
+	// Starts that several words share, in order (the words are sorted).
+	const sharedStarts = oldWords.flatMap(({ start }, index) =>
+		Math.abs(start - (oldWords[index + 1]?.start ?? Number.NaN)) <
+			SAME_TIME_SECONDS &&
+		!(Math.abs(start - (oldWords[index - 1]?.start ?? Number.NaN)) <
+			SAME_TIME_SECONDS)
+			? [start]
+			: [],
+	);
 	/** The latest start before `at` that several words share. */
 	const runStartBefore = (at: number) =>
-		oldWords
-			.filter(({ start }) => start < at - SAME_TIME_SECONDS)
-			.findLast(
-				({ start }, _, earlier) =>
-					earlier.filter((word) => Math.abs(word.start - start) < SAME_TIME_SECONDS).length > 1,
-			)?.start;
+		sharedStarts.findLast((start) => start < at - SAME_TIME_SECONDS);
 	/**
 	 * Whether a caption starting here is a later caption of a run of words
 	 * that share a start: after the run's start, before its hold ends, and at
@@ -452,10 +456,13 @@ export function rebuildCaptions({
 		0,
 		...before.map((clip) => seconds(clip.startTime + clip.duration)),
 	);
+	const keptBefore = new Set(before);
+	// Cheap checks first: only a caption at the kept captions' end can be
+	// part of a run that crosses the edge.
 	const runCrosses = previous.clips.some(
 		(clip) =>
-			!before.includes(clip) &&
 			Math.abs(seconds(clip.startTime) - keptEnd) < SAME_TIME_SECONDS &&
+			!keptBefore.has(clip) &&
 			isStaggered(clip.startTime),
 	);
 	const runStart = runStartBefore(keptEnd);
@@ -463,24 +470,25 @@ export function rebuildCaptions({
 		before = before.filter(
 			(clip) => seconds(clip.startTime) < runStart - SAME_TIME_SECONDS,
 		);
-	const kept = previous.clips
+	const later = previous.clips
 		.filter((clip) => clip.startTime >= window.end)
 		.sort((a, b) => a.startTime - b.startTime);
 	// The same on the far edge: a staggered caption that continues straight
 	// after a caption the edit replaced belongs to a run being rebuilt.
-	while (
-		kept.length &&
-		isStaggered(kept[0].startTime) &&
+	const keptAfter = new Set(later);
+	const replacedEndsAt = (time: number) =>
 		previous.clips.some(
 			(clip) =>
-				!kept.includes(clip) &&
-				Math.abs(
-					seconds(clip.startTime + clip.duration) - seconds(kept[0].startTime),
-				) < SAME_TIME_SECONDS,
-		)
-	)
-		kept.shift();
-	const after = kept.map((clip) => ({
+				Math.abs(seconds(clip.startTime + clip.duration) - seconds(time)) <
+					SAME_TIME_SECONDS && !keptAfter.has(clip),
+		);
+	for (const clip of later) {
+		if (!replacedEndsAt(clip.startTime) || !isStaggered(clip.startTime)) break;
+		keptAfter.delete(clip);
+	}
+	const after = later
+		.filter((clip) => keptAfter.has(clip))
+		.map((clip) => ({
 		...clip,
 		startTime: roundMediaTime({ time: clip.startTime + window.delta }),
 	}));
@@ -501,8 +509,8 @@ export function rebuildCaptions({
 		...previous.clips
 			.filter(
 				(clip) =>
-					!before.includes(clip) &&
-					!kept.includes(clip) &&
+					!keptBefore.has(clip) &&
+					!keptAfter.has(clip) &&
 					clip.startTime + clip.duration > window.end,
 			)
 			.map((clip) => seconds(clip.startTime + clip.duration + window.delta)),
