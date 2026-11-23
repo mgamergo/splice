@@ -42,6 +42,11 @@ const takeSchema = z.union([
 const takePlacementSchema = z.strictObject({
 	trackId: z.string().min(1),
 	audioTrackId: z.string().min(1).optional(),
+	/**
+	 * The clip volume in dB the take played at when it was swapped out, so it
+	 * keeps its recording's gain even once no other clip of that recording is left.
+	 */
+	volume: z.number().optional(),
 });
 
 export const removalMarkerDataSchema = z.strictObject({
