@@ -285,7 +285,7 @@ export class EditorApi {
 	takesList(request: unknown) {
 		const parsed = takesListRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
-		const { sequenceId, noiseReduction } = parsed.data;
+		const { sequenceId } = parsed.data;
 		const sequence = sequenceId
 			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
 			: this.editor.sequences.getActiveSequenceOrNull();
@@ -293,7 +293,6 @@ export class EditorApi {
 			return this.invalidOp(
 				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
 			);
-		const projectItems = this.editor.media.getProjectItems();
 		return {
 			ok: true as const,
 			sequenceId: sequence.id,

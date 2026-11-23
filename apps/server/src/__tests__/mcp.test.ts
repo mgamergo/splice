@@ -507,6 +507,42 @@ describe("loudness tools", () => {
 		]);
 	});
 
+	test("normalize_loudness gains a recording's denoised and plain clips apart", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.audioSources")
+				return {
+					ok: true,
+					sequenceId: "seq-1",
+					revision: 7,
+					audioSources: [
+						audioSources[0],
+						{ ...audioSources[0], noiseReduction: true, clipIds: ["c9"] },
+					],
+				};
+			if (method === "loudness.measure") {
+				const denoised = field({ params, key: "noiseReduction" });
+				return {
+					integratedLufs: denoised ? -30 : -28,
+					truePeakDbtp: -20,
+					lraLu: 4,
+					cached: true,
+				};
+			}
+			return { ok: true, revision: 8, label: "x", summary: [] };
+		});
+		const result = await client.callTool({
+			name: "normalize_loudness",
+			arguments: { expectedRevision: 7 },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(field({ params: calls.at(-1)?.[1], key: "ops" })).toEqual([
+			{ op: "set_gain", clipIds: ["c1", "c2"], gainDb: 14 },
+			{ op: "set_gain", clipIds: ["c9"], gainDb: 16 },
+		]);
+	});
+
 	test("measure_loudness forwards the path and ranges to splice", async () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {
@@ -569,6 +605,8 @@ describe("noise reduction tools", () => {
 		return async ({ method, params }) => {
 			calls.push([method, params]);
 			const path = String(field({ params, key: "path" }));
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
 			if (method === "editor.audioSources") {
 				const enabled = field({ params, key: "noiseReduction" }) === true;
 				return {
@@ -797,6 +835,7 @@ describe("noise reduction tools", () => {
 		});
 		expect(result.isError).toBeFalsy();
 		expect(calls.map(([method]) => method)).toEqual([
+			"editor.getState",
 			"editor.roughCut",
 			"noiseReduction.render",
 			"noiseReduction.render",
@@ -804,7 +843,7 @@ describe("noise reduction tools", () => {
 			"loudness.measure",
 			"editor.roughCut",
 		]);
-		expect(calls[3][1]).toMatchObject({ noiseReduction: true });
+		expect(calls[4][1]).toMatchObject({ noiseReduction: true });
 		expect(calls.at(-1)?.[1]).toEqual({
 			expectedRevision: 3,
 			sections,
@@ -830,6 +869,7 @@ describe("noise reduction tools", () => {
 			},
 		});
 		expect(calls.map(([method]) => method)).toEqual([
+			"editor.getState",
 			"editor.roughCut",
 			"noiseReduction.render",
 			"noiseReduction.render",

@@ -251,23 +251,16 @@ test("clips of one recording with noise reduction on and off are measured apart"
 
 test("audioSources can list each recording as it will sound once noise reduction is set", () => {
 	const [clip, other, browser] = active().tracks.main.clips;
-	const copy = {
-		...clip,
-		id: "copy",
-		startTime: addMediaTime({
-			a: browser.startTime,
-			b: browser.duration,
-		}),
-	};
+	// A second clip of the first recording, played where the second one was.
+	const copy = { ...clip, id: "copy", startTime: other.startTime };
 	editor.timeline.updateTracks({
 		...active().tracks,
 		main: {
 			...active().tracks.main,
 			clips: [
 				{ ...clip, params: { ...clip.params, noiseReduction: true } },
-				other,
-				browser,
 				copy,
+				browser,
 			],
 		},
 	});
@@ -287,22 +280,19 @@ test("audioSources can list each recording as it will sound once noise reduction
 	expect(sources()).toEqual([
 		[first, true, [clip.id]],
 		[first, false, ["copy"]],
-		[second, false, [other.id]],
 		["browser", false, [browser.id]],
 	]);
 	// One source per recording, in playing order; browser items stay as they are.
 	expect(sources(true)).toEqual([
 		[first, true, [clip.id, "copy"]],
-		[second, true, [other.id]],
 		["browser", false, [browser.id]],
 	]);
 	expect(sources(false)[0]).toEqual([first, false, [clip.id, "copy"]]);
 	// Only a listing: the sequence is unchanged.
 	expect(flags()).toEqual([
 		[first, true],
-		[second, false],
-		["browser", false],
 		[first, false],
+		["browser", false],
 	]);
 });
 

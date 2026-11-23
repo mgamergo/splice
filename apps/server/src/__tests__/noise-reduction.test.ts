@@ -15,11 +15,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import {
-	createLoudnessMeter,
-	loudnessCacheKey,
-	runEbur128,
-} from "../loudness";
+import { createLoudnessMeter, loudnessCacheKey, runEbur128 } from "../loudness";
 import {
 	createNoiseReducer,
 	denoiseArgs,

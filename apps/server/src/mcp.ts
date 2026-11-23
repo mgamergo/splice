@@ -494,12 +494,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		},
 		({ expectedRevision, targetLufs = DEFAULT_TARGET_LUFS, label }) =>
 			guard(async () => {
-				// The tab lists each recording as one source, in playing order, as
-				// it will sound once noise reduction is set.
-				const current = await rpc({
-					method: "editor.audioSources",
-					params: { noiseReduction: enabled },
-				});
+				const current = await rpc({ method: "editor.audioSources" });
 				if (!isOk(current)) return editorResult(current);
 				const { sequenceId } = z
 					.object({ sequenceId: z.string() })
@@ -520,8 +515,12 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 						}),
 						isError: true,
 					};
+				// A recording's clips with noise reduction on and off sound
+				// different, so each set gets its own gain.
+				const key = (source: { projectItemId: string; noiseReduction: boolean }) =>
+					`${source.noiseReduction}:${source.projectItemId}`;
 				const clipIds = new Map(
-					audioSources.map((source) => [source.projectItemId, source.clipIds]),
+					audioSources.map((source) => [key(source), source.clipIds]),
 				);
 				const result = await rpc({
 					method: "editor.apply",
@@ -529,11 +528,17 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 						sequenceId,
 						expectedRevision,
 						label: label ?? "Agent: normalize loudness",
-						ops: sourceGains.map(({ projectItemId, gainDb }) => ({
-							op: "set_gain",
-							clipIds: clipIds.get(projectItemId),
-							gainDb,
-						})),
+						ops: sources.flatMap((source) =>
+							"gain" in source
+								? [
+										{
+											op: "set_gain",
+											clipIds: clipIds.get(key(source)),
+											gainDb: source.gain.gainDb,
+										},
+									]
+								: [],
+						),
 					},
 				});
 				if (!isOk(result)) return editorResult(result);
