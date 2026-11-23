@@ -359,6 +359,7 @@ const ffmpeg = Bun.which("ffmpeg");
 async function ffmpegMeter(
 	callback: (meter: {
 		root: string;
+		ffmpegRun: (args: string[]) => Promise<string>;
 		generate: (
 			name: string,
 			expression: string,
@@ -392,6 +393,7 @@ async function ffmpegMeter(
 		await mkdir(join(root, "Footage"));
 		await callback({
 			root,
+			ffmpegRun,
 			async generate(name, expression, seconds) {
 				const file = join(root, "Footage", name);
 				await ffmpegRun([
@@ -518,6 +520,48 @@ test.skipIf(!ffmpeg)(
 			const measured = await measure(source, ranges);
 			expect(measured.integratedLufs).not.toBeNull();
 			expect(performance.now() - started).toBeLessThan(30_000);
+		}),
+	60_000,
+);
+
+test.skipIf(!ffmpeg)(
+	"measures a video's ranges from its audio alone, copied once",
+	() =>
+		ffmpegMeter(async ({ root, ffmpegRun, measure, reference }) => {
+			const source = join(root, "Footage", "screen.mp4");
+			await ffmpegRun([
+				"-f",
+				"lavfi",
+				"-i",
+				"aevalsrc=0.05*sin(2*PI*440*t)+0.8*sin(2*PI*997*t)*between(t\\,1.9\\,1.95):s=48000:d=4",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=s=160x120:r=30:d=4",
+				"-shortest",
+				"-c:a",
+				"aac",
+				"-c:v",
+				"libx264",
+				"-pix_fmt",
+				"yuv420p",
+				source,
+			]);
+			const ranges = [{ start: 1, end: 2 }];
+			const measured = await measure(source, ranges);
+			const exact = await reference(source, "[0:a:0]atrim=start=1:end=2,");
+			// The burst at 1.9 s, just before the out point, is measured.
+			expect(measured.truePeakDbtp ?? -Infinity).toBeGreaterThanOrEqual(
+				(exact.peak ?? 0) - 0.1,
+			);
+			const copies = [...new Bun.Glob("audio-*.mka").scanSync(
+				join(root, "Cache", "loudness"),
+			)];
+			expect(copies).toHaveLength(1);
+			await measure(source, [{ start: 0, end: 1 }]);
+			expect([
+				...new Bun.Glob("audio-*.mka").scanSync(join(root, "Cache", "loudness")),
+			]).toEqual(copies);
 		}),
 	60_000,
 );

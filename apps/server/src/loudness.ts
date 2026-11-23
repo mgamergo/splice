@@ -9,7 +9,7 @@ import {
 	sourceRangeSchema,
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
@@ -18,6 +18,7 @@ import {
 	run,
 	SOURCE_TIMELINE_FILTER,
 } from "./transcription-tools";
+import { mediaTypeForPath } from "./footage";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
 
 export const measureLoudnessInput = {
@@ -56,7 +57,7 @@ export function loudnessCacheKey({
 }): string {
 	// Bump the version when the measurement changes.
 	return createHash("sha256")
-		.update(JSON.stringify([3, path, size, mtimeMs, ranges]))
+		.update(JSON.stringify([4, path, size, mtimeMs, ranges]))
 		.digest("hex");
 }
 
@@ -74,8 +75,11 @@ const METER =
  * listed twice plays twice and joins between them are measured as heard.
  * FFmpeg reads one range at a time, so memory stays flat however many ranges
  * or repeats, and the list goes in a file to keep the command line short.
- * PCM is cut at the exact sample; compressed audio can start a packet early,
- * which errs toward a louder reading.
+ * A range starts at the exact sample for PCM, and can start a packet early for
+ * compressed audio; it can run on to the end of the packet holding its out
+ * point. Extra samples only ever read louder, so the gain errs quieter.
+ * The source must hold audio alone: in the concat demuxer, a packet of any
+ * stream past the out point ends the range.
  */
 export function concatList({
 	source,
@@ -277,6 +281,57 @@ async function readCache(
 	}
 }
 
+/**
+ * The recording's first audio stream alone, copied without re-encoding into a
+ * cached Matroska file, so other streams can't end a range early. Audio files
+ * are used as they are.
+ */
+async function audioOnly({
+	command,
+	source,
+	cacheDir,
+	signal,
+}: {
+	command: string;
+	source: string;
+	cacheDir: string;
+	signal: AbortSignal;
+}): Promise<string> {
+	if (mediaTypeForPath(source)?.startsWith("audio/")) return source;
+	const { size, mtimeMs } = await stat(source);
+	const key = createHash("sha256")
+		.update(JSON.stringify([resolve(source), size, mtimeMs]))
+		.digest("hex");
+	const audio = join(cacheDir, `audio-${key}.mka`);
+	if (await access(audio).then(() => true, () => false)) return audio;
+	const partial = `${audio}.${process.pid}.partial`;
+	try {
+		await run({
+			command,
+			args: [
+				"-nostdin",
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				...ffmpegInputArgs({ source }),
+				"-map",
+				"0:a:0",
+				"-c",
+				"copy",
+				"-f",
+				"matroska",
+				"-y",
+				partial,
+			],
+			signal,
+		});
+		await rename(partial, audio);
+	} finally {
+		await rm(partial, { force: true });
+	}
+	return audio;
+}
+
 export async function runEbur128({
 	root,
 	source,
@@ -297,9 +352,10 @@ export async function runEbur128({
 	try {
 		let input = source;
 		if (ranges) {
+			const audio = await audioOnly({ command, source, cacheDir, signal });
 			input = join(job, "ranges.ffconcat");
 			// The list's paths are relative to the list itself.
-			await writeFile(input, concatList({ source: resolve(source), ranges }));
+			await writeFile(input, concatList({ source: resolve(audio), ranges }));
 		}
 		const log: string[] = [];
 		await run({
