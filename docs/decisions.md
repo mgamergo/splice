@@ -113,7 +113,7 @@ Publish the MP4 and SRT together only after both succeed. Preserve the previous 
 
 ### Graphics milestones and evaluation
 
-Cut the footage first, then add editable zooms and basic cards. Review how this pass feels on real footage before introducing HyperFrames or richer graphics. Keep each planned graphic linked to its spoken passage, source frames and intended target so the creator can inspect the evidence.
+For each video, cut the footage first, then add editable zooms, highlights around important screen details, and basic cards. The creator watches this edit in Splice, makes or requests changes, and finalizes it. Only then can a HyperFrames pass add richer graphics to the reviewed video. Keep each planned graphic linked to its spoken passage, source frames and intended target so the creator can inspect the evidence.
 
 Keep the chosen style with the project. Offer a preview before applying updated style defaults and preserve properties the creator adjusted. Repeated visual corrections can inform reversible framing preferences separately from take-selection preferences. Keep one-off corrections local to the project.
 
@@ -134,3 +134,9 @@ Enabling screenshot access for a project covers individual frame and crop reques
 Ground explanatory cards in the recording or creator-supplied notes. When evidence supports only a label, use the label or let the demonstration play.
 
 Support manual picture-only repair during the first horizontal milestone. The creator can keep narration from one take, overlay screen footage from another, and preview their timing together. The agent may flag the missing action and suggest a replacement take. The creator decides whether to use it.
+
+### Directing an edit
+
+The recordings alone are enough to start. An optional project brief guides this edit without changing future project defaults. Preserve the teaching order through take selection and tightening. Moving the payoff or removing an entire section to meet a duration requires an explicit instruction to restructure.
+
+The creator can select a passage in Splice and direct the editing agent in T3 Code. MCP supplies the selected sequence and range. Show the consequences for adjacent transitions and preserve unrelated edits.
