@@ -70,6 +70,7 @@ function setUp(handlers: Partial<TabHandlers> = {}) {
 			"editor.listItems": () => [],
 			"editor.importItems": () => ({ imported: [], failed: [] }),
 			"editor.rawSequence": () => ({ ok: true }),
+			"editor.addCaptions": () => ({ ok: true }),
 			"editor.roughCut": () => ({ ok: true }),
 			"editor.takesList": () => ({ ok: true, markers: [] }),
 			...handlers,

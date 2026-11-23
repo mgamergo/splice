@@ -25,7 +25,9 @@ function quoteFontFamily({ fontFamily }: { fontFamily: string }): string {
 	return `"${fontFamily.replace(/"/g, '\\"')}"`;
 }
 
-function createMeasurementContext(): CanvasRenderingContext2D | null {
+/** Callers building many clips can share one context. Null without a DOM. */
+export function createMeasurementContext(): CanvasRenderingContext2D | null {
+	if (typeof document === "undefined") return null;
 	const canvas = document.createElement("canvas");
 	canvas.width = MEASUREMENT_CANVAS_SIZE;
 	canvas.height = MEASUREMENT_CANVAS_SIZE;
@@ -256,12 +258,13 @@ export function buildSubtitleTextClip({
 	index,
 	caption,
 	canvasSize,
+	ctx = createMeasurementContext(),
 }: {
 	index: number;
 	caption: SubtitleCue;
 	canvasSize: { width: number; height: number };
+	ctx?: CanvasRenderingContext2D | null;
 }): CreateTextClip {
-	const ctx = createMeasurementContext();
 	const style = resolveSubtitleStyle({
 		style: caption.style,
 	});

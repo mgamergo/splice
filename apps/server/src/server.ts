@@ -189,12 +189,18 @@ export function startServer({
 				);
 			}
 		}
-		if (method === "transcribe.start" || method === "transcribe.status") {
+		if (
+			method === "transcribe.start" ||
+			method === "transcribe.status" ||
+			method === "transcript.words"
+		) {
 			try {
 				const result =
 					method === "transcribe.start"
 						? await transcription.start(params)
-						: await transcription.status(params);
+						: method === "transcribe.status"
+							? await transcription.status(params)
+							: await transcription.words(params);
 				return Response.json(rpcResult({ id, result }));
 			} catch (error) {
 				return Response.json(

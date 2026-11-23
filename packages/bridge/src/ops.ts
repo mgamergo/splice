@@ -125,6 +125,52 @@ export const rawSequenceRequestSchema = z.strictObject({
 		.describe("Project item IDs in recording order, earliest first"),
 });
 
+const captionWordSchema = z.strictObject({
+	start: z.number().nonnegative(),
+	end: z.number().nonnegative(),
+	text: z.string(),
+});
+
+/** Source-relative word timings of one recording, from its transcript. */
+const captionSourceSchema = z.strictObject({
+	projectItemId: z.string().min(1),
+	words: z.array(captionWordSchema).max(200_000),
+});
+
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use #rrggbb");
+
+export const captionStyleSchema = z.strictObject({
+	wordsPerCaption: z
+		.number()
+		.int()
+		.min(1)
+		.max(8)
+		.optional()
+		.describe("Most words shown at once (default 3)"),
+	fontFamily: z.string().min(1).max(100).optional(),
+	fontSize: z
+		.number()
+		.positive()
+		.max(40)
+		.optional()
+		.describe("Editor text units, relative to the canvas height (default 8)"),
+	color: hexColor.optional().describe("Text color (default #ffffff)"),
+	background: z
+		.union([hexColor, z.literal("none")])
+		.optional()
+		.describe('Box behind the words, or "none" (default #000000)'),
+	position: z
+		.enum(["top", "middle", "bottom"])
+		.optional()
+		.describe("Vertical placement (default bottom, clear of the Shorts UI)"),
+	uppercase: z.boolean().optional(),
+});
+
+export const captionsRequestSchema = z.strictObject({
+	sources: z.array(captionSourceSchema).min(1),
+	style: captionStyleSchema.optional(),
+});
+
 export const roughCutRequestSchema = z.strictObject({
 	sequenceId: z
 		.string()
@@ -146,6 +192,21 @@ export const roughCutRequestSchema = z.strictObject({
 			}),
 		)
 		.min(1),
+	captions: captionsRequestSchema
+		.optional()
+		.describe(
+			"Word timings for burned-in captions. splice mcp fills this for Short projects.",
+		),
+});
+
+export const addCaptionsRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Sequence to caption. Defaults to the active sequence."),
+	expectedRevision,
+	...captionsRequestSchema.shape,
 });
 
 export const takesListRequestSchema = z.strictObject({
@@ -159,6 +220,8 @@ export const takesListRequestSchema = z.strictObject({
 export type TakePlacement = z.infer<typeof takePlacementSchema>;
 export type Take = z.infer<typeof takeSchema>;
 export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
+export type CaptionStyle = z.infer<typeof captionStyleSchema>;
+export type CaptionsRequest = z.infer<typeof captionsRequestSchema>;
 
 export type TakeSourceRange = z.infer<typeof takeSourceRangeSchema>;
 export type RemovalMarkerData = z.infer<typeof removalMarkerDataSchema>;

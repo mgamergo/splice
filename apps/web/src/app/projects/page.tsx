@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEditor } from "@/editor/use-editor";
 import { useCaptureBridgeToken } from "@/bridge/use-agent-bridge";
 import { useProjectsStore } from "./store";
+import { PROJECT_FORMATS, type ProjectFormat } from "@splice/bridge";
 import type {
 	TProjectMetadata,
 	TProjectSortKey,
@@ -502,26 +503,61 @@ function SortDropdown({ children }: { children: React.ReactNode }) {
 	);
 }
 
-function NewProjectButton() {
+function useCreateProject() {
 	const editor = useEditor();
 	const router = useRouter();
 
-	const handleCreateProject = async () => {
-		const projectId = await editor.project.createNewProject({
-			name: "New project",
-		});
-		router.push(`/editor/${projectId}`);
+	return async ({ format }: { format: ProjectFormat }) => {
+		try {
+			const projectId = await editor.project.createNewProject({
+				name: "New project",
+				format,
+			});
+			router.push(`/editor/${projectId}`);
+		} catch (error) {
+			toast.error("Failed to create project", {
+				description:
+					error instanceof Error ? error.message : "Please try again",
+			});
+		}
 	};
+}
+
+/** Each project has one format, chosen when it's created. */
+function NewProjectMenu({ children }: { children: React.ReactNode }) {
+	const createProject = useCreateProject();
 
 	return (
-		<Button
-			size="lg"
-			className="flex px-5 md:px-6"
-			onClick={handleCreateProject}
-		>
-			<span className="text-sm font-medium hidden md:block">New project</span>
-			<span className="text-sm font-medium block md:hidden">New</span>
-		</Button>
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				{(Object.keys(PROJECT_FORMATS) as ProjectFormat[]).map((format) => {
+					const { label, width, height } = PROJECT_FORMATS[format];
+					return (
+						<DropdownMenuItem
+							key={format}
+							onSelect={() => createProject({ format })}
+						>
+							{label}
+							<span className="text-muted-foreground ml-auto pl-4 text-xs">
+								{width}×{height}
+							</span>
+						</DropdownMenuItem>
+					);
+				})}
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
+function NewProjectButton() {
+	return (
+		<NewProjectMenu>
+			<Button size="lg" className="flex px-5 md:px-6">
+				<span className="text-sm font-medium hidden md:block">New project</span>
+				<span className="text-sm font-medium block md:hidden">New</span>
+			</Button>
+		</NewProjectMenu>
 	);
 }
 
@@ -947,23 +983,8 @@ function ProjectsSkeleton() {
 
 function EmptyState() {
 	const { searchQuery, setSearchQuery } = useProjectsStore();
-	const router = useRouter();
 	const editor = useEditor();
 	const savedProjects = editor.project.getSavedProjects();
-
-	const handleCreateProject = async () => {
-		try {
-			const projectId = await editor.project.createNewProject({
-				name: "New project",
-			});
-			router.push(`/editor/${projectId}`);
-		} catch (error) {
-			toast.error("Failed to create project", {
-				description:
-					error instanceof Error ? error.message : "Please try again",
-			});
-		}
-	};
 
 	if (savedProjects.length > 0) {
 		return (
@@ -976,7 +997,8 @@ function EmptyState() {
 					<div className="flex flex-col items-center gap-3">
 						<h3 className="text-lg font-medium">No results found</h3>
 						<p className="text-muted-foreground max-w-md">
-							Your search for &ldquo;{searchQuery}&rdquo; did not return any results.
+							Your search for &ldquo;{searchQuery}&rdquo; did not return any
+							results.
 						</p>
 					</div>
 				</div>
@@ -1006,10 +1028,12 @@ function EmptyState() {
 					videos. All privately.
 				</p>
 			</div>
-			<Button size="lg" className="gap-2" onClick={handleCreateProject}>
-				<HugeiconsIcon icon={PlusSignIcon} />
-				Create your first project
-			</Button>
+			<NewProjectMenu>
+				<Button size="lg" className="gap-2">
+					<HugeiconsIcon icon={PlusSignIcon} />
+					Create your first project
+				</Button>
+			</NewProjectMenu>
 		</div>
 	);
 }
