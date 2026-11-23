@@ -64,7 +64,7 @@ export function transcriptCacheKey({
 }): string {
 	// Bump the version when cached transcript semantics change.
 	return createHash("sha256")
-		.update(JSON.stringify([2, path, size, mtimeMs, model]))
+		.update(JSON.stringify([3, path, size, mtimeMs, model]))
 		.digest("hex");
 }
 

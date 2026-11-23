@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { Readable, Transform } from "node:stream";
@@ -147,8 +147,6 @@ export function ffmpegArgs({
 		"-loglevel",
 		"error",
 		"-nostats",
-		"-progress",
-		"pipe:2",
 		"-protocol_whitelist",
 		"file",
 		"-format_whitelist",
@@ -215,22 +213,33 @@ export async function extractAudio({
 		throw new Error(
 			`Install FFmpeg on PATH or put ${name} in ${join(root, "Tools")}.`,
 		);
-	let durationSeconds = 0;
-	await run({
-		command,
-		args: ffmpegArgs({ source, wav }),
-		signal,
-		onLine(line) {
-			const match = /^out_time_us=(\d+)$/.exec(line);
-			if (match)
-				durationSeconds = Math.max(
-					durationSeconds,
-					Number(match[1]) / 1_000_000,
-				);
-		},
-	});
-	if (!durationSeconds) throw new Error("FFmpeg did not extract any audio.");
-	return durationSeconds;
+	await run({ command, args: ffmpegArgs({ source, wav }), signal });
+	const file = await open(wav, "r");
+	try {
+		const chunkHeader = Buffer.alloc(8);
+		const { size } = await file.stat();
+		// FFmpeg writes RIFF/WAVE with optional chunks before the PCM data.
+		for (let offset = 12; offset + chunkHeader.length <= size; ) {
+			const { bytesRead } = await file.read(
+				chunkHeader,
+				0,
+				chunkHeader.length,
+				offset,
+			);
+			if (bytesRead !== chunkHeader.length) break;
+			const chunkSize = chunkHeader.readUInt32LE(4);
+			offset += chunkHeader.length;
+			if (offset + chunkSize > size) break;
+			if (chunkHeader.toString("ascii", 0, 4) === "data") {
+				if (chunkSize > 0) return chunkSize / (16000 * 2);
+				break;
+			}
+			offset += chunkSize + (chunkSize % 2);
+		}
+		throw new Error("FFmpeg did not extract any audio.");
+	} finally {
+		await file.close();
+	}
 }
 
 /** One in-flight installer per destination. Files become visible after verification. */

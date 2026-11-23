@@ -21,8 +21,6 @@ test("builds shell-free FFmpeg and whisper.cpp arguments", () => {
 		"-loglevel",
 		"error",
 		"-nostats",
-		"-progress",
-		"pipe:2",
 		"-protocol_whitelist",
 		"file",
 		"-format_whitelist",
@@ -305,7 +303,7 @@ test.skipIf(!ffmpeg)(
 				chunk + 8 + bytes.readUInt32LE(chunk + 4),
 			);
 			expect(duration).toBeGreaterThan(2.95);
-			expect(samples.length / 32000).toBeCloseTo(duration, 3);
+			expect(samples.length / 32000).toBe(duration);
 			expect(samples.subarray(0, 32000).every((byte) => byte === 0)).toBe(true);
 			expect(samples.subarray(2 * 32000).some((byte) => byte !== 0)).toBe(true);
 		} finally {
