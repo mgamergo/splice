@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
-import { setUpEditor } from "@/agent/__tests__/fixtures";
+import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { collectAudioSources } from "@/agent/loudness";
 import type { EditorCore } from "@/core";
 import { collectAudioClipSources } from "@/media/audio";
@@ -293,4 +293,56 @@ test("restored and swapped takes keep their recording's noise reduction", () => 
 	expect(restore()).toMatchObject({ ok: true });
 	for (const clip of recordingClips())
 		expect(clip.params.noiseReduction ?? false).toBe(false);
+});
+
+test("a take swapped out and back keeps its noise reduction when no other clip of its recording is left", () => {
+	const { tracks } = active();
+	editor.timeline.updateTracks({
+		...tracks,
+		main: {
+			...tracks.main,
+			clips: [
+				{
+					...videoClip({ id: "best", start: 0, duration: 2, trimStart: 4 }),
+					mediaId: first,
+				},
+			],
+		},
+		audio: tracks.audio.map((track) => ({ ...track, clips: [] })),
+	});
+	expect(
+		api.apply({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			label: "Marker",
+			ops: [
+				{
+					op: "add_marker",
+					at: { seconds: 1 },
+					data: {
+						kind: "removal",
+						sectionName: "Intro",
+						bestTake: { projectItemId: first, sourceIn: 4, sourceOut: 6 },
+						badTakes: [{ projectItemId: second, sourceIn: 0, sourceOut: 3 }],
+					},
+				},
+				{ op: "set_noise_reduction", clipIds: ["best"], enabled: true },
+			],
+		}),
+	).toMatchObject({ ok: true });
+	const [marker] = active().markers;
+	const swap = () =>
+		api.apply({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			label: "Swap",
+			ops: [{ op: "swap_take", markerId: marker.id, takeIndex: 0 }],
+		});
+	expect(swap()).toMatchObject({ ok: true });
+	expect(flags()).toEqual([[second, false]]);
+	expect(active().markers[0]?.data?.badTakePlacements).toEqual([
+		[{ trackId: expect.any(String), noiseReduction: true }],
+	]);
+	expect(swap()).toMatchObject({ ok: true });
+	expect(flags()).toEqual([[first, true]]);
 });

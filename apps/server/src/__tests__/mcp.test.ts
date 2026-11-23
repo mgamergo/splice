@@ -327,7 +327,8 @@ describe("noise reduction tools", () => {
 			missing: false,
 			clipIds: ["c5"],
 			ranges: [{ start: 0, end: 1 }],
-		},		{
+		},
+		{
 			projectItemId: "gone",
 			path: "gone.wav",
 			noiseReduction: false,
