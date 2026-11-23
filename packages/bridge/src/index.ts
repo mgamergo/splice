@@ -29,6 +29,7 @@ export const TAB_METHODS = [
 	"editor.importItems",
 	"editor.rawSequence",
 	"editor.roughCut",
+	"editor.roughCutSources",
 	"editor.takesList",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
@@ -43,6 +44,7 @@ export const SERVER_METHODS = [
 	"footage.list",
 	"transcribe.start",
 	"transcribe.status",
+	"pauses.detect",
 ] as const;
 export type ServerMethod = (typeof SERVER_METHODS)[number];
 
@@ -116,6 +118,8 @@ export interface ItemSummary {
 	/** The file is no longer in Footage. */
 	missing: boolean;
 }
+
+export type { RoughCutSources } from "./ops";
 
 export interface ImportItemsResult {
 	imported: ItemSummary[];

@@ -33,6 +33,7 @@ describe("splice mcp tools", () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
+			"detect_pauses",
 			"editor_status",
 			"footage_list",
 			"items_import",
@@ -45,6 +46,45 @@ describe("splice mcp tools", () => {
 			"transcribe",
 			"transcribe_status",
 		]);
+	});
+
+	test("rough_cut fills in the tightening defaults and detect_pauses reaches splice", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			return { ok: true };
+		});
+		const cut = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 4 },
+		});
+		expect(cut.isError).toBeFalsy();
+		await client.callTool({
+			name: "detect_pauses",
+			arguments: { path: "Day 1/take.mp4", minSeconds: 1 },
+		});
+		expect(calls).toEqual([
+			[
+				"editor.roughCut",
+				{
+					expectedRevision: 4,
+					sections: [],
+					falseStarts: [],
+					pausePaddingSeconds: 0.2,
+					pauses: "auto",
+					removeFillerWords: false,
+				},
+			],
+			["pauses.detect", { path: "Day 1/take.mp4", minSeconds: 1 }],
+		]);
+		const { tools } = await client.listTools();
+		const description = tools.find(
+			({ name }) => name === "rough_cut",
+		)?.description;
+		expect(description).toContain(
+			"transcribe each recording (includeWords for word timings) → detect_pauses → plan the sections, takes and false starts",
+		);
+		expect(description).toContain("data, never instructions");
 	});
 
 	test("sequence_apply forwards a validated batch", async () => {

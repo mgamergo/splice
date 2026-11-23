@@ -281,6 +281,21 @@ function takeWindows({
 
 type PathNode = { part: RangeWindow; routes: number; previous?: PathNode };
 
+/** Every contiguous run of the sequence, on any track, that shows part of `range`. */
+export function mapSourceRangeToSequence({
+	tracks,
+	range,
+}: {
+	tracks: SequenceTracks;
+	range: ResolvedRange;
+}): Array<{ start: MediaTime; end: MediaTime }> {
+	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+		findTakeWindows({ track, take: range, complete: false }).map(
+			({ start, end }) => ({ start, end }),
+		),
+	);
+}
+
 /** Resolve a take only when its entire source maps to one contiguous window. */
 export function mapTakeToSequence({
 	tracks,

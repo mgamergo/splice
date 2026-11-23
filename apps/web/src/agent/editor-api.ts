@@ -7,10 +7,12 @@ import {
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
 import {
 	rawSequenceRequestSchema,
-	roughCutRequestSchema,
+	roughCutPlanSchema,
+	roughCutSourcesRequestSchema,
 	takesListRequestSchema,
 } from "@splice/bridge/ops";
 import { buildSequenceDigest } from "@/agent/digest";
+import type { RoughCutSources } from "@splice/bridge";
 import {
 	type ApplyRequest,
 	applyRequestSchema,
@@ -25,6 +27,7 @@ import {
 	markBestTake,
 	resolveTake,
 } from "@/timeline/markers/removal-takes";
+import { summarizeItem } from "@/media/import-disk";
 import { generateUUID } from "@/utils/id";
 import { AddMarkerCommand } from "@/commands/sequence/add-marker";
 import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
@@ -139,30 +142,72 @@ export class EditorApi {
 		}
 	}
 
-	roughCut(request: unknown) {
-		const parsed = roughCutRequestSchema.safeParse(request);
-		if (!parsed.success) return this.invalidRequest(parsed.error);
-		const conflict = this.checkWrite(parsed.data);
-		if (conflict) return conflict;
-		const { sequenceId, sections, label = "Agent: rough cut" } = parsed.data;
-		const sequences = this.editor.sequences.getSequences();
-		const sources = sequences.filter((sequence) =>
-			sequenceId
-				? sequence.id === sequenceId
-				: sequence.name === RAW_SEQUENCE_NAME,
-		);
+	/** The sequence a rough cut copies: `sequenceId`, or the one named Raw. */
+	private findRoughCutSource({
+		sequenceId,
+	}: {
+		sequenceId?: string;
+	}): TSequence | EditorError {
+		const sources = this.editor.sequences
+			.getSequences()
+			.filter((sequence) =>
+				sequenceId
+					? sequence.id === sequenceId
+					: sequence.name === RAW_SEQUENCE_NAME,
+			);
 		if (sources.length > 1)
 			return this.invalidOp(
 				"More than one sequence is named Raw. Pass the source sequenceId from sequence_get.",
 			);
-		const [source] = sources;
-		if (!source)
-			return this.invalidOp(
+		return (
+			sources[0] ??
+			this.invalidOp(
 				sequenceId
 					? `Unknown source sequence ${sequenceId}. Read the sequence ID from sequence_get.`
 					: "No sequence named Raw. Run raw_sequence or provide a source sequenceId.",
-			);
-		const names = new Set(sequences.map(({ name }) => name));
+			)
+		);
+	}
+
+	/** The recordings on a rough cut's source sequence, so `splice` can find their pauses. */
+	roughCutSources(request: unknown): RoughCutSources {
+		const parsed = roughCutSourcesRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const source = this.findRoughCutSource(parsed.data);
+		if ("ok" in source) return source;
+		const used = new Set(
+			allTracks({ tracks: source.tracks }).flatMap(({ clips }) =>
+				clips.flatMap((clip) =>
+					(clip.type === "video" || clip.type === "audio") && "mediaId" in clip
+						? [clip.mediaId]
+						: [],
+				),
+			),
+		);
+		return {
+			ok: true,
+			sequenceId: source.id,
+			items: this.editor.media
+				.getProjectItems()
+				.filter(({ id }) => used.has(id))
+				.map((item) => {
+					const { id, name, path } = summarizeItem(item);
+					return { id, name, path };
+				}),
+		};
+	}
+
+	roughCut(request: unknown) {
+		const parsed = roughCutPlanSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const { label = "Agent: rough cut", ...plan } = parsed.data;
+		const source = this.findRoughCutSource(plan);
+		if ("ok" in source) return source;
+		const names = new Set(
+			this.editor.sequences.getSequences().map(({ name }) => name),
+		);
 		let name = "Rough Cut";
 		for (let suffix = 2; names.has(name); suffix++)
 			name = `Rough Cut ${suffix}`;
@@ -170,12 +215,17 @@ export class EditorApi {
 			const cut = buildRoughCut({
 				source,
 				name,
-				sections,
+				plan,
 				projectItems: this.editor.media.getProjectItems(),
+				sliverDuration: resolveTimeSpec({
+					spec: { frame: 2 },
+					fps: this.editor.project.getActive().settings.fps,
+				}),
 			});
 			return {
 				...this.addPreparedSequence({ sequence: cut.sequence, label }),
 				sections: cut.sections,
+				tightening: cut.tightening,
 			};
 		} catch (error) {
 			if (!(error instanceof RemovalTakeError)) throw error;

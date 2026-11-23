@@ -1,12 +1,15 @@
-import type { RoughCutRequest } from "@splice/bridge/ops";
+import type { RoughCutPlan, SourceRange } from "@splice/bridge/ops";
+import { closeSlivers, measureSpans, planTightenCuts } from "@/agent/tighten";
 import type { ProjectItem } from "@/media/types";
 import {
 	calculateTotalDuration,
 	type RemovalMarker,
+	type TimelineClip,
 	type TSequence,
 } from "@/timeline";
 import { buildClipFromMedia } from "@/timeline/clip-utils";
 import {
+	mapSourceRangeToSequence,
 	mapTakeToSequence,
 	RemovalTakeError,
 	resolveTake,
@@ -18,6 +21,7 @@ import { buildDefaultSequence } from "@/timeline/sequences";
 import { generateUUID } from "@/utils/id";
 import {
 	addMediaTime,
+	type MediaTime,
 	mediaTimeFromSeconds,
 	mediaTimeToSeconds,
 	roundMediaTime,
@@ -81,18 +85,68 @@ export function buildRawSequence({
 	return sequence;
 }
 
+type Window = { start: MediaTime; end: MediaTime };
+
+/** Detected silences can end a few milliseconds past the decoded duration. */
+function clampToItems({
+	ranges,
+	projectItems,
+}: {
+	ranges: SourceRange[];
+	projectItems: ProjectItem[];
+}): SourceRange[] {
+	return ranges.map((range) => {
+		const duration = projectItems.find(
+			({ id }) => id === range.projectItemId,
+		)?.duration;
+		return duration !== undefined && range.sourceOut > duration
+			? { ...range, sourceOut: duration }
+			: range;
+	});
+}
+
+/** Where each source range shows in the source sequence, on any track. */
+function mapSourceRanges({
+	tracks,
+	ranges,
+	projectItems,
+	context,
+}: {
+	tracks: TSequence["tracks"];
+	ranges: SourceRange[];
+	projectItems: ProjectItem[];
+	context: string;
+}): Window[][] {
+	return ranges.map((range, index) => {
+		if (range.sourceOut <= range.sourceIn) return [];
+		try {
+			const [resolved] = resolveTake({ take: range, projectItems });
+			return mapSourceRangeToSequence({ tracks, range: resolved });
+		} catch (error) {
+			if (!(error instanceof RemovalTakeError)) throw error;
+			throw new RemovalTakeError(`${context} ${index + 1}: ${error.message}`);
+		}
+	});
+}
+
+const seconds = (time: number) =>
+	mediaTimeToSeconds({ time: roundMediaTime({ time }) });
+
 export function buildRoughCut({
 	source,
 	name,
-	sections,
+	plan,
 	projectItems,
+	sliverDuration,
 }: {
 	source: TSequence;
 	name: string;
-	sections: RoughCutRequest["sections"];
+	plan: RoughCutPlan;
 	projectItems: ProjectItem[];
+	/** Kept pieces shorter than this join the cut around them. */
+	sliverDuration: MediaTime;
 }) {
-	const mapped = sections.map(
+	const mapped = plan.sections.map(
 		({ name: sectionName, takes, bestTakeIndex }, sectionIndex) => {
 			const context = `Section ${sectionIndex + 1} (${sectionName})`;
 			const bestTake = takes[bestTakeIndex];
@@ -142,18 +196,68 @@ export function buildRoughCut({
 		}
 	}
 
+	const clamped = {
+		pauses: clampToItems({ ranges: plan.pauses, projectItems }),
+		falseStarts: clampToItems({ ranges: plan.falseStarts, projectItems }),
+		fillerWords: clampToItems({ ranges: plan.fillerWords, projectItems }),
+	};
+	const map = ({
+		ranges,
+		context,
+	}: {
+		ranges: SourceRange[];
+		context: string;
+	}) =>
+		mapSourceRanges({ tracks: source.tracks, ranges, projectItems, context });
+	const falseStarts = map({
+		ranges: clamped.falseStarts,
+		context: "False start",
+	});
+	falseStarts.forEach((found, index) => {
+		if (!found.length)
+			throw new RemovalTakeError(
+				`False start ${index + 1} isn't on the source sequence. Check its project item and source times.`,
+			);
+	});
+	const fillerWords = map({
+		ranges: clamped.fillerWords,
+		context: "Filler word",
+	});
+	const pauses = map({ ranges: clamped.pauses, context: "Pause" });
+	const tightening = map({
+		ranges: planTightenCuts({
+			...clamped,
+			paddingSeconds: plan.pausePaddingSeconds,
+		}),
+		context: "Cut",
+	}).flat();
+	const takeCuts: Window[] = mapped.flatMap((section) => section.cuts);
+	const cuts = closeSlivers({
+		cuts: [...takeCuts, ...tightening],
+		edges: [
+			ZERO_MEDIA_TIME,
+			...[source.tracks.main, ...source.tracks.overlay, ...source.tracks.audio]
+				.flatMap((track): TimelineClip[] => track.clips)
+				.flatMap((clip) => [
+					clip.startTime,
+					roundMediaTime({ time: clip.startTime + clip.duration }),
+				]),
+		],
+		minimum: sliverDuration,
+	});
+
 	let tracks = source.tracks;
 	const markers = [...source.markers];
 	const sectionsRemoved = mapped.map(
-		({ sectionName, bestTake, bestWindow, cuts }) => {
+		({ sectionName, bestTake, bestWindow, cuts: sectionCuts }) => {
 			const marker: RemovalMarker = {
 				id: generateUUID(),
-				time: cuts[0].start,
+				time: sectionCuts[0].start,
 				data: {
 					kind: "removal",
 					sectionName,
 					bestTake,
-					badTakes: cuts.map(({ take }) => take),
+					badTakes: sectionCuts.map(({ take }) => take),
 				},
 			};
 			markers.push(marker);
@@ -162,18 +266,48 @@ export function buildRoughCut({
 				markerId: marker.id,
 				clipIds: bestWindow.clipIds,
 			});
-			const removed = cuts.reduce(
+			const removed = sectionCuts.reduce(
 				(sum, { start, end }) => sum + end - start,
 				0,
 			);
-			return {
-				sectionName,
-				removedSeconds: mediaTimeToSeconds({
-					time: roundMediaTime({ time: removed }),
-				}),
-			};
+			return { sectionName, removedSeconds: seconds(removed) };
 		},
 	);
+
+	// Each removed moment counts once: bad takes, then false starts, filler words and pauses.
+	const summarize = ({
+		found,
+		without,
+		within = cuts,
+	}: {
+		found: Window[][];
+		without: Window[];
+		within?: Window[];
+	}) => ({
+		count: found.filter((spans) => measureSpans({ spans, within, without }) > 0)
+			.length,
+		removedSeconds: seconds(
+			measureSpans({ spans: found.flat(), within, without }),
+		),
+	});
+	const removedFalseStarts = summarize({
+		found: falseStarts,
+		without: takeCuts,
+	});
+	const removedFillers = summarize({
+		found: fillerWords,
+		without: [...takeCuts, ...falseStarts.flat()],
+	});
+	const spoken = [...takeCuts, ...falseStarts.flat(), ...fillerWords.flat()];
+	const removedPauses = {
+		...summarize({ found: pauses, without: spoken, within: cuts }),
+		removedSeconds: seconds(
+			measureSpans({ spans: tightening, within: cuts, without: spoken }),
+		),
+	};
+	const total = measureSpans({ spans: cuts, within: cuts });
+	const slivers =
+		total - measureSpans({ spans: [...takeCuts, ...tightening], within: cuts });
 
 	// Sorted while the cut points are distinct, so sections whose markers
 	// collapse to one time keep their timeline order.
@@ -181,7 +315,7 @@ export function buildRoughCut({
 	const cut = rippleDeleteRanges({
 		tracks,
 		markers,
-		ranges: mapped.flatMap((section) => section.cuts),
+		ranges: cuts,
 		generateId: generateUUID,
 	});
 	const sequence: TSequence = {
@@ -194,7 +328,20 @@ export function buildRoughCut({
 		createdAt: new Date(),
 		updatedAt: new Date(),
 	};
-	return { sequence, sections: sectionsRemoved };
+	return {
+		sequence,
+		sections: sectionsRemoved,
+		tightening: {
+			pausePaddingSeconds: plan.pausePaddingSeconds,
+			pauses: removedPauses,
+			falseStarts: removedFalseStarts,
+			fillerWords: removedFillers,
+			sliverSeconds: seconds(slivers),
+			removedSeconds: seconds(
+				measureSpans({ spans: cuts, within: cuts, without: takeCuts }),
+			),
+		},
+	};
 }
 
 export function sequenceDurationSeconds(sequence: TSequence): number {

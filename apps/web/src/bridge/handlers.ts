@@ -58,6 +58,7 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.roughCut(params);
 		},
+		"editor.roughCutSources": (params) => api.roughCutSources(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.listItems": (): ItemSummary[] =>
 			editor.media.getProjectItems().map(summarizeItem),

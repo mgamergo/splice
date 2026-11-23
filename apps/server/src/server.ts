@@ -13,6 +13,7 @@ import {
 	type RpcResponse,
 	type ServerStatus,
 } from "@splice/bridge";
+import { roughCutSourcesSchema } from "@splice/bridge/ops";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	FOOTAGE_FOLDER,
@@ -21,6 +22,8 @@ import {
 	resolveFootagePath,
 	serveFile,
 } from "./footage";
+import { createPauseDetector } from "./pauses";
+import { resolveRoughCutRequest } from "./rough-cut";
 import { createToken, tokensMatch } from "./session";
 import { BridgeError, TabBridge } from "./tab-bridge";
 import { createTranscriptionJobs } from "./transcription";
@@ -134,6 +137,10 @@ export function startServer({
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
 	const transcription = createTranscriptionJobs({ root });
+	const pauses = createPauseDetector({
+		root,
+		readTranscript: transcription.cached,
+	});
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
 	const mediaKey = createToken();
@@ -189,12 +196,18 @@ export function startServer({
 				);
 			}
 		}
-		if (method === "transcribe.start" || method === "transcribe.status") {
+		if (
+			method === "transcribe.start" ||
+			method === "transcribe.status" ||
+			method === "pauses.detect"
+		) {
 			try {
 				const result =
 					method === "transcribe.start"
 						? await transcription.start(params)
-						: await transcription.status(params);
+						: method === "transcribe.status"
+							? await transcription.status(params)
+							: await pauses.detect(params);
 				return Response.json(rpcResult({ id, result }));
 			} catch (error) {
 				return Response.json(
@@ -225,9 +238,34 @@ export function startServer({
 			);
 		}
 		try {
+			let forwarded = params;
+			if (method === "editor.roughCut") {
+				const resolved = await resolveRoughCutRequest({
+					params,
+					listSources: async (sourceParams) =>
+						roughCutSourcesSchema.parse(
+							await bridge.call({
+								method: "editor.roughCutSources",
+								params: sourceParams,
+							}),
+						),
+					detect: pauses.detect,
+					fillerCuts: pauses.fillerCuts,
+				}).catch((error: unknown) => {
+					throw error instanceof BridgeError
+						? error
+						: new BridgeError({
+								code: RPC_ERRORS.INTERNAL,
+								message: `Couldn't prepare the rough cut: ${error instanceof Error ? error.message : String(error)}`,
+							});
+				});
+				if ("result" in resolved)
+					return Response.json(rpcResult({ id, result: resolved.result }));
+				forwarded = resolved.plan;
+			}
 			const result = await bridge.call({
 				method,
-				params,
+				params: forwarded,
 				// Importing probes every file, which can take minutes for long recordings.
 				timeoutMs: method === "editor.importItems" ? 10 * 60_000 : undefined,
 			});
@@ -572,6 +610,7 @@ export function startServer({
 		async stop() {
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
+			pauses.stop();
 			await transcription.stop();
 		},
 	};
