@@ -82,3 +82,11 @@ The settled outcome of the design grilling that ended on 2026-11-22. Terms follo
 The first complete workflow targets a Horizontal YouTube video built from screen recordings with voiceover. Keep important on-screen actions visible when placing graphics and captions. Each project keeps its original format and references its recordings on disk. The video style is chosen within that format.
 
 Preview, later edits and export use the editable sequence (ADR 0003). Keep whisper.cpp for now and assess graphics tools such as HyperFrames against the finished workflow. Revisit tool choices after testing with actual recordings.
+
+### Horizontal graphics and delivery
+
+Inspect recorded frames before placing graphics. For a UI demonstration, zoom to make the relevant control and its resulting state legible. Frame the new detail near the previous shot's point of attention. Leave the shot wide when the target is uncertain. Use glass cards for explanations the recording cannot show.
+
+The agent applies its first graphics pass as undoable sequence edits. Creator-adjusted graphics follow their referenced action through cuts and retain their timing offset. Flag a graphic for review if a take swap removes its action. Preserve explicit deletions across reruns.
+
+The creator finishes the edit in Splice. The workflow has no Premiere handoff. Horizontal delivery includes the reviewed 1080p30 MP4 and corrected SRT captions for YouTube. Thumbnails are independent of video delivery. Music is optional.

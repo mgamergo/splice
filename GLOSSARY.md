@@ -131,3 +131,6 @@ _Avoid_: Final cut, polish pass
 
 **Video style**:
 The presentation chosen within a project's format. Horizontal projects use the YouTube style. Short projects can use Explainer or Raw.
+
+**Gaze continuity**:
+Placing the next important detail near the point the viewer was following in the preceding shot, so the viewer can follow an action across a cut.
