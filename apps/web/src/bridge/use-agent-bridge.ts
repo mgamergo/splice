@@ -41,23 +41,14 @@ export function useAgentBridge(): void {
 			},
 		});
 
-		let lastRevision: number | null = null;
-		const reportRevision = () => {
-			const revision = api.getRevision();
-			if (revision !== lastRevision) {
-				lastRevision = revision;
-				client.notifyRevision(revision);
-			}
-		};
-		const unsubscribers = [
-			editor.timeline.subscribe(reportRevision),
-			editor.sequences.subscribe(reportRevision),
-		];
+		const unsubscribe = editor.command.subscribeRevision((revision) =>
+			client.notifyRevision(revision),
+		);
 		client.start();
-		reportRevision();
+		client.notifyRevision(api.getRevision());
 
 		return () => {
-			for (const unsubscribe of unsubscribers) unsubscribe();
+			unsubscribe();
 			client.stop();
 			store.setStatus("unavailable");
 		};

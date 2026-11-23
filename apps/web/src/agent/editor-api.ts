@@ -71,6 +71,16 @@ export class EditorApi {
 		if (!this.editor.project.getActive() || !this.editor.sequences.getActiveSequenceOrNull()) {
 			return { ok: false, code: "NO_PROJECT", message: "No project is open", revision };
 		}
+		const activeSequenceId = this.editor.sequences.getActiveSequence().id;
+		if (parsed.data.sequenceId !== activeSequenceId) {
+			return {
+				ok: false,
+				code: "REVISION_CONFLICT",
+				message: `The creator switched to another sequence (${activeSequenceId}). Re-read it and plan again.`,
+				revision,
+				digest: this.getDigest(),
+			};
+		}
 		if (parsed.data.expectedRevision !== revision) {
 			return {
 				ok: false,

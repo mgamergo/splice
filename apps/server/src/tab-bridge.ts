@@ -106,7 +106,7 @@ export class TabBridge {
 				new BridgeError({
 					code: RPC_ERRORS.TAB_NOT_CONNECTED,
 					message:
-						"No editor tab is connected. Open the Splice link that `splice` printed when it started.",
+						"No editor tab is connected. Ask the creator to open the editor link in Chrome; `bun run splice link` prints it.",
 				}),
 			);
 		}

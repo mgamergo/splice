@@ -35,7 +35,7 @@ To let an agent edit, register `splice mcp` as a stdio MCP server in your agent 
 { "command": "bun", "args": ["<path to this repo>/apps/server/src/cli.ts", "mcp"] }
 ```
 
-`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get` and `sequence_apply`. The editor header shows whether an agent is connected, and **Stop agent** refuses its edits until you allow them again.
+`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get` and `sequence_apply`. `bun run splice link` prints the editor link of a running `splice`, for example one that `splice mcp` started. The editor header shows whether an agent is connected, and **Stop agent** refuses its edits until you allow them again.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

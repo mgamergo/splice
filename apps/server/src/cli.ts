@@ -2,10 +2,12 @@
 import { resolveConfig } from "./config";
 import { runMcp } from "./mcp";
 import { serve } from "./serve";
+import { printLink } from "./link";
 
 const USAGE = `Usage:
   splice [serve] [--dev]   Start the local server and the editor
   splice mcp               Run the MCP server on stdio (started by your agent)
+  splice link              Print the editor link of the running splice
 
 Environment:
   SPLICE_ROOT   Data folder (default D:\\Splice on Windows, ~/Splice elsewhere)
@@ -17,6 +19,9 @@ async function main(argv: string[]) {
 	switch (command) {
 		case "serve":
 			await serve({ config, dev: rest.includes("--dev") });
+			return;
+		case "link":
+			await printLink({ config });
 			return;
 		case "mcp":
 			await runMcp({ config });

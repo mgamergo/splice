@@ -30,6 +30,7 @@ export function createTabHandlers({
 				project: project
 					? { id: project.metadata.id, name: project.metadata.name }
 					: null,
+				sequenceId: editor.sequences.getActiveSequenceOrNull()?.id ?? null,
 				digest: api.getDigest(),
 			};
 		},

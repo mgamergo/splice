@@ -41,6 +41,8 @@ export const STATE_CHANGED = "state.changed";
 export interface EditorState {
 	revision: number;
 	project: { id: string; name: string } | null;
+	/** The active sequence; `editor.apply` must name it. */
+	sequenceId: string | null;
 	/** Compact text form of the active sequence, see `buildSequenceDigest`. */
 	digest: string;
 }

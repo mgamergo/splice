@@ -17,6 +17,7 @@ export class CommandManager {
 	private reactors: Array<() => void> = [];
 	/** Increments on every execute, undo and redo, so readers can detect change. */
 	private revision = 0;
+	private revisionListeners = new Set<(revision: number) => void>();
 
 	constructor(private editor: EditorCore) {}
 
@@ -26,7 +27,6 @@ export class CommandManager {
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
-		this.revision++;
 		this.applyRippleIfEnabled({ beforeTracks });
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
@@ -36,6 +36,7 @@ export class CommandManager {
 			selectionOverride,
 		});
 		this.redoStack = [];
+		this.bumpRevision();
 		return command;
 	}
 
@@ -45,6 +46,8 @@ export class CommandManager {
 			previousSelection: this.getSelectionSnapshot(),
 		});
 		this.redoStack = [];
+		// The change was already applied (e.g. a committed drag preview), but it's still an edit.
+		this.bumpRevision();
 	}
 
 	registerReactor(reactor: () => void): void {
@@ -55,7 +58,6 @@ export class CommandManager {
 		if (this.history.length === 0) return;
 		const entry = this.history.pop();
 		entry?.command.undo();
-		if (entry) this.revision++;
 		if (entry) {
 			// Only restore selection for commands that explicitly changed it.
 			// Commands without selection intent leave selection untouched,
@@ -68,6 +70,7 @@ export class CommandManager {
 				});
 			}
 			this.redoStack.push(entry);
+			this.bumpRevision();
 		}
 	}
 
@@ -83,7 +86,6 @@ export class CommandManager {
 			: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = entry.command.redo();
-		this.revision++;
 		this.applyRippleIfEnabled({ beforeTracks });
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
@@ -93,6 +95,7 @@ export class CommandManager {
 			previousSelection,
 			selectionOverride,
 		});
+		this.bumpRevision();
 	}
 
 	private shouldRipple({ command }: { command: Command }): boolean {
@@ -101,6 +104,19 @@ export class CommandManager {
 
 	getRevision(): number {
 		return this.revision;
+	}
+
+	/** Called after every change to the revision, once the change has fully applied. */
+	subscribeRevision(listener: (revision: number) => void): () => void {
+		this.revisionListeners.add(listener);
+		return () => this.revisionListeners.delete(listener);
+	}
+
+	private bumpRevision(): void {
+		this.revision++;
+		for (const listener of this.revisionListeners) {
+			listener(this.revision);
+		}
 	}
 
 	canUndo(): boolean {

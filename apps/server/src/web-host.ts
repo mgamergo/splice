@@ -12,6 +12,20 @@ export interface WebHost {
 
 const READY_TIMEOUT_MS = 120_000;
 
+function isPortFree({ port }: { port: number }): boolean {
+	try {
+		const listener = Bun.listen({
+			hostname: "127.0.0.1",
+			port,
+			socket: { data() {} },
+		});
+		listener.stop(true);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Runs the editor's Next.js server on a private loopback port. `splice`
  * proxies it, so the tab, the bridge and project media share one origin.
@@ -28,6 +42,12 @@ export function startWebHost({
 	if (!dev && !existsSync(join(webDir, ".next", "BUILD_ID"))) {
 		throw new Error(
 			"The editor isn't built yet. Run `bun run build:web` once, or start with `splice serve --dev`.",
+		);
+	}
+	// Otherwise another local app on this port would be served under Splice's origin.
+	if (!isPortFree({ port })) {
+		throw new Error(
+			`Port ${port} is in use, and Splice needs it for the editor. Stop whatever is using it, or set SPLICE_PORT to another port.`,
 		);
 	}
 	const origin = `http://127.0.0.1:${port}`;
@@ -51,6 +71,12 @@ export function startWebHost({
 
 	let ready = false;
 	let stopped = false;
+	void child.exited.then((code) => {
+		ready = false;
+		if (!stopped) {
+			console.error(`The editor server exited (code ${code}). Restart splice.`);
+		}
+	});
 	const readyPromise = (async () => {
 		const deadline = Date.now() + READY_TIMEOUT_MS;
 		while (Date.now() < deadline) {
@@ -61,8 +87,10 @@ export function startWebHost({
 			}
 			try {
 				await fetch(`${origin}/`, { redirect: "manual" });
-				ready = true;
-				return;
+				if (child.exitCode === null) {
+					ready = true;
+					return;
+				}
 			} catch {
 				await Bun.sleep(250);
 			}

@@ -8,6 +8,7 @@ let editor: EditorCore;
 let api: EditorApi;
 
 const mainClips = () => editor.sequences.getActiveSequence().tracks.main.clips;
+const sequenceId = () => editor.sequences.getActiveSequence().id;
 
 beforeEach(() => {
 	editor = setUpEditor({
@@ -24,6 +25,7 @@ beforeEach(() => {
 describe("EditorApi.apply", () => {
 	test("applies all ops as one undo step and bumps the revision once", () => {
 		const result = api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: 0,
 			label: "Rough cut",
 			ops: [
@@ -53,6 +55,7 @@ describe("EditorApi.apply", () => {
 		editor.command.execute({ command: new ToggleMarkerCommand(s(1)) });
 
 		const result = api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: 0,
 			label: "Remove pause",
 			ops: [{ op: "ripple_delete", ranges: [{ start: { seconds: 2 }, end: { seconds: 3 } }] }],
@@ -65,6 +68,7 @@ describe("EditorApi.apply", () => {
 
 	test("rolls back earlier ops when a later op is invalid", () => {
 		const result = api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: 0,
 			label: "Bad batch",
 			ops: [
@@ -79,7 +83,7 @@ describe("EditorApi.apply", () => {
 	});
 
 	test("rejects malformed requests before touching the editor", () => {
-		const result = api.apply({ expectedRevision: 0, label: "x", ops: [{ op: "explode" }] });
+		const result = api.apply({ sequenceId: sequenceId(), expectedRevision: 0, label: "x", ops: [{ op: "explode" }] });
 		expect(result).toMatchObject({ ok: false, code: "INVALID_REQUEST" });
 		expect(api.getRevision()).toBe(0);
 	});
@@ -87,6 +91,7 @@ describe("EditorApi.apply", () => {
 	test("razor cuts every clip under the playhead time and ignores the ripple toggle", () => {
 		editor.command.isRippleEnabled = true;
 		const result = api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: 0,
 			label: "Cut",
 			ops: [{ op: "razor", at: { seconds: 10 } }],
@@ -103,6 +108,7 @@ describe("EditorApi.apply", () => {
 describe("EditorApi undo and redo", () => {
 	test("redo rebuilds ops that depend on clips created earlier in the batch", () => {
 		api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: 0,
 			label: "Two cuts",
 			ops: [
@@ -120,9 +126,9 @@ describe("EditorApi undo and redo", () => {
 	});
 
 	test("redo keeps clip ids, so later batches that use them redo too", () => {
-		api.apply({ expectedRevision: 0, label: "Cut", ops: [{ op: "razor", at: { seconds: 10 } }] });
+		api.apply({ sequenceId: sequenceId(), expectedRevision: 0, label: "Cut", ops: [{ op: "razor", at: { seconds: 10 } }] });
 		const rightId = mainClips()[1].id;
-		api.apply({ expectedRevision: 1, label: "Drop right", ops: [{ op: "delete", clipIds: [rightId] }] });
+		api.apply({ sequenceId: sequenceId(), expectedRevision: 1, label: "Drop right", ops: [{ op: "delete", clipIds: [rightId] }] });
 		const afterBoth = mainClips().map((clip) => clip.id);
 
 		editor.command.undo();
@@ -136,6 +142,7 @@ describe("EditorApi undo and redo", () => {
 	test("redo ignores the creator's ripple toggle, like apply does", () => {
 		editor.command.isRippleEnabled = true;
 		api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: 0,
 			label: "Remove pause",
 			ops: [{ op: "ripple_delete", ranges: [{ start: { seconds: 2 }, end: { seconds: 5 } }] }],
@@ -164,6 +171,7 @@ describe("EditorApi undo and redo", () => {
 		});
 
 		api.apply({
+			sequenceId: sequenceId(),
 			expectedRevision: api.getRevision(),
 			label: "Remove first take",
 			ops: [{ op: "ripple_delete", ranges: [{ start: { seconds: 0 }, end: { seconds: 5 } }] }],
@@ -175,6 +183,38 @@ describe("EditorApi undo and redo", () => {
 		expect(editor.selection.getSnapshot().selectedClips).toHaveLength(2);
 		editor.command.redo();
 		expect(editor.selection.getSnapshot().selectedClips).toEqual([{ trackId, clipId: "b" }]);
+	});
+});
+
+describe("EditorApi preconditions", () => {
+	const markerOp = { op: "add_marker", at: { seconds: 2 } } as const;
+
+	test("refuses ops planned against a sequence that is no longer active", () => {
+		const result = api.apply({ sequenceId: "another-sequence", expectedRevision: 0, label: "Mark", ops: [markerOp] });
+		expect(result).toMatchObject({ ok: false, code: "REVISION_CONFLICT" });
+		expect(editor.sequences.getActiveSequence().markers).toHaveLength(0);
+	});
+
+	test("an edit committed without execute (a finished drag) still changes the revision", () => {
+		const command = new ToggleMarkerCommand(s(1));
+		command.execute();
+		editor.command.push({ command });
+
+		const result = api.apply({ sequenceId: sequenceId(), expectedRevision: 0, label: "Mark", ops: [markerOp] });
+		expect(result).toMatchObject({ ok: false, code: "REVISION_CONFLICT", revision: 1 });
+	});
+
+	test("revision listeners hear the new revision once the change is complete", () => {
+		const heard: Array<[number, number]> = [];
+		editor.command.subscribeRevision((revision) =>
+			heard.push([revision, editor.sequences.getActiveSequence().markers.length]),
+		);
+		api.apply({ sequenceId: sequenceId(), expectedRevision: 0, label: "Mark", ops: [markerOp] });
+		editor.command.undo();
+		expect(heard).toEqual([
+			[1, 1],
+			[2, 0],
+		]);
 	});
 });
 

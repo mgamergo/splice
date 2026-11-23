@@ -34,6 +34,7 @@ describe("tab handlers", () => {
 	test("apply runs through the editing API", () => {
 		const { editor, handlers } = setUp();
 		const result = handlers["editor.apply"]({
+			sequenceId: editor.sequences.getActiveSequence().id,
 			expectedRevision: 0,
 			label: "Mark",
 			ops: [{ op: "add_marker", at: { seconds: 2 } }],
@@ -46,6 +47,7 @@ describe("tab handlers", () => {
 		const { editor, handlers } = setUp({ blocked: true });
 		expect(() =>
 			handlers["editor.apply"]({
+				sequenceId: editor.sequences.getActiveSequence().id,
 				expectedRevision: 0,
 				label: "Mark",
 				ops: [{ op: "add_marker", at: { seconds: 2 } }],

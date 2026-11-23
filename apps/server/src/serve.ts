@@ -1,8 +1,8 @@
-import { TOKEN_FRAGMENT_KEY } from "@splice/bridge";
 import { ensureFolders, type SpliceConfig } from "./config";
 import { loadOrCreateToken, writeSession } from "./session";
 import { startServer } from "./server";
 import { startWebHost } from "./web-host";
+import { editorLink } from "./link";
 
 export async function serve({
 	config,
@@ -51,7 +51,5 @@ export async function serve({
 		process.exit(1);
 	}
 	console.log(`\nSplice is running. Data folder: ${config.root}`);
-	console.log(
-		`Open the editor: ${running.origin}/projects#${TOKEN_FRAGMENT_KEY}=${token}\n`,
-	);
+	console.log(`Open the editor: ${editorLink({ port: config.port, token })}\n`);
 }

@@ -1,9 +1,8 @@
-import { editOpSchema } from "@splice/bridge/ops";
+import { applyRequestSchema } from "@splice/bridge/ops";
 import { BRIDGE_PATHS, SERVER_NAME } from "@splice/bridge";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
 import type { SpliceConfig } from "./config";
 import { createRpcClient, RpcCallError, type RpcCall } from "./rpc-client";
 import { readSession } from "./session";
@@ -62,7 +61,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Read the active sequence",
 			description:
-				"Returns the open project's active sequence as a compact digest: tracks (V1 is the main track), clips with ids, in/out points and positions, and markers. The digest names the current revision; pass it to sequence_apply as expectedRevision.",
+				"Returns the open project's active sequence as a compact digest: tracks (V1 is the main track), clips with ids, in/out points and positions, and markers. The result names the sequence id and revision; pass them to sequence_apply as sequenceId and expectedRevision.",
 			inputSchema: {},
 		},
 		() =>
@@ -77,22 +76,8 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Edit the active sequence",
 			description:
-				'Applies a batch of edit ops to the active sequence as one undo step. It is refused with REVISION_CONFLICT if the creator changed the sequence since expectedRevision; re-read with sequence_get and plan again. Times are {seconds}, {frame} or {timecode: "HH:MM:SS:FF"} on the sequence timeline. If any op fails, nothing is applied.',
-			inputSchema: {
-				expectedRevision: z
-					.number()
-					.int()
-					.nonnegative()
-					.describe("The revision from the last sequence_get"),
-				label: z
-					.string()
-					.min(1)
-					.max(120)
-					.describe(
-						'Short undo label shown to the creator, e.g. "Remove bad takes"',
-					),
-				ops: z.array(editOpSchema).min(1),
-			},
+				'Applies a batch of edit ops to the active sequence as one undo step. It is refused with REVISION_CONFLICT if the creator changed the sequence since expectedRevision or switched to another sequence; re-read with sequence_get and plan again. Times are {seconds}, {frame} or {timecode: "HH:MM:SS:FF"} on the sequence timeline. If any op fails, nothing is applied.',
+			inputSchema: applyRequestSchema.shape,
 		},
 		(args) =>
 			guard(async () => {
@@ -109,7 +94,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 	return server;
 }
 
-async function isSpliceRunning({
+export async function isSpliceRunning({
 	origin,
 }: {
 	origin: string;
@@ -183,7 +168,17 @@ export async function runMcp({
 			rpcPromise = null;
 			throw error;
 		});
-		return (await rpcPromise)(call);
+		const client = await rpcPromise;
+		try {
+			return await client(call);
+		} catch (error) {
+			// splice stopped or restarted with a new token: reconnect (and autostart)
+			// on the next call. This call isn't retried, since an edit may have landed.
+			if (!(error instanceof RpcCallError)) {
+				rpcPromise = null;
+			}
+			throw error;
+		}
 	};
 	const server = createMcpServer({ rpc });
 	await server.connect(new StdioServerTransport());

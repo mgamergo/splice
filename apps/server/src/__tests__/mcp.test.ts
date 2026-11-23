@@ -51,6 +51,7 @@ describe("splice mcp tools", () => {
 			};
 		});
 		const args = {
+			sequenceId: "seq-1",
 			expectedRevision: 1,
 			label: "Cut",
 			ops: [{ op: "add_marker", at: { seconds: 1 } }],
@@ -73,6 +74,7 @@ describe("splice mcp tools", () => {
 		const result = await client.callTool({
 			name: "sequence_apply",
 			arguments: {
+				sequenceId: "seq-1",
 				expectedRevision: 1,
 				label: "Cut",
 				ops: [{ op: "explode" }],
@@ -92,6 +94,7 @@ describe("splice mcp tools", () => {
 		const result = await client.callTool({
 			name: "sequence_apply",
 			arguments: {
+				sequenceId: "seq-1",
 				expectedRevision: 1,
 				label: "Cut",
 				ops: [{ op: "delete", clipIds: ["a"] }],
