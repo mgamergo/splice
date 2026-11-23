@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
 		removeConsole: process.env.NODE_ENV === "production",
 	},
 	reactStrictMode: true,
+	transpilePackages: ["@splice/bridge"],
 	productionBrowserSourceMaps: true,
 	images: {
 		// Sticker providers.

@@ -17,6 +17,7 @@ import { usePasteMedia } from "@/media/use-paste-media";
 import { MobileGate } from "@/components/editor/mobile-gate";
 import { useMemo, useState } from "react";
 import { useEditor } from "@/editor/use-editor";
+import { useAgentBridge } from "@/bridge/use-agent-bridge";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,7 @@ function DegradedRendererBanner() {
 
 function EditorLayout() {
 	usePasteMedia();
+	useAgentBridge();
 	const { panels, setPanel } = usePanelStore();
 	const activeSequence = useEditor((editor) =>
 		editor.sequences.getActiveSequenceOrNull(),

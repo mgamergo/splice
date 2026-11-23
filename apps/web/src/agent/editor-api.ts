@@ -1,5 +1,5 @@
 import { buildSequenceDigest } from "@/agent/digest";
-import { type ApplyRequest, applyRequestSchema, type EditOp } from "@/agent/ops";
+import { type ApplyRequest, applyRequestSchema, type EditOp } from "@splice/bridge/ops";
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";

@@ -8,7 +8,11 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 import preferObjectParams from "./eslint/rules/prefer-object-params.mjs";
 
-const webFiles = ["apps/web/src/**/*.{ts,tsx}"];
+const webFiles = [
+	"apps/web/src/**/*.{ts,tsx}",
+	"apps/server/src/**/*.ts",
+	"packages/*/src/**/*.ts",
+];
 
 const opencutEslintPlugin = {
 	meta: {
