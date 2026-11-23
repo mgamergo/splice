@@ -156,3 +156,13 @@ Group word timings into readable SRT cues at natural phrase boundaries. Follow t
 Mute replacement audio by default during a picture-only repair. Let the creator bring in a specific sound from the replacement take. Duck music across spoken passages, including short pauses, and let it rise gently during longer quiet passages. Allow a passage override to keep application sounds audible.
 
 Measure the complete mix, including narration, application sounds and optional music. Target −14 LUFS with a peak ceiling and use the adjusted mix for both final preview and export.
+
+### Export history, cleanup and reopening
+
+Each successful horizontal export adds an identifiable MP4/SRT pair under the Exports folder on D:. Give both files the same stem. Show the project, export date and approved revision in Splice, with an Open folder action. Keep earlier exports available.
+
+Cleanup may reclaim temporary renders and rebuildable analysis caches. Preserve original recordings, approved checkpoints, corrected captions, exports and the exact graphics used in approved edits so the creator can reproduce them.
+
+Verify a relinked recording against the original before reusing its edits and analysis. Treat changed content as an explicit replacement and flag affected passages for review.
+
+On reopening a project, identify the current edit, the last approved checkpoint, what changed since approval, and which revision the latest export used. Offer playback, comparison with the approved cut and access to the exported files.
