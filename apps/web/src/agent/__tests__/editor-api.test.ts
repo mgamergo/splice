@@ -204,6 +204,25 @@ describe("EditorApi preconditions", () => {
 		expect(result).toMatchObject({ ok: false, code: "REVISION_CONFLICT", revision: 1 });
 	});
 
+	test("a revision read before the bridge seeds the clock never matches after it", () => {
+		const before = api.getRevision();
+		editor.command.advanceRevisionTo({ revision: 1_000 });
+		editor.command.advanceRevisionTo({ revision: 10 });
+		expect(api.getRevision()).toBe(1_000);
+
+		const result = api.apply({ sequenceId: sequenceId(), expectedRevision: before, label: "Mark", ops: [markerOp] });
+		expect(result).toMatchObject({ ok: false, code: "REVISION_CONFLICT" });
+	});
+
+	test("a committed drag reports its new revision with the committed tracks", () => {
+		const heard: number[] = [];
+		editor.command.subscribeRevision(() => heard.push(mainClips()[0].startTime));
+		const trackId = editor.sequences.getActiveSequence().tracks.main.id;
+		editor.timeline.previewClips({ updates: [{ trackId, clipId: "rec", updates: { startTime: s(4) } }] });
+		editor.timeline.commitPreview();
+		expect(heard).toEqual([s(4)]);
+	});
+
 	test("revision listeners hear the new revision once the change is complete", () => {
 		const heard: Array<[number, number]> = [];
 		editor.command.subscribeRevision((revision) =>

@@ -4,14 +4,21 @@ import type { BridgeStatus } from "./bridge-client";
 /** How long the indicator says "editing…" after the agent's last edit. */
 const EDITING_WINDOW_MS = 2_000;
 /** Stop survives reloads and new tabs until the creator allows the agent again. */
-const BLOCKED_STORAGE_KEY = "splice-agent-blocked";
+export const BLOCKED_STORAGE_KEY = "splice-agent-blocked";
 
-function readBlocked(): boolean {
+/** The Stop flag shared by every tab, or null when storage is unavailable. */
+function readStoredBlocked(): boolean | null {
 	try {
-		return globalThis.localStorage?.getItem(BLOCKED_STORAGE_KEY) === "true";
+		const storage = globalThis.localStorage;
+		return storage ? storage.getItem(BLOCKED_STORAGE_KEY) === "true" : null;
 	} catch {
-		return false;
+		return null;
 	}
+}
+
+/** Whether agent writes are refused right now; another tab may have pressed Stop. */
+export function isAgentBlocked(): boolean {
+	return readStoredBlocked() ?? useAgentBridgeStore.getState().blocked;
 }
 
 function writeBlocked(blocked: boolean): void {
@@ -35,6 +42,8 @@ interface AgentBridgeState {
 	agentEditing: boolean;
 	setStatus: (status: AgentBridgeState["status"]) => void;
 	setBlocked: (blocked: boolean) => void;
+	/** Picks up a Stop or Allow pressed in another tab. */
+	syncBlocked: () => void;
 	markEdit: () => void;
 }
 
@@ -42,12 +51,16 @@ let editingTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useAgentBridgeStore = create<AgentBridgeState>()((set) => ({
 	status: "unavailable",
-	blocked: readBlocked(),
+	blocked: readStoredBlocked() ?? false,
 	agentEditing: false,
 	setStatus: (status) => set({ status }),
 	setBlocked: (blocked) => {
 		writeBlocked(blocked);
 		set({ blocked });
+	},
+	syncBlocked: () => {
+		const stored = readStoredBlocked();
+		if (stored !== null) set({ blocked: stored });
 	},
 	markEdit: () => {
 		if (editingTimer) clearTimeout(editingTimer);

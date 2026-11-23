@@ -106,6 +106,17 @@ export class CommandManager {
 		return this.revision;
 	}
 
+	/**
+	 * Moves the revision forward to at least `revision`. The bridge seeds it from
+	 * the clock when a tab connects, so a revision read before a reload can never
+	 * match one after it, even though the reloaded tab starts a fresh history.
+	 */
+	advanceRevisionTo({ revision }: { revision: number }): void {
+		if (revision > this.revision) {
+			this.revision = revision;
+		}
+	}
+
 	/** Called after every change to the revision, once the change has fully applied. */
 	subscribeRevision(listener: (revision: number) => void): () => void {
 		this.revisionListeners.add(listener);

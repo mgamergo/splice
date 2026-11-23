@@ -5,7 +5,11 @@ import { useEffect } from "react";
 import { EditorApi } from "@/agent/editor-api";
 import { EditorCore } from "@/core";
 import { AgentBridgeClient } from "./bridge-client";
-import { useAgentBridgeStore } from "./bridge-store";
+import {
+	BLOCKED_STORAGE_KEY,
+	isAgentBlocked,
+	useAgentBridgeStore,
+} from "./bridge-store";
 import { createTabHandlers } from "./handlers";
 import { captureBridgeToken, readBridgeToken } from "./token";
 
@@ -28,19 +32,23 @@ export function useAgentBridge(): void {
 			handlers: createTabHandlers({
 				editor,
 				api,
-				isBlocked: () => useAgentBridgeStore.getState().blocked,
+				isBlocked: isAgentBlocked,
 			}),
 			onStatus: store.setStatus,
 			onRequest: (method) => {
-				if (
-					method === "editor.apply" &&
-					!useAgentBridgeStore.getState().blocked
-				) {
+				if (method === "editor.apply" && !isAgentBlocked()) {
 					store.markEdit();
 				}
 			},
 		});
 
+		store.syncBlocked();
+		const onStorage = (event: StorageEvent) => {
+			if (event.key === BLOCKED_STORAGE_KEY || event.key === null)
+				store.syncBlocked();
+		};
+		window.addEventListener("storage", onStorage);
+		editor.command.advanceRevisionTo({ revision: Date.now() });
 		const unsubscribe = editor.command.subscribeRevision((revision) =>
 			client.notifyRevision(revision),
 		);
@@ -49,6 +57,7 @@ export function useAgentBridge(): void {
 
 		return () => {
 			unsubscribe();
+			window.removeEventListener("storage", onStorage);
 			client.stop();
 			store.setStatus("unavailable");
 		};
