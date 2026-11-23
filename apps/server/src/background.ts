@@ -17,24 +17,26 @@ export function startDetached({
 }: {
 	command: string;
 	args: string[];
-}): void {
-	if (process.platform === "win32") {
-		const argumentList = args
-			.map((arg) => powershellQuote(`"${arg}"`))
-			.join(",");
-		const child = spawn(
-			"powershell.exe",
-			[
-				"-NoProfile",
-				"-NonInteractive",
-				"-Command",
-				`Start-Process -WindowStyle Hidden -FilePath ${powershellQuote(command)} -ArgumentList ${argumentList}`,
-			],
-			{ stdio: "ignore", windowsHide: true, detached: true },
-		);
-		child.unref();
-		return;
-	}
-	const child = spawn(command, args, { stdio: "ignore", detached: true });
+}): Promise<void> {
+	const child =
+		process.platform === "win32"
+			? spawn(
+					"powershell.exe",
+					[
+						"-NoProfile",
+						"-NonInteractive",
+						"-Command",
+						`Start-Process -WindowStyle Hidden -FilePath ${powershellQuote(command)} -ArgumentList ${args
+							.map((arg) => powershellQuote(`"${arg}"`))
+							.join(",")}`,
+					],
+					{ stdio: "ignore", windowsHide: true, detached: true },
+				)
+			: spawn(command, args, { stdio: "ignore", detached: true });
 	child.unref();
+	// A failed spawn emits "error"; unhandled, it would crash the caller.
+	return new Promise((resolve, reject) => {
+		child.once("spawn", () => resolve());
+		child.once("error", reject);
+	});
 }

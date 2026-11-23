@@ -182,7 +182,7 @@ export async function connectToSplice({
 	const origin = `http://127.0.0.1:${config.port}`;
 	if (!(await isSpliceRunning({ origin }))) {
 		// The same Bun that runs this, so nothing depends on `bun` being on PATH.
-		startDetached({
+		await startDetached({
 			command: process.execPath,
 			args: [`${import.meta.dir}/cli.ts`, "serve"],
 		});
