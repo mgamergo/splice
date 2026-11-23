@@ -99,7 +99,11 @@ describe("splice mcp tools", () => {
 		const client = await connect(captionRpc({ format: "short", calls }));
 		const result = await client.callTool({
 			name: "rough_cut",
-			arguments: { ...roughCutArgs, captionStyle: { uppercase: true } },
+			arguments: {
+				...roughCutArgs,
+				loudness: false,
+				captionStyle: { uppercase: true },
+			},
 		});
 		expect(result.isError).toBeFalsy();
 		const output = JSON.parse(textOf(result));
@@ -131,7 +135,10 @@ describe("splice mcp tools", () => {
 	test("rough_cut leaves horizontal projects uncaptioned", async () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(captionRpc({ format: "horizontal", calls }));
-		await client.callTool({ name: "rough_cut", arguments: roughCutArgs });
+		await client.callTool({
+			name: "rough_cut",
+			arguments: { ...roughCutArgs, loudness: false },
+		});
 		expect(calls.map(([method]) => method)).toEqual([
 			"editor.getState",
 			"editor.roughCut",
@@ -313,6 +320,8 @@ describe("loudness tools", () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {
 			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
 			if (method === "loudness.measure") {
 				const path = field({ params, key: "path" });
 				return { path, ...measurements[String(path)], cached: false };
@@ -327,6 +336,7 @@ describe("loudness tools", () => {
 		});
 		expect(result.isError).toBeFalsy();
 		expect(calls).toEqual([
+			["editor.getState", undefined],
 			["editor.roughCut", { expectedRevision: 3, sections, plan: true }],
 			[
 				"loudness.measure",
@@ -358,10 +368,74 @@ describe("loudness tools", () => {
 		});
 	});
 
+	test("rough_cut in a Short project captions and normalizes in one cut", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState") return { project: { format: "short" } };
+			if (method === "editor.listItems")
+				return [
+					{ id: "rec-1", type: "video", path: "quiet.wav", missing: false },
+					{ id: "rec-2", type: "video", path: "loud.wav", missing: false },
+				];
+			if (method === "transcript.words")
+				return {
+					transcripts: [
+						{ path: "quiet.wav", words: [{ start: 2, end: 2.4, text: "Hi" }] },
+					],
+					missing: ["loud.wav"],
+				};
+			if (method === "loudness.measure") {
+				const path = field({ params, key: "path" });
+				return { path, ...measurements[String(path)], cached: false };
+			}
+			if (field({ params, key: "plan" }))
+				return { ok: true, revision: 3, audioSources };
+			return {
+				ok: true,
+				revision: 4,
+				captionCount: 1,
+				uncaptionedItemIds: ["rec-2"],
+			};
+		});
+		const result = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 3, sections },
+		});
+		expect(result.isError).toBeFalsy();
+		const captions = {
+			sources: [
+				{ projectItemId: "rec-1", words: [{ start: 2, end: 2.4, text: "Hi" }] },
+			],
+		};
+		expect(calls.at(-1)).toEqual([
+			"editor.roughCut",
+			{
+				expectedRevision: 3,
+				sections,
+				captions,
+				sourceGains: [
+					{ projectItemId: "rec-1", gainDb: 14 },
+					{ projectItemId: "rec-2", gainDb: 1.45 },
+				],
+			},
+		]);
+		expect(
+			calls.find(([, params]) => field({ params, key: "plan" }))?.[1],
+		).toMatchObject({ captions });
+		expect(JSON.parse(textOf(result))).toMatchObject({
+			captionCount: 1,
+			uncaptionedRecordings: ["loud.wav"],
+			loudness: { targetLufs: -14 },
+		});
+	});
+
 	test("rough_cut with loudness false is one call, and a refused plan measures nothing", async () => {
 		const calls: string[] = [];
 		const client = await connect(async ({ method }) => {
 			calls.push(method);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
 			return { ok: false, code: "REVISION_CONFLICT", message: "changed" };
 		});
 		const plain = await client.callTool({
@@ -378,7 +452,12 @@ describe("loudness tools", () => {
 		});
 		expect(plain.isError).toBe(true);
 		expect(normalized.isError).toBe(true);
-		expect(calls).toEqual(["editor.roughCut", "editor.roughCut"]);
+		expect(calls).toEqual([
+			"editor.getState",
+			"editor.roughCut",
+			"editor.getState",
+			"editor.roughCut",
+		]);
 	});
 
 	test("normalize_loudness sets one gain per recording on the active sequence in one apply", async () => {
