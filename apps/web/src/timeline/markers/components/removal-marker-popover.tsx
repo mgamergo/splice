@@ -32,7 +32,10 @@ export function RemovalMarkerPopover({ marker }: { marker: RemovalMarker }) {
 				{badTakes.map((take, index) => {
 					const label = take.label || `Take ${index + 1}`;
 					return (
-						<li key={index} className="flex flex-col gap-1.5 border-t pt-2">
+						<li
+							key={`${take.projectItemId}:${take.sourceIn}:${take.sourceOut}`}
+							className="flex flex-col gap-1.5 border-t pt-2"
+						>
 							<div className="break-words text-xs font-medium">{label}</div>
 							{take.transcriptSnippet && (
 								<p className="line-clamp-3 break-words text-xs text-muted-foreground">

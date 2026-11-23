@@ -14,6 +14,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { Marker } from "@/timeline";
+import type { RemovalMarker } from "@/timeline/types";
 import {
 	Popover,
 	PopoverAnchor,
@@ -86,6 +87,14 @@ export function TimelineMarkersRow({
 	const ordinaryTimes = new Set(
 		markers.filter((marker) => !marker.data).map(({ time }) => time),
 	);
+	// Removal markers at the same time share one hit target that lists them all.
+	const removalMarkersByTime = new Map<MediaTime, RemovalMarker[]>();
+	for (const marker of markers) {
+		if (!marker.data) continue;
+		const group = removalMarkersByTime.get(marker.time) ?? [];
+		group.push(marker);
+		removalMarkersByTime.set(marker.time, group);
+	}
 
 	return (
 		<div
@@ -107,28 +116,37 @@ export function TimelineMarkersRow({
 					handleRulerTrackingMouseDown(event);
 				}}
 			/>
-			{markers.map((marker) => (
-				<TimelineMarker
-					key={marker.id ?? `marker-${marker.time}`}
-					marker={marker}
-					overlapsOrdinaryMarker={ordinaryTimes.has(marker.time)}
-					zoomLevel={zoomLevel}
-					dragState={dragState}
-					onMarkerMouseDown={onMarkerMouseDown}
-				/>
-			))}
+			{markers.map((marker) => {
+				const removalGroup = marker.data
+					? (removalMarkersByTime.get(marker.time) ?? [])
+					: [];
+				if (marker.data && removalGroup.at(-1) !== marker) return null;
+				return (
+					<TimelineMarker
+						key={marker.id ?? `marker-${marker.time}`}
+						marker={marker}
+						removalGroup={removalGroup}
+						overlapsOrdinaryMarker={ordinaryTimes.has(marker.time)}
+						zoomLevel={zoomLevel}
+						dragState={dragState}
+						onMarkerMouseDown={onMarkerMouseDown}
+					/>
+				);
+			})}
 		</div>
 	);
 }
 
 function TimelineMarker({
 	marker,
+	removalGroup,
 	overlapsOrdinaryMarker,
 	zoomLevel,
 	dragState,
 	onMarkerMouseDown,
 }: {
 	marker: Marker;
+	removalGroup: RemovalMarker[];
 	overlapsOrdinaryMarker: boolean;
 	zoomLevel: number;
 	dragState: MarkerDragState;
@@ -199,7 +217,7 @@ function TimelineMarker({
 						left: `${markerLeft}px`,
 						width: `${markerWidth}px`,
 					}}
-					aria-label={`${marker.data ? `Removal marker: ${marker.data.sectionName}` : "Marker"} at ${formatNumberForDisplay({ value: mediaTimeToSeconds({ time }), fractionDigits: 1 })}s`}
+					aria-label={`${marker.data ? (removalGroup.length > 1 ? `${removalGroup.length} removal markers` : `Removal marker: ${marker.data.sectionName}`) : "Marker"} at ${formatNumberForDisplay({ value: mediaTimeToSeconds({ time }), fractionDigits: 1 })}s`}
 					aria-haspopup={marker.data ? "dialog" : undefined}
 					aria-expanded={marker.data ? isPopoverOpen : undefined}
 					type="button"
@@ -296,7 +314,14 @@ function TimelineMarker({
 				}}
 			>
 				{marker.data ? (
-					<RemovalMarkerPopover marker={marker} />
+					removalGroup.map((removalMarker, index) => (
+						<div
+							key={removalMarker.id}
+							className={`flex flex-col gap-3 ${index > 0 ? "border-t pt-3" : ""}`}
+						>
+							<RemovalMarkerPopover marker={removalMarker} />
+						</div>
+					))
 				) : (
 					<MarkerPopoverContent
 						marker={marker}
@@ -394,10 +419,7 @@ function MarkerPopoverContent({
 					/>
 					{marker.color &&
 						marker.color.replace(/^#/, "").toUpperCase() !==
-							DEFAULT_TIMELINE_MARKER_COLOR.replace(
-								/^#/,
-								"",
-							).toUpperCase() && (
+							DEFAULT_TIMELINE_MARKER_COLOR.replace(/^#/, "").toUpperCase() && (
 							<Button
 								type="button"
 								variant="text"
