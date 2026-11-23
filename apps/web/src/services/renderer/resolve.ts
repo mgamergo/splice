@@ -45,6 +45,33 @@ import type {
 	VisualNodeParams,
 } from "./nodes/visual-node";
 
+/**
+ * The source frame a video clip shows at `clipTime`. Decoding stops at the
+ * clip's out point, so a short cut of a long recording reads only the part
+ * it plays (plus keyframe lead-in), not the rest of the file.
+ */
+function getVideoFrameAt({
+	params,
+	clipTime,
+}: {
+	params: Pick<
+		VideoNode["params"],
+		"mediaId" | "file" | "trimStart" | "retime" | "duration"
+	>;
+	clipTime: number;
+}) {
+	const toSeconds = (ticks: number) =>
+		mediaTimeToSeconds({ time: roundMediaTime({ time: ticks }) });
+	const sourceTime = (time: number) =>
+		params.trimStart + getSourceTimeAtClipTime({ clipTime: time, retime: params.retime });
+	return videoCache.getFrameAt({
+		mediaId: params.mediaId,
+		file: params.file,
+		time: toSeconds(sourceTime(clipTime)),
+		endTime: toSeconds(sourceTime(params.duration)),
+	});
+}
+
 type ResolveContext = {
 	renderer: CanvasRenderer;
 	time: number;
@@ -196,17 +223,7 @@ async function resolveVideoNode({
 		return null;
 	}
 
-	const sourceTimeTicks =
-		node.params.trimStart +
-		getSourceTimeAtClipTime({
-			clipTime,
-			retime: node.params.retime,
-		});
-	const frame = await videoCache.getFrameAt({
-		mediaId: node.params.mediaId,
-		file: node.params.file,
-		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
-	});
+	const frame = await getVideoFrameAt({ params: node.params, clipTime });
 	if (!frame) {
 		return null;
 	}
@@ -417,17 +434,7 @@ async function resolveBackdropSource({
 	clipTime: number;
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
-		const sourceTimeTicks =
-			node.params.trimStart +
-			getSourceTimeAtClipTime({
-				clipTime,
-				retime: node.params.retime,
-			});
-		const frame = await videoCache.getFrameAt({
-			mediaId: node.params.mediaId,
-			file: node.params.file,
-			time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
-		});
+		const frame = await getVideoFrameAt({ params: node.params, clipTime });
 		if (!frame) {
 			return null;
 		}

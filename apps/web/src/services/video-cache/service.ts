@@ -28,10 +28,16 @@ export class VideoCache {
 		mediaId,
 		file,
 		time,
+		endTime,
 	}: {
 		mediaId: string;
 		file: MediaData;
 		time: number;
+		/**
+		 * Source time where the caller stops needing frames: a seek decodes only
+		 * up to here, so a clip of a long recording isn't read past its out point.
+		 */
+		endTime?: number;
 	}): Promise<WrappedCanvas | null> {
 		await this.ensureSink({ mediaId, file });
 
@@ -46,7 +52,7 @@ export class VideoCache {
 			if (this.seekGenerations.get(mediaId) !== generation) {
 				return sinkData.currentFrame ?? null;
 			}
-			return this.resolveFrame({ sinkData, time });
+			return this.resolveFrame({ sinkData, time, endTime });
 		});
 		this.frameChain.set(
 			mediaId,
@@ -58,9 +64,11 @@ export class VideoCache {
 	private async resolveFrame({
 		sinkData,
 		time,
+		endTime,
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
+		endTime?: number;
 	}): Promise<WrappedCanvas | null> {
 		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
 			sinkData.currentFrame = sinkData.nextFrame;
@@ -93,7 +101,7 @@ export class VideoCache {
 			}
 		}
 
-		const frame = await this.seekToTime({ sinkData, time });
+		const frame = await this.seekToTime({ sinkData, time, endTime });
 		if (frame && !sinkData.nextFrame && !sinkData.prefetching) {
 			this.startPrefetch({ sinkData });
 		}
@@ -161,9 +169,11 @@ export class VideoCache {
 	private async seekToTime({
 		sinkData,
 		time,
+		endTime,
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
+		endTime?: number;
 	}): Promise<WrappedCanvas | null> {
 		try {
 			if (sinkData.prefetching && sinkData.prefetchPromise) {
@@ -176,7 +186,10 @@ export class VideoCache {
 			}
 
 			sinkData.nextFrame = null;
-			sinkData.iterator = sinkData.sink.canvases(time);
+			sinkData.iterator = sinkData.sink.canvases(
+				time,
+				endTime !== undefined && endTime > time ? endTime : undefined,
+			);
 			sinkData.lastTime = time;
 
 			// Fetch current frame
