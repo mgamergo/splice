@@ -8,6 +8,7 @@ import type { EditorCore } from "@/core";
 import type { Marker, RemovalMarker, TSequence } from "@/timeline";
 import {
 	RemovalTakeError,
+	clearBestTake,
 	resolveTake,
 	restoreTakeClips,
 	swapTakeClips,
@@ -106,11 +107,15 @@ export class EditRemovalMarkerCommand extends Command {
 			})
 			.sort((a, b) => a.time - b.time);
 
+		const tracks =
+			edit.op === "restore_takes" && (!chosen || remaining.length === 0)
+				? clearBestTake({ tracks: update.tracks, markerId: marker.id })
+				: update.tracks;
 		this.before = editor.sequences.getSequences();
 		this.after = updateSequenceInArray({
 			sequences: this.before,
 			sequenceId: sequence.id,
-			updates: { tracks: update.tracks, markers },
+			updates: { tracks, markers },
 		});
 		const remainingIds = new Set(
 			[

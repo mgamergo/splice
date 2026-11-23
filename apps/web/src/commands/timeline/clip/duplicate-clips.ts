@@ -124,6 +124,7 @@ function buildDuplicateClip({
 }): TimelineClip {
 	return {
 		...clip,
+		bestTakeMarkerIds: undefined,
 		id,
 		name: `${clip.name} (copy)`,
 		startTime,

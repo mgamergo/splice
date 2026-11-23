@@ -10,6 +10,8 @@ import type { EditorCore } from "@/core";
 import { normalizeMarkers } from "@/services/storage/service";
 import { buildSeparatedAudioClip } from "@/timeline/audio-separation";
 import { clampMarkerDragTime } from "@/timeline/markers/utils";
+import { ToggleMarkerCommand } from "@/commands/sequence/toggle-marker";
+import { MoveMarkerCommand } from "@/commands/sequence/move-marker";
 
 const bestTake = {
 	projectItemId: "rec",
@@ -247,6 +249,139 @@ describe("removal markers", () => {
 				item.trimStart,
 			]),
 		).toEqual(spans());
+		editor.command.undo();
+		const restored = editor.sequences.getActiveSequence().tracks;
+		const [track] = restored.audio;
+		editor.timeline.updateTracks({
+			...restored,
+			audio: [
+				{
+					...track,
+					clips: track.clips.map((item) => ({
+						...item,
+						startTime: s(0.1 + item.startTime / s(1)),
+					})),
+				},
+			],
+		});
+		const before = editor.sequences.getActiveSequence();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({
+			ok: false,
+			code: "INVALID_OP",
+			revision: 3,
+		});
+		expect(editor.sequences.getActiveSequence()).toBe(before);
+	});
+
+	test("retains a removal marker when a later ripple delete covers its time", () => {
+		const id = cutWithMarker();
+		expect(
+			apply({
+				ops: [
+					{
+						op: "ripple_delete",
+						ranges: [{ start: { seconds: 0.5 }, end: { seconds: 1.5 } }],
+					},
+				],
+			}),
+		).toMatchObject({ ok: true, revision: 2 });
+		expect(markers()).toEqual([{ id, time: s(0.5), data }]);
+		expect(
+			apply({ ops: [{ op: "restore_takes", markerId: id }] }),
+		).toMatchObject({ ok: true, revision: 3 });
+		expect(markers()).toEqual([]);
+	});
+
+	test("rejects Swap if only an unrelated copy of the original source survives", () => {
+		const id = cutWithMarker();
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: { ...tracks.main, clips: tracks.main.clips.slice(1) },
+			overlay: [
+				{
+					id: "b-roll",
+					type: "video",
+					name: "B-roll",
+					hidden: false,
+					muted: false,
+					clips: [
+						videoClip({ id: "reuse", start: 10, duration: 2, trimStart: 4 }),
+					],
+				},
+			],
+		});
+		const before = editor.sequences.getActiveSequence();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({
+			ok: false,
+			code: "INVALID_OP",
+			revision: 1,
+		});
+		expect(editor.sequences.getActiveSequence()).toBe(before);
+	});
+
+	test("rejects a shorter Swap if the ripple would overlap another track", () => {
+		const id = cutWithMarker();
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			overlay: [
+				{
+					id: "overlay",
+					type: "video",
+					name: "Overlay",
+					hidden: false,
+					muted: false,
+					clips: [
+						videoClip({ id: "crosses", start: 2, duration: 1.5 }),
+						videoClip({ id: "following", start: 4, duration: 1 }),
+					],
+				},
+			],
+		});
+		const before = editor.sequences.getActiveSequence();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 1 }] }),
+		).toMatchObject({
+			ok: false,
+			code: "INVALID_OP",
+			revision: 1,
+		});
+		expect(editor.sequences.getActiveSequence()).toBe(before);
+	});
+
+	test("updates and deletes ordinary markers by stored time without touching removal data", async () => {
+		const id = cutWithMarker();
+		const toggle = () =>
+			editor.command.execute({ command: new ToggleMarkerCommand(s(1)) });
+		toggle();
+		expect(markers()).toHaveLength(2);
+		await editor.sequences.updateMarker({
+			time: s(1),
+			updates: { note: "Ordinary" },
+		});
+		expect(markers()).toEqual([
+			{ id, time: s(1), data },
+			{ time: s(1), note: "Ordinary" },
+		]);
+		toggle();
+		expect(markers()).toEqual([{ id, time: s(1), data }]);
+		toggle();
+		const offFrame = s(0.99);
+		editor.command.execute({
+			command: new MoveMarkerCommand({ fromTime: s(1), toTime: offFrame }),
+		});
+		await editor.sequences.updateMarker({
+			time: offFrame,
+			updates: { note: "Off-frame" },
+		});
+		expect(markers()[0]).toEqual({ time: offFrame, note: "Off-frame" });
+		await editor.sequences.removeMarker({ time: offFrame });
+		expect(markers()).toEqual([{ id, time: s(1), data }]);
 	});
 
 	test("leaves the edit and revision intact when a stored source is unavailable", () => {

@@ -2,10 +2,7 @@ import { Command, type CommandResult } from "@/commands/base-command";
 import { EditorCore } from "@/core";
 import type { Marker, TSequence } from "@/timeline";
 import { updateSequenceInArray } from "@/timeline/sequences";
-import {
-	getFrameTime,
-	updateMarkerInArray,
-} from "@/timeline/markers/index";
+import { updateMarkerInArray } from "@/timeline/markers/index";
 import type { MediaTime } from "@/wasm";
 
 export class UpdateMarkerCommand extends Command {
@@ -29,23 +26,12 @@ export class UpdateMarkerCommand extends Command {
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
 		const activeSequence = editor.sequences.getActiveSequence();
-		const activeProject = editor.project.getActive();
-
-		if (!activeSequence || !activeProject) {
-			return;
-		}
-
 		const sequences = editor.sequences.getSequences();
 		this.savedSequences = [...sequences];
 
-		const frameTime = getFrameTime({
-			time: this.time,
-			fps: activeProject.settings.fps,
-		});
-
 		const updatedMarkers = updateMarkerInArray({
 			markers: activeSequence.markers,
-			frameTime,
+			time: this.time,
 			updates: this.updates,
 		});
 
@@ -56,6 +42,7 @@ export class UpdateMarkerCommand extends Command {
 		});
 
 		editor.sequences.setSequences({ sequences: updatedSequences });
+		return undefined;
 	}
 
 	undo(): void {

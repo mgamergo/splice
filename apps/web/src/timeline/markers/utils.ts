@@ -42,6 +42,16 @@ export function isMarkerAtTime({
 	);
 }
 
+function findOrdinaryMarkerIndex({
+	markers,
+	time,
+}: {
+	markers: Marker[];
+	time: MediaTime;
+}) {
+	return markers.findIndex((marker) => !marker.data && marker.time === time);
+}
+
 export function toggleMarkerInArray({
 	markers,
 	frameTime,
@@ -49,7 +59,7 @@ export function toggleMarkerInArray({
 	markers: Marker[];
 	frameTime: MediaTime;
 }): Marker[] {
-	const markerIndex = findMarkerIndex({ markers, frameTime });
+	const markerIndex = findOrdinaryMarkerIndex({ markers, time: frameTime });
 
 	if (markerIndex !== -1) {
 		return markers.filter((_, index) => index !== markerIndex);
@@ -61,27 +71,27 @@ export function toggleMarkerInArray({
 
 export function removeMarkerFromArray({
 	markers,
-	frameTime,
+	time,
 }: {
 	markers: Marker[];
-	frameTime: MediaTime;
+	time: MediaTime;
 }): Marker[] {
-	return markers.filter(
-		(marker) =>
-			!markerTimeEqual({ markerTime: marker.time, frameTime }),
-	);
+	const index = findOrdinaryMarkerIndex({ markers, time });
+	return index === -1
+		? markers
+		: markers.filter((_, position) => position !== index);
 }
 
 export function updateMarkerInArray({
 	markers,
-	frameTime,
+	time,
 	updates,
 }: {
 	markers: Marker[];
-	frameTime: MediaTime;
+	time: MediaTime;
 	updates: Partial<Pick<Marker, "note" | "color" | "duration">>;
 }): Marker[] {
-	const index = findMarkerIndex({ markers, frameTime });
+	const index = findOrdinaryMarkerIndex({ markers, time });
 	if (index === -1) {
 		return markers;
 	}

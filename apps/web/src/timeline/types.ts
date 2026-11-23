@@ -120,6 +120,8 @@ interface BaseTimelineClip {
 	trimStart: MediaTime;
 	trimEnd: MediaTime;
 	sourceDuration?: MediaTime;
+	/** Removal markers whose best take is represented by this clip. */
+	bestTakeMarkerIds?: string[];
 	animations?: ClipAnimations;
 	params: ParamValues;
 }

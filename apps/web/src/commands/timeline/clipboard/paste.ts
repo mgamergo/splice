@@ -203,6 +203,7 @@ function buildPastedClips({
 
 		clipsToAdd.push({
 			...item.clip,
+			bestTakeMarkerIds: undefined,
 			id: newClipId,
 			startTime,
 			animations: cloneAnimations({

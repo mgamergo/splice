@@ -6,6 +6,7 @@ import { BatchCommand } from "@/commands/batch-command";
 import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
 import {
 	RemovalTakeError,
+	markBestTake,
 	resolveTake,
 } from "@/timeline/markers/removal-takes";
 import { generateUUID } from "@/utils/id";
@@ -194,22 +195,28 @@ export class EditorApi {
 			case "add_marker": {
 				const at = time(op.at);
 				const duration = op.duration ? time(op.duration) : undefined;
-				const data = op.data;
-				if (data) {
-					const projectItems = this.editor.media.getProjectItems();
-					for (const take of [data.bestTake, ...data.badTakes]) {
-						resolveTake({ take, projectItems });
-					}
-				}
 				const fields = {
 					time: at,
 					...(op.note ? { note: op.note } : {}),
 					...(duration ? { duration } : {}),
 				};
+				if (op.data) {
+					const projectItems = this.editor.media.getProjectItems();
+					const marker = { ...fields, id: generateUUID(), data: op.data };
+					const best = resolveTake({ take: op.data.bestTake, projectItems });
+					for (const take of op.data.badTakes) {
+						resolveTake({ take, projectItems });
+					}
+					return {
+						command: new AddMarkerCommand({
+							marker,
+							tracks: markBestTake({ tracks: sequence.tracks, marker, best }),
+						}),
+						description: `added removal marker at ${formatSeconds({ time: at })}`,
+					};
+				}
 				return {
-					command: new AddMarkerCommand(
-						data ? { ...fields, id: generateUUID(), data } : fields,
-					),
+					command: new AddMarkerCommand({ marker: fields }),
 					description: `added marker at ${formatSeconds({ time: at })}`,
 				};
 			}
