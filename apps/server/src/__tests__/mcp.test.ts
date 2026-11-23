@@ -166,7 +166,7 @@ function field({ params, key }: { params: unknown; key: string }): unknown {
 }
 
 describe("loudness tools", () => {
-	test("rough_cut with loudness plans, measures what the cut keeps, then cuts with the gains", async () => {
+	test("rough_cut plans, measures what the cut keeps, then cuts with the gains by default", async () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {
 			calls.push([method, params]);
@@ -180,7 +180,7 @@ describe("loudness tools", () => {
 		});
 		const result = await client.callTool({
 			name: "rough_cut",
-			arguments: { expectedRevision: 3, sections, loudness: {} },
+			arguments: { expectedRevision: 3, sections },
 		});
 		expect(result.isError).toBeFalsy();
 		expect(calls).toEqual([
@@ -215,7 +215,7 @@ describe("loudness tools", () => {
 		});
 	});
 
-	test("rough_cut without loudness is one call, and a refused plan measures nothing", async () => {
+	test("rough_cut with loudness false is one call, and a refused plan measures nothing", async () => {
 		const calls: string[] = [];
 		const client = await connect(async ({ method }) => {
 			calls.push(method);
@@ -223,7 +223,7 @@ describe("loudness tools", () => {
 		});
 		const plain = await client.callTool({
 			name: "rough_cut",
-			arguments: { expectedRevision: 3, sections },
+			arguments: { expectedRevision: 3, sections, loudness: false },
 		});
 		const normalized = await client.callTool({
 			name: "rough_cut",

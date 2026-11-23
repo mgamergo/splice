@@ -173,10 +173,10 @@ export const roughCutRequestSchema = z.strictObject({
 		)
 		.min(1),
 	loudness: z
-		.strictObject({ targetLufs })
+		.union([z.strictObject({ targetLufs }), z.literal(false)])
 		.optional()
 		.describe(
-			"Normalize each recording's kept audio to the target loudness in the same undo step",
+			`Normalizes each recording's kept audio to ${DEFAULT_TARGET_LUFS} LUFS, or targetLufs, in the same undo step. Pass false to keep source levels.`,
 		),
 });
 
