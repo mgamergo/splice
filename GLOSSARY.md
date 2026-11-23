@@ -16,6 +16,10 @@ _Avoid_: Scene, timeline (as a noun for the data), composition
 **Timeline panel**:
 The panel where the active sequence's tracks and clips are viewed and edited.
 
+**Library panel**:
+The tabbed panel beside the preview that holds the project items tab and the libraries of sounds, text, stickers, effects and captions to add to a sequence.
+_Avoid_: Assets panel, media panel
+
 **Track**:
 A horizontal lane in a sequence, either a video track (V1, V2…) or an audio track (A1, A2…), that holds clips.
 _Avoid_: Layer, lane

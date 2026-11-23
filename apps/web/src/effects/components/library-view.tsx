@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
-import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
+import { PanelView } from "@/components/editor/panels/library/views/base-panel";
+import { DraggableItem } from "@/components/editor/panels/library/draggable-item";
 import { effectsRegistry, EFFECT_TARGET_CLIP_TYPES } from "@/effects";
 import { effectPreviewService } from "@/services/renderer/effect-preview";
 import { useEditor } from "@/editor/use-editor";

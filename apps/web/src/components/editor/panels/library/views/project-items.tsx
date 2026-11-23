@@ -2,9 +2,9 @@
 
 import Image from "next/image";
 import { useMemo, useState } from "react";
-import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
-import { MediaDragOverlay } from "@/components/editor/panels/assets/drag-overlay";
-import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
+import { PanelView } from "@/components/editor/panels/library/views/base-panel";
+import { MediaDragOverlay } from "@/components/editor/panels/library/drag-overlay";
+import { DraggableItem } from "@/components/editor/panels/library/draggable-item";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import {
@@ -43,8 +43,8 @@ import {
 	type MediaSortKey,
 	type MediaSortOrder,
 	type MediaViewMode,
-	useAssetsPanelStore,
-} from "@/components/editor/panels/assets/assets-panel-store";
+	useLibraryPanelStore,
+} from "@/components/editor/panels/library/library-panel-store";
 import { MASKABLE_CLIP_TYPES } from "@/timeline";
 import type { ProjectItem } from "@/media/types";
 import { cn } from "@/utils/ui";
@@ -72,7 +72,7 @@ export function MediaView() {
 		mediaSortBy,
 		mediaSortOrder,
 		setMediaSort,
-	} = useAssetsPanelStore();
+	} = useLibraryPanelStore();
 
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [progress, setProgress] = useState(0);
@@ -192,7 +192,7 @@ export function MediaView() {
 			<input {...fileInputProps} />
 
 			<PanelView
-				title="Assets"
+				title="Project items"
 				actions={
 					<MediaActions
 						mediaViewMode={mediaViewMode}
@@ -217,7 +217,7 @@ export function MediaView() {
 					/>
 				) : (
 					<SelectableSurface
-						ariaLabel="Assets"
+						ariaLabel="Project items"
 						orderedIds={orderedMediaIds}
 						revealId={highlightMediaId}
 						onRevealComplete={clearHighlight}

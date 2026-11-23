@@ -1,18 +1,18 @@
 "use client";
 
 import { Separator } from "@/components/ui/separator";
-import { type Tab, useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+import { type Tab, useLibraryPanelStore } from "@/components/editor/panels/library/library-panel-store";
 import { TabBar } from "./tabbar";
-import { Captions } from "@/subtitles/components/assets-view";
+import { Captions } from "@/subtitles/components/library-view";
 import { MediaView } from "./views/project-items";
 import { SettingsView } from "./views/settings";
-import { SoundsView } from "@/sounds/components/assets-view";
-import { StickersView } from "@/stickers/components/assets-view";
-import { TextView } from "@/text/components/assets-view";
-import { EffectsView } from "@/effects/components/assets-view";
+import { SoundsView } from "@/sounds/components/library-view";
+import { StickersView } from "@/stickers/components/library-view";
+import { TextView } from "@/text/components/library-view";
+import { EffectsView } from "@/effects/components/library-view";
 
-export function AssetsPanel() {
-	const { activeTab } = useAssetsPanelStore();
+export function LibraryPanel() {
+	const { activeTab } = useLibraryPanelStore();
 
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,

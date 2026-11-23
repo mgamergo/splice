@@ -11,11 +11,11 @@ import { cn } from "@/utils/ui";
 import {
 	TAB_KEYS,
 	tabs,
-	useAssetsPanelStore,
-} from "@/components/editor/panels/assets/assets-panel-store";
+	useLibraryPanelStore,
+} from "@/components/editor/panels/library/library-panel-store";
 
 export function TabBar() {
-	const { activeTab, setActiveTab } = useAssetsPanelStore();
+	const { activeTab, setActiveTab } = useLibraryPanelStore();
 	const [showTopFade, setShowTopFade] = useState(false);
 	const [showBottomFade, setShowBottomFade] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
