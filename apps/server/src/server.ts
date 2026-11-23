@@ -571,7 +571,8 @@ export function startServer({
 		origin: `http://127.0.0.1:${server.port}`,
 		async stop() {
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
-			await Promise.all([server.stop(true), transcription.stop()]);
+			void server.stop(true);
+			await transcription.stop();
 		},
 	};
 }
