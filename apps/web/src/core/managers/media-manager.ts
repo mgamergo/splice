@@ -31,9 +31,12 @@ export class MediaManager {
 
 		try {
 			await storageService.saveProjectItem({ projectId, projectItem: newProjectItem });
-			this.editor.project.ratchetFpsForImportedMedia({
-				importedProjectItems: [newProjectItem],
-			});
+			// The save is async; don't change another project's frame rate.
+			if (this.editor.project.getActiveOrNull()?.metadata.id === projectId) {
+				this.editor.project.ratchetFpsForImportedMedia({
+					importedProjectItems: [newProjectItem],
+				});
+			}
 			return newProjectItem;
 		} catch (error) {
 			console.error("Failed to save project item:", error);

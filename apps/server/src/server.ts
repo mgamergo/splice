@@ -6,7 +6,7 @@ import {
 	parseRpcMessage,
 	RPC_ERRORS,
 	SERVER_NAME,
-	SESSION_COOKIE,
+	sessionCookieName,
 	TAB_CLOSE_CODES,
 	TAB_HELLO,
 	type RpcId,
@@ -236,12 +236,18 @@ export function startServer({
 	}
 
 	/** Media accepts the bridge token (for `splice mcp` and tests) or the media cookie. */
-	function isMediaAuthorized(request: Request): boolean {
+	function isMediaAuthorized({
+		request,
+		port: actualPort,
+	}: {
+		request: Request;
+		port: number;
+	}): boolean {
 		return (
 			hasBearerToken(request) ||
 			tokensMatch({
 				expected: mediaKey,
-				actual: readCookie({ request, name: SESSION_COOKIE }),
+				actual: readCookie({ request, name: sessionCookieName(actualPort) }),
 			})
 		);
 	}
@@ -271,7 +277,7 @@ export function startServer({
 		return new Response(null, {
 			status: 204,
 			headers: {
-				"set-cookie": `${SESSION_COOKIE}=${mediaKey}; Path=${BRIDGE_PATHS.media}; HttpOnly; SameSite=Strict`,
+				"set-cookie": `${sessionCookieName(actualPort)}=${mediaKey}; Path=${BRIDGE_PATHS.media}; HttpOnly; SameSite=Strict`,
 			},
 		});
 	}
@@ -279,14 +285,16 @@ export function startServer({
 	async function handleMedia({
 		request,
 		url,
+		port: actualPort,
 	}: {
 		request: Request;
 		url: URL;
+		port: number;
 	}): Promise<Response> {
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			return new Response("Method not allowed", { status: 405 });
 		}
-		if (!isMediaAuthorized(request)) {
+		if (!isMediaAuthorized({ request, port: actualPort })) {
 			return new Response("Unauthorized", { status: 401 });
 		}
 		let path: string;
@@ -468,7 +476,7 @@ export function startServer({
 				return handleSession({ request, port: actualPort });
 			}
 			if (url.pathname.startsWith(BRIDGE_PATHS.media)) {
-				return handleMedia({ request, url });
+				return handleMedia({ request, url, port: actualPort });
 			}
 			if (url.pathname.startsWith("/splice/")) {
 				return new Response("Not found", { status: 404 });

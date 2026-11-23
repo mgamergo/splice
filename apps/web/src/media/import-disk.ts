@@ -164,16 +164,25 @@ export async function importDiskItems({
 			result.failed.push({ path, error: "The creator stopped the agent" });
 			continue;
 		}
-		const existing = editor.media
-			.getProjectItems()
-			.find((item) => isDiskMedia(item.file) && item.file.path === path);
-		if (existing) {
-			result.imported.push(summarizeItem(existing));
+		if (editor.project.getActiveOrNull()?.metadata.id !== projectId) {
+			result.failed.push({
+				path,
+				error: "The creator opened another project during the import",
+			});
 			continue;
 		}
 		const key = `${projectId}\n${path}`;
+		// In-flight first: an item still being saved shows in the library already,
+		// and its save can still fail.
 		let pending = inFlight.get(key);
 		if (!pending) {
+			const existing = editor.media
+				.getProjectItems()
+				.find((item) => isDiskMedia(item.file) && item.file.path === path);
+			if (existing) {
+				result.imported.push(summarizeItem(existing));
+				continue;
+			}
 			pending = importOne({ editor, projectId, path, isBlocked }).finally(() =>
 				inFlight.delete(key),
 			);

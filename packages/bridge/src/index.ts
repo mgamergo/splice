@@ -56,8 +56,14 @@ export interface EditorState {
 	digest: string;
 }
 
-/** The cookie that authorizes `/splice/media/*` requests from the editor tab. */
-export const SESSION_COOKIE = "splice_session";
+/**
+ * The cookie that authorizes `/splice/media/*` requests from the editor tab.
+ * Browsers share cookies across ports, so the name includes the port: two
+ * splice instances on one machine keep separate keys.
+ */
+export function sessionCookieName(port: number): string {
+	return `splice_session_${port}`;
+}
 
 /**
  * Whether a path is a plain relative path under Footage: forward slashes, no

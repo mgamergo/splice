@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BRIDGE_PATHS, SESSION_COOKIE, mediaUrlForPath } from "@splice/bridge";
+import {
+	BRIDGE_PATHS,
+	mediaUrlForPath,
+	sessionCookieName,
+} from "@splice/bridge";
 import { listFootage, resolveFootagePath } from "../footage";
 import { startServer, type RunningServer } from "../server";
 
@@ -100,8 +104,13 @@ describe("media route", () => {
 		expect((await fetch(url)).status).toBe(401);
 		// The cookie carries a media-only key, never the bridge token.
 		expect(
-			(await fetch(url, { headers: { cookie: `${SESSION_COOKIE}=${TOKEN}` } }))
-				.status,
+			(
+				await fetch(url, {
+					headers: {
+						cookie: `${sessionCookieName(server.server.port ?? 0)}=${TOKEN}`,
+					},
+				})
+			).status,
 		).toBe(401);
 		expect((await media({ path: "escape.mp4" })).status).toBe(404);
 		expect(
@@ -143,6 +152,9 @@ describe("media route", () => {
 		expect(cookie).toContain("SameSite=Strict");
 		expect(cookie).toContain(`Path=${BRIDGE_PATHS.media}`);
 		expect(cookie).not.toContain(TOKEN);
+		expect(
+			cookie.startsWith(`${sessionCookieName(server.server.port ?? 0)}=`),
+		).toBe(true);
 		const key = cookie.split(";")[0];
 		const url = `${server.origin}${mediaUrlForPath("Day 1/take #1.mp4")}`;
 		expect((await fetch(url, { headers: { cookie: key } })).status).toBe(200);
