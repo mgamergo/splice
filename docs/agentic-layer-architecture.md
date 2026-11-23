@@ -139,7 +139,7 @@ A **removal marker** stores the bad takes it replaced, as source ranges. **Resto
 
 Source ranges use `projectItemId`, `sourceIn`, and `sourceOut`, with in and out measured in source seconds. `restore_takes` restores all stored takes in order when `takeIndex` is omitted. Both ops use zero-based indices.
 
-Swap replaces the nearest contiguous run of tracked clips that still show the best take's source range. The marker tracks the original clips across splits and moves. It replaces only the surviving portion of a trimmed best take with the entire chosen take. The original best take’s full source range goes back into the marker. Swap leaves the sequence intact if it cannot identify the best take or its extracted audio, or if rippling would overlap clips on another track.
+Swap replaces the nearest contiguous run of tracked clips that still show the best take's source range. When you add a removal marker within one frame of the best take, the marker tracks the original clips across splits and moves. A marker placed farther away supports Restore. It replaces only the surviving portion of a trimmed best take with the entire chosen take. The original best take’s full source range goes back into the marker. Swap leaves the sequence intact if it cannot identify the best take or its paired extracted audio, or if rippling would overlap clips on another track.
 
 ## 6. The bridge (`splice` ↔ tab)
 

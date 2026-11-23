@@ -187,7 +187,7 @@ function TimelineMarker({
 		<Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
 			<PopoverAnchor asChild>
 				<button
-					className="absolute top-0 h-full min-w-0.5 border-0 bg-transparent p-0"
+					className={`absolute top-0 h-full min-w-0.5 border-0 bg-transparent p-0 ${marker.data ? "z-10" : ""}`}
 					style={{
 						left: `${markerLeft}px`,
 						width: `${markerWidth}px`,

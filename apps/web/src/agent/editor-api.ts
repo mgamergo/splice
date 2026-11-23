@@ -210,7 +210,12 @@ export class EditorApi {
 					return {
 						command: new AddMarkerCommand({
 							marker,
-							tracks: markBestTake({ tracks: sequence.tracks, marker, best }),
+							tracks: markBestTake({
+								tracks: sequence.tracks,
+								marker,
+								best,
+								initialTolerance: time({ frame: 1 }),
+							}),
 						}),
 						description: `added removal marker at ${formatSeconds({ time: at })}`,
 					};

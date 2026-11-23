@@ -19,6 +19,7 @@ import { generateUUID } from "@/utils/id";
 
 export class ToggleSourceAudioSeparationCommand extends Command {
 	private savedState: SequenceTracks | null = null;
+	private readonly sourceAudioGroupId = generateUUID();
 
 	constructor(
 		private readonly params: {
@@ -73,7 +74,10 @@ export class ToggleSourceAudioSeparationCommand extends Command {
 
 		const separatedAudioClip = {
 			...buildSeparatedAudioClip({
-				sourceClip: videoClip,
+				sourceClip: {
+					...videoClip,
+					sourceAudioGroupId: this.sourceAudioGroupId,
+				},
 			}),
 			id: generateUUID(),
 		};
@@ -106,6 +110,7 @@ export class ToggleSourceAudioSeparationCommand extends Command {
 				trackId: this.params.trackId,
 				clipId: this.params.clipId,
 				isSourceAudioEnabled: false,
+				sourceAudioGroupId: this.sourceAudioGroupId,
 			}),
 		);
 	}
@@ -125,11 +130,13 @@ function updateSourceAudioEnabled({
 	trackId,
 	clipId,
 	isSourceAudioEnabled,
+	sourceAudioGroupId,
 }: {
 	tracks: SequenceTracks;
 	trackId: string;
 	clipId: string;
 	isSourceAudioEnabled: boolean;
+	sourceAudioGroupId?: string;
 }): SequenceTracks {
 	return updateClipInSequenceTracks({
 		tracks,
@@ -140,6 +147,7 @@ function updateSourceAudioEnabled({
 		update: (clip) => ({
 			...clip,
 			isSourceAudioEnabled,
+			sourceAudioGroupId,
 		}),
 	});
 }

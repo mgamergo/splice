@@ -122,6 +122,8 @@ interface BaseTimelineClip {
 	sourceDuration?: MediaTime;
 	/** Removal markers whose best take is represented by this clip. */
 	bestTakeMarkerIds?: string[];
+	/** Shared by a video clip and the audio extracted from it. */
+	sourceAudioGroupId?: string;
 	animations?: ClipAnimations;
 	params: ParamValues;
 }

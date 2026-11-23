@@ -86,6 +86,7 @@ type TakeWindow = {
 	sourceOut: number;
 	trackId: string;
 	clipIds: string[];
+	audioGroupIds: Set<string>;
 	separated: boolean;
 };
 
@@ -93,10 +94,12 @@ function findTakeWindows({
 	track,
 	take,
 	markerId,
+	audioGroupIds,
 }: {
 	track: TimelineTrack;
 	take: ResolvedTake;
 	markerId?: string;
+	audioGroupIds?: Set<string>;
 }): TakeWindow[] {
 	const windows: TakeWindow[] = [];
 	for (const clip of [...track.clips].sort(
@@ -106,7 +109,10 @@ function findTakeWindows({
 			(clip.type !== "video" && clip.type !== "audio") ||
 			!("mediaId" in clip) ||
 			clip.mediaId !== take.item.id ||
-			(markerId && !clip.bestTakeMarkerIds?.includes(markerId))
+			(markerId && !clip.bestTakeMarkerIds?.includes(markerId)) ||
+			(audioGroupIds &&
+				(!clip.sourceAudioGroupId ||
+					!audioGroupIds.has(clip.sourceAudioGroupId)))
 		)
 			continue;
 
@@ -148,6 +154,8 @@ function findTakeWindows({
 			previous.end = end;
 			previous.sourceOut = sourceOut;
 			previous.clipIds.push(clip.id);
+			if (clip.sourceAudioGroupId)
+				previous.audioGroupIds.add(clip.sourceAudioGroupId);
 		} else {
 			windows.push({
 				start,
@@ -155,6 +163,9 @@ function findTakeWindows({
 				sourceOut,
 				trackId: track.id,
 				clipIds: [clip.id],
+				audioGroupIds: new Set(
+					clip.sourceAudioGroupId ? [clip.sourceAudioGroupId] : [],
+				),
 				separated,
 			});
 		}
@@ -329,12 +340,12 @@ function nearestBestWindow({
 	tracks,
 	marker,
 	best,
-	tracked,
+	initialTolerance,
 }: {
 	tracks: SequenceTracks;
 	marker: RemovalMarker;
 	best: ResolvedTake;
-	tracked: boolean;
+	initialTolerance?: MediaTime;
 }): TakeWindow | undefined {
 	const videoTracks = [
 		tracks.main,
@@ -348,10 +359,15 @@ function nearestBestWindow({
 			findTakeWindows({
 				track,
 				take: best,
-				markerId: tracked ? marker.id : undefined,
+				markerId: initialTolerance === undefined ? marker.id : undefined,
 			}),
 		)
 		.sort((a, b) => distance(a) - distance(b));
+	if (
+		!nearest ||
+		(initialTolerance !== undefined && distance(nearest) > initialTolerance)
+	)
+		return undefined;
 	return alternative && distance(nearest) === distance(alternative)
 		? undefined
 		: nearest;
@@ -361,15 +377,15 @@ function alignedAudioWindow({
 	tracks,
 	take,
 	window,
-	markerId,
 }: {
 	tracks: SequenceTracks;
 	take: ResolvedTake;
 	window: TakeWindow;
-	markerId?: string;
 }): TakeWindow | undefined {
 	const matches = tracks.audio
-		.flatMap((track) => findTakeWindows({ track, take, markerId }))
+		.flatMap((track) =>
+			findTakeWindows({ track, take, audioGroupIds: window.audioGroupIds }),
+		)
 		.filter(({ start, end }) => start === window.start && end === window.end);
 	return matches.length === 1 ? matches[0] : undefined;
 }
@@ -378,17 +394,16 @@ export function markBestTake({
 	tracks,
 	marker,
 	best,
+	initialTolerance,
 }: {
 	tracks: SequenceTracks;
 	marker: RemovalMarker;
 	best: ResolvedTake;
+	initialTolerance: MediaTime;
 }): SequenceTracks {
-	const window = nearestBestWindow({ tracks, marker, best, tracked: false });
+	const window = nearestBestWindow({ tracks, marker, best, initialTolerance });
 	if (!window) return tracks;
-	const audio = window.separated
-		? alignedAudioWindow({ tracks, take: best, window })
-		: undefined;
-	const ids = new Set([...window.clipIds, ...(audio?.clipIds ?? [])]);
+	const ids = new Set(window.clipIds);
 	return mapTracks({
 		tracks,
 		map: (clips) =>
@@ -414,7 +429,7 @@ export function swapTakeClips({
 	best: ResolvedTake;
 	chosen: ResolvedTake;
 }) {
-	const bestWindow = nearestBestWindow({ tracks, marker, best, tracked: true });
+	const bestWindow = nearestBestWindow({ tracks, marker, best });
 	if (!bestWindow) {
 		throw new RemovalTakeError(
 			"Could not identify the best take near this marker.",
@@ -427,7 +442,6 @@ export function swapTakeClips({
 				tracks,
 				take: best,
 				window: bestWindow,
-				markerId: marker.id,
 			})
 		: undefined;
 	if (separated && !audioWindow) {
@@ -438,6 +452,12 @@ export function swapTakeClips({
 	const replacement = {
 		...createTakeClip({ take: chosen, at: start }),
 		bestTakeMarkerIds: [marker.id],
+		sourceAudioGroupId:
+			separated &&
+			chosen.item.type === "video" &&
+			chosen.item.hasAudio !== false
+				? generateUUID()
+				: undefined,
 	};
 	const delta = replacement.duration - (end - start);
 	const shifted = mapTracks({

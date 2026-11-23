@@ -37,9 +37,7 @@ export function isMarkerAtTime({
 	markers: Marker[];
 	frameTime: MediaTime;
 }): boolean {
-	return markers.some((marker) =>
-		markerTimeEqual({ markerTime: marker.time, frameTime }),
-	);
+	return findOrdinaryMarkerIndex({ markers, time: frameTime }) !== -1;
 }
 
 function findOrdinaryMarkerIndex({

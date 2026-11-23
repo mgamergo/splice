@@ -8,7 +8,7 @@ import { EditorApi } from "@/agent/editor-api";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import type { EditorCore } from "@/core";
 import { normalizeMarkers } from "@/services/storage/service";
-import { buildSeparatedAudioClip } from "@/timeline/audio-separation";
+import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import { clampMarkerDragTime } from "@/timeline/markers/utils";
 import { ToggleMarkerCommand } from "@/commands/sequence/toggle-marker";
 import { MoveMarkerCommand } from "@/commands/sequence/move-marker";
@@ -60,6 +60,7 @@ const spans = () =>
 		]);
 
 function cutWithMarker() {
+	const revision = api.getRevision();
 	const result = apply({
 		ops: [
 			{
@@ -72,7 +73,7 @@ function cutWithMarker() {
 			{ op: "add_marker", at: { seconds: 1 }, data },
 		],
 	});
-	expect(result).toMatchObject({ ok: true, revision: 1 });
+	expect(result).toMatchObject({ ok: true, revision: revision + 1 });
 	const id = markers()[0]?.id;
 	if (!id) throw new Error("Missing removal marker ID");
 	return id;
@@ -213,35 +214,20 @@ describe("removal markers", () => {
 	});
 
 	test("swaps aligned extracted audio together with its video", () => {
-		const sequence = editor.sequences.getActiveSequence();
-		const clip = sequence.tracks.main.clips[0];
-		if (clip.type !== "video") throw new Error("Expected a video clip");
-		const audioClip = {
-			...buildSeparatedAudioClip({ sourceClip: clip }),
-			id: "extracted",
-		};
-		editor.timeline.updateTracks({
-			...sequence.tracks,
-			main: {
-				...sequence.tracks.main,
-				clips: [{ ...clip, isSourceAudioEnabled: false }],
-			},
-			audio: [
-				{
-					id: "audio-track",
-					type: "audio",
-					name: "A1",
-					muted: false,
-					clips: [audioClip],
-				},
-			],
+		const { main } = editor.sequences.getActiveSequence().tracks;
+		editor.command.execute({
+			command: new ToggleSourceAudioSeparationCommand({
+				trackId: main.id,
+				clipId: main.clips[0].id,
+			}),
 		});
 		const id = cutWithMarker();
 		expect(
 			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
 		).toMatchObject({ ok: true });
-		const { main, audio } = editor.sequences.getActiveSequence().tracks;
-		expect(main.clips[1]).toMatchObject({ isSourceAudioEnabled: false });
+		const { main: swappedMain, audio } =
+			editor.sequences.getActiveSequence().tracks;
+		expect(swappedMain.clips[1]).toMatchObject({ isSourceAudioEnabled: false });
 		expect(
 			audio[0].clips.map((item) => [
 				item.startTime,
@@ -270,7 +256,7 @@ describe("removal markers", () => {
 		).toMatchObject({
 			ok: false,
 			code: "INVALID_OP",
-			revision: 3,
+			revision: 4,
 		});
 		expect(editor.sequences.getActiveSequence()).toBe(before);
 	});
@@ -292,6 +278,64 @@ describe("removal markers", () => {
 			apply({ ops: [{ op: "restore_takes", markerId: id }] }),
 		).toMatchObject({ ok: true, revision: 3 });
 		expect(markers()).toEqual([]);
+	});
+
+	test("keeps a distant source reuse unbound when the marker is created", () => {
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [
+					videoClip({ id: "distant", start: 20, duration: 2, trimStart: 4 }),
+				],
+			},
+		});
+		expect(
+			apply({ ops: [{ op: "add_marker", at: { seconds: 1 }, data }] }),
+		).toMatchObject({ ok: true });
+		const id = markers()[0]?.id;
+		if (!id) throw new Error("Missing removal marker");
+		const before = editor.sequences.getActiveSequence();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: false, code: "INVALID_OP" });
+		expect(editor.sequences.getActiveSequence()).toBe(before);
+		expect(
+			apply({ ops: [{ op: "restore_takes", markerId: id }] }),
+		).toMatchObject({ ok: true });
+	});
+
+	test("rejects an unrelated aligned audio clip when extracted audio is elsewhere", () => {
+		const initial = editor.sequences.getActiveSequence().tracks;
+		editor.command.execute({
+			command: new ToggleSourceAudioSeparationCommand({
+				trackId: initial.main.id,
+				clipId: initial.main.clips[0].id,
+			}),
+		});
+		const { tracks } = editor.sequences.getActiveSequence();
+		const [track] = tracks.audio;
+		const [extracted] = track.clips;
+		editor.timeline.updateTracks({
+			...tracks,
+			audio: [
+				{ ...track, clips: [{ ...extracted, startTime: s(20) }] },
+				{
+					...track,
+					id: "unrelated-track",
+					clips: [
+						{ ...extracted, id: "unrelated", sourceAudioGroupId: undefined },
+					],
+				},
+			],
+		});
+		const id = cutWithMarker();
+		const before = editor.sequences.getActiveSequence();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: false, code: "INVALID_OP" });
+		expect(editor.sequences.getActiveSequence()).toBe(before);
 	});
 
 	test("rejects Swap if only an unrelated copy of the original source survives", () => {
@@ -358,6 +402,7 @@ describe("removal markers", () => {
 		const id = cutWithMarker();
 		const toggle = () =>
 			editor.command.execute({ command: new ToggleMarkerCommand(s(1)) });
+		expect(editor.sequences.isMarkered({ time: s(1) })).toBe(false);
 		toggle();
 		expect(markers()).toHaveLength(2);
 		await editor.sequences.updateMarker({
