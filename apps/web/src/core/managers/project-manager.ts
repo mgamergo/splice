@@ -15,7 +15,10 @@ import { UpdateProjectSettingsCommand } from "@/commands/project";
 import { DEFAULT_BACKGROUND_COLOR } from "@/background/color";
 import { DEFAULT_CANVAS_SIZE } from "@/canvas/sizes";
 import { DEFAULT_FPS } from "@/fps/defaults";
-import { buildDefaultSequence, getProjectDurationFromSequences } from "@/timeline/sequences";
+import {
+	buildDefaultSequence,
+	getProjectDurationFromSequences,
+} from "@/timeline/sequences";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { PROJECT_FORMAT_VERSION } from "@/services/storage/format";
@@ -42,12 +45,17 @@ export class ProjectManager {
 	constructor(private editor: EditorCore) {}
 
 	async createNewProject({ name }: { name: string }): Promise<string> {
-		const mainSequence = buildDefaultSequence({ name: "Main sequence", isMain: true });
+		const mainSequence = buildDefaultSequence({
+			name: "Main sequence",
+			isMain: true,
+		});
 		const newProject: TProject = {
 			metadata: {
 				id: generateUUID(),
 				name,
-				duration: getProjectDurationFromSequences({ sequences: [mainSequence] }),
+				duration: getProjectDurationFromSequences({
+					sequences: [mainSequence],
+				}),
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			},
@@ -67,6 +75,7 @@ export class ProjectManager {
 			version: PROJECT_FORMAT_VERSION,
 		};
 
+		this.resetCommandHistory();
 		this.active = newProject;
 		this.notify();
 
@@ -93,6 +102,7 @@ export class ProjectManager {
 			this.notify();
 		}
 
+		this.resetCommandHistory();
 		this.editor.save.pause();
 		this.editor.media.clearAllProjectItems();
 		this.editor.sequences.clearSequences();
@@ -148,22 +158,24 @@ export class ProjectManager {
 	}
 
 	async saveCurrentProject(): Promise<void> {
-		if (!this.active) return;
+		const project = this.active;
+		if (!project) return;
 
 		try {
 			const sequences = this.editor.sequences.getSequences();
 			const updatedProject = {
-				...this.active,
+				...project,
 				sequences,
 				metadata: {
-					...this.active.metadata,
+					...project.metadata,
 					duration: getProjectDurationFromSequences({ sequences }),
 					updatedAt: new Date(),
 				},
 			};
 
 			await storageService.saveProject({ project: updatedProject });
-			this.active = updatedProject;
+			// Edits made during this write belong to the pending save.
+			if (this.active === project) this.active = updatedProject;
 			this.updateMetadata(updatedProject);
 		} catch (error) {
 			console.error("Failed to save project:", error);
@@ -256,6 +268,7 @@ export class ProjectManager {
 				this.active && idSet.has(this.active.metadata.id);
 
 			if (shouldClearActive) {
+				this.resetCommandHistory();
 				this.active = null;
 				this.editor.media.clearAllProjectItems();
 				this.editor.sequences.clearSequences();
@@ -268,11 +281,17 @@ export class ProjectManager {
 	}
 
 	closeProject(): void {
+		this.resetCommandHistory();
 		this.active = null;
 		this.notify();
 
 		this.editor.media.clearAllProjectItems();
 		this.editor.sequences.clearSequences();
+	}
+
+	private resetCommandHistory(): void {
+		this.editor.command.clear();
+		this.editor.command.bumpRevision();
 	}
 
 	async renameProject({

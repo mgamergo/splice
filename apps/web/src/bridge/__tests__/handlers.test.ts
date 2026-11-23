@@ -56,4 +56,13 @@ describe("tab handlers", () => {
 		expect(editor.sequences.getActiveSequence().markers).toHaveLength(0);
 		expect(editor.command.getRevision()).toBe(0);
 	});
+	test("Stop blocks creation of Raw and Rough Cut while allowing take review", () => {
+		const { handlers } = setUp({ blocked: true });
+		expect(() => handlers["editor.rawSequence"]({})).toThrow(AgentBlockedError);
+		expect(() => handlers["editor.roughCut"]({})).toThrow(AgentBlockedError);
+		expect(handlers["editor.takesList"]({})).toMatchObject({
+			ok: true,
+			markers: [],
+		});
+	});
 });

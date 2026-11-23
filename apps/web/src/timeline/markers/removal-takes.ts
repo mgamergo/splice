@@ -1,4 +1,4 @@
-import type { TakeSourceRange } from "@splice/bridge/ops";
+import type { Take, TakePlacement, TakeSourceRange } from "@splice/bridge/ops";
 import type { ProjectItem } from "@/media/types";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import { buildSeparatedAudioClip } from "@/timeline/audio-separation";
@@ -23,7 +23,7 @@ import {
 
 export class RemovalTakeError extends Error {}
 
-export function resolveTake({
+function resolveSourceRange({
 	take,
 	projectItems,
 }: {
@@ -49,13 +49,30 @@ export function resolveTake({
 	return { item, sourceIn, sourceOut };
 }
 
-type ResolvedTake = ReturnType<typeof resolveTake>;
+export function takeRanges(take: Take): TakeSourceRange[] {
+	return "ranges" in take ? take.ranges : [take];
+}
+
+export function resolveTake({
+	take,
+	projectItems,
+}: {
+	take: Take;
+	projectItems: ProjectItem[];
+}) {
+	return takeRanges(take).map((range) =>
+		resolveSourceRange({ take: range, projectItems }),
+	);
+}
+
+type ResolvedRange = ReturnType<typeof resolveSourceRange>;
+type ResolvedTake = ResolvedRange[];
 
 function createTakeClip({
 	take,
 	at,
 }: {
-	take: ResolvedTake;
+	take: ResolvedRange;
 	at: MediaTime;
 }): VideoClip | AudioClip {
 	const sourceDuration = mediaTimeFromSeconds({
@@ -82,18 +99,20 @@ function createTakeClip({
 
 type AudioSegment = {
 	groupId: string | undefined;
+	separated: boolean;
 	start: MediaTime;
 	end: MediaTime;
 };
 
-type TakeWindow = {
+type RangeWindow = {
+	range: ResolvedRange;
 	start: MediaTime;
 	end: MediaTime;
+	sourceIn: number;
 	sourceOut: number;
 	trackId: string;
 	clipIds: string[];
 	audioSegments: AudioSegment[];
-	separated: boolean;
 };
 
 function findTakeWindows({
@@ -101,13 +120,15 @@ function findTakeWindows({
 	take,
 	markerId,
 	audioGroupIds,
+	complete,
 }: {
 	track: TimelineTrack;
-	take: ResolvedTake;
+	take: ResolvedRange;
 	markerId?: string;
 	audioGroupIds?: Set<string>;
-}): TakeWindow[] {
-	const windows: TakeWindow[] = [];
+	complete: boolean;
+}): RangeWindow[] {
+	const windows: RangeWindow[] = [];
 	for (const clip of [...track.clips].sort(
 		(a, b) => a.startTime - b.startTime,
 	)) {
@@ -122,17 +143,16 @@ function findTakeWindows({
 		)
 			continue;
 
-		const sourceIn = Math.max(clip.trimStart, take.sourceIn);
-		const sourceOut = Math.min(
+		const clipSourceOut =
 			clip.trimStart +
-				roundMediaTime({
-					time: getSourceSpanAtClipTime({
-						clipTime: clip.duration,
-						retime: clip.retime,
-					}),
+			roundMediaTime({
+				time: getSourceSpanAtClipTime({
+					clipTime: clip.duration,
+					retime: clip.retime,
 				}),
-			take.sourceOut,
-		);
+			});
+		const sourceIn = Math.max(clip.trimStart, take.sourceIn);
+		const sourceOut = Math.min(clipSourceOut, take.sourceOut);
 		if (sourceIn >= sourceOut) continue;
 
 		const toTimeline = (sourceTime: number) =>
@@ -145,7 +165,10 @@ function findTakeWindows({
 					}),
 			});
 		const start = toTimeline(sourceIn);
-		const end = toTimeline(sourceOut);
+		const end =
+			sourceOut === clipSourceOut
+				? roundMediaTime({ time: clip.startTime + clip.duration })
+				: toTimeline(sourceOut);
 		if (end <= start) continue;
 
 		const separated =
@@ -154,35 +177,122 @@ function findTakeWindows({
 		if (
 			previous &&
 			previous.end === start &&
-			previous.sourceOut <= sourceIn &&
-			previous.separated === separated
+			(complete
+				? previous.sourceOut === sourceIn
+				: previous.sourceOut <= sourceIn)
 		) {
 			previous.end = end;
 			previous.sourceOut = sourceOut;
 			previous.clipIds.push(clip.id);
 			const lastAudio = previous.audioSegments.at(-1);
-			if (lastAudio && lastAudio.groupId === clip.sourceAudioGroupId) {
+			if (
+				lastAudio &&
+				lastAudio.groupId === clip.sourceAudioGroupId &&
+				lastAudio.separated === separated
+			) {
 				lastAudio.end = end;
 			} else {
 				previous.audioSegments.push({
 					groupId: clip.sourceAudioGroupId,
+					separated,
 					start,
 					end,
 				});
 			}
 		} else {
 			windows.push({
+				range: take,
 				start,
 				end,
+				sourceIn,
 				sourceOut,
 				trackId: track.id,
 				clipIds: [clip.id],
-				audioSegments: [{ groupId: clip.sourceAudioGroupId, start, end }],
-				separated,
+				audioSegments: [
+					{ groupId: clip.sourceAudioGroupId, separated, start, end },
+				],
 			});
 		}
 	}
+	return complete
+		? windows.filter(
+				(window) =>
+					window.sourceIn === take.sourceIn &&
+					window.sourceOut === take.sourceOut,
+			)
+		: windows;
+}
+
+type TakeWindow = {
+	start: MediaTime;
+	end: MediaTime;
+	parts: RangeWindow[];
+};
+
+function takeWindows({
+	tracks,
+	take,
+	markerId,
+	complete = false,
+}: {
+	tracks: SequenceTracks;
+	take: ResolvedTake;
+	markerId?: string;
+	complete?: boolean;
+}): TakeWindow[] {
+	const [first, ...rest] = take;
+	if (!first) return [];
+	const forRange = (range: ResolvedRange) => {
+		const candidates =
+			range.item.type === "video"
+				? [
+						tracks.main,
+						...tracks.overlay.filter(({ type }) => type === "video"),
+					]
+				: tracks.audio;
+		return candidates.flatMap((track) =>
+			findTakeWindows({ track, take: range, markerId, complete }),
+		);
+	};
+	let windows = forRange(first).map((part) => ({
+		start: part.start,
+		end: part.end,
+		parts: [part],
+	}));
+	for (const range of rest) {
+		const next = forRange(range);
+		windows = windows.flatMap((window) =>
+			next
+				.filter((part) => part.start === window.end)
+				.map((part) => ({
+					...window,
+					end: part.end,
+					parts: [...window.parts, part],
+				})),
+		);
+	}
 	return windows;
+}
+
+/** Resolve a take only when its entire source maps to one contiguous window. */
+export function mapTakeToSequence({
+	tracks,
+	take,
+}: {
+	tracks: SequenceTracks;
+	take: ResolvedTake;
+}) {
+	const windows = takeWindows({ tracks, take, complete: true });
+	if (windows.length !== 1) {
+		throw new RemovalTakeError(
+			windows.length
+				? "The source ranges match multiple places in the sequence. Use an unambiguous source sequence."
+				: "The source ranges do not map to one contiguous run of clips. Check the source times and recording order.",
+		);
+	}
+	const { start, end, parts } = windows[0];
+	linkedAudioWindows({ tracks, parts });
+	return { start, end, clipIds: parts.flatMap((part) => part.clipIds) };
 }
 
 function mapTracks({
@@ -266,49 +376,82 @@ function spliceClips<Clip extends TimelineClip>({
 	});
 }
 
+type PlacedClip<Clip extends VideoClip | AudioClip> = {
+	clip: Clip;
+	trackId?: string;
+};
+
 function insertTakeClips({
 	tracks,
 	video,
 	audio,
-	videoTrackId,
-	audioTrackId,
 }: {
 	tracks: SequenceTracks;
-	video: VideoClip[];
-	audio: AudioClip[];
-	videoTrackId?: string;
-	audioTrackId?: string;
+	video: PlacedClip<VideoClip>[];
+	audio: PlacedClip<AudioClip>[];
 }): SequenceTracks {
-	const ordered = <Clip extends TimelineClip>(clips: Clip[]) =>
-		clips.sort((a, b) => a.startTime - b.startTime);
-	const videoTrack =
-		video.length > 0 && !videoTrackId
-			? buildEmptyTrack({ id: generateUUID(), type: "video" })
-			: null;
-	const audioTrack =
-		audio.length > 0 && !audioTrackId
-			? buildEmptyTrack({ id: generateUUID(), type: "audio" })
-			: null;
+	const atTrack = <Clip extends VideoClip | AudioClip>({
+		entries,
+		trackId,
+	}: {
+		entries: PlacedClip<Clip>[];
+		trackId?: string;
+	}) =>
+		entries
+			.filter((entry) => entry.trackId === trackId)
+			.map(({ clip }) => clip);
+	const put = <Track extends { clips: TimelineClip[] }>({
+		track,
+		clips,
+	}: {
+		track: Track;
+		clips: Track["clips"];
+	}): Track =>
+		clips.length
+			? {
+					...track,
+					clips: [...track.clips, ...clips].sort(
+						(a, b) => a.startTime - b.startTime,
+					),
+				}
+			: track;
+	const newVideo = atTrack({ entries: video });
+	const newAudio = atTrack({ entries: audio });
 	return {
-		main:
-			tracks.main.id === videoTrackId && video.length
-				? { ...tracks.main, clips: ordered([...tracks.main.clips, ...video]) }
-				: tracks.main,
+		main: put({
+			track: tracks.main,
+			clips: atTrack({ entries: video, trackId: tracks.main.id }),
+		}),
 		overlay: [
-			...(videoTrack ? [{ ...videoTrack, clips: video }] : []),
+			...(newVideo.length
+				? [
+						{
+							...buildEmptyTrack({ id: generateUUID(), type: "video" }),
+							clips: newVideo,
+						},
+					]
+				: []),
 			...tracks.overlay.map((track) =>
-				track.type === "video" && track.id === videoTrackId && video.length > 0
-					? { ...track, clips: ordered([...track.clips, ...video]) }
+				track.type === "video"
+					? put({
+							track,
+							clips: atTrack({ entries: video, trackId: track.id }),
+						})
 					: track,
 			),
 		],
 		audio: [
 			...tracks.audio.map((track) =>
-				track.id === audioTrackId && audio.length
-					? { ...track, clips: ordered([...track.clips, ...audio]) }
-					: track,
+				put({ track, clips: atTrack({ entries: audio, trackId: track.id }) }),
 			),
-			...(audioTrack ? [{ ...audioTrack, clips: audio }] : []),
+			...(newAudio.length
+				? [
+						{
+							...buildEmptyTrack({ id: generateUUID(), type: "audio" }),
+							clips: newAudio,
+						},
+					]
+				: []),
 		],
 	};
 }
@@ -325,7 +468,7 @@ export function restoreTakeClips({
 	const video: VideoClip[] = [];
 	const audio: AudioClip[] = [];
 	let end = at;
-	for (const take of takes) {
+	for (const take of takes.flat()) {
 		const clip = createTakeClip({ take, at: end });
 		if (clip.type === "video") video.push(clip);
 		else audio.push(clip);
@@ -339,10 +482,8 @@ export function restoreTakeClips({
 	return {
 		tracks: insertTakeClips({
 			tracks: shifted,
-			video,
-			audio,
-			videoTrackId: tracks.main.id,
-			audioTrackId: tracks.audio[0]?.id,
+			video: video.map((clip) => ({ clip, trackId: tracks.main.id })),
+			audio: audio.map((clip) => ({ clip, trackId: tracks.audio[0]?.id })),
 		}),
 		delta,
 	};
@@ -359,20 +500,13 @@ function nearestBestWindow({
 	best: ResolvedTake;
 	initialTolerance?: MediaTime;
 }): TakeWindow | undefined {
-	const videoTracks = [
-		tracks.main,
-		...tracks.overlay.filter((track) => track.type === "video"),
-	];
-	const takeTracks = best.item.type === "video" ? videoTracks : tracks.audio;
 	const distance = ({ start, end }: TakeWindow) =>
 		Math.max(start - marker.time, marker.time - end, 0);
-	const windows = takeTracks.flatMap((track) =>
-		findTakeWindows({
-			track,
-			take: best,
-			markerId: initialTolerance === undefined ? marker.id : undefined,
-		}),
-	);
+	const windows = takeWindows({
+		tracks,
+		take: best,
+		markerId: initialTolerance === undefined ? marker.id : undefined,
+	});
 	if (initialTolerance !== undefined) {
 		const nearby = windows.filter(
 			(window) => distance(window) <= initialTolerance,
@@ -387,35 +521,39 @@ function nearestBestWindow({
 		: nearest;
 }
 
-function alignedAudioWindow({
+function linkedAudioWindows({
 	tracks,
-	take,
-	window,
+	parts,
 }: {
 	tracks: SequenceTracks;
-	take: ResolvedTake;
-	window: TakeWindow;
-}): TakeWindow | undefined {
-	const audioGroupIds = new Set<string>();
-	for (const { groupId } of window.audioSegments) {
-		if (!groupId) return undefined;
-		audioGroupIds.add(groupId);
-	}
-	const matches = tracks.audio
-		.flatMap((track) => findTakeWindows({ track, take, audioGroupIds }))
-		.filter(
-			({ audioSegments }) =>
-				audioSegments.length === window.audioSegments.length &&
-				audioSegments.every(({ groupId, start, end }, index) => {
-					const expected = window.audioSegments[index];
-					return (
-						groupId === expected.groupId &&
-						start === expected.start &&
-						end === expected.end
+	parts: RangeWindow[];
+}): RangeWindow[] {
+	return parts.flatMap(({ range, audioSegments }) =>
+		audioSegments
+			.filter(({ separated }) => separated)
+			.map(({ groupId, start, end }) => {
+				const windows = groupId
+					? tracks.audio
+							.flatMap((track) =>
+								findTakeWindows({
+									track,
+									take: range,
+									audioGroupIds: new Set([groupId]),
+									complete: false,
+								}),
+							)
+							.filter(
+								(candidate) =>
+									candidate.start === start && candidate.end === end,
+							)
+					: [];
+				if (windows.length !== 1)
+					throw new RemovalTakeError(
+						"Align the extracted audio with the take before editing.",
 					);
-				}),
-		);
-	return matches.length === 1 ? matches[0] : undefined;
+				return windows[0];
+			}),
+	);
 }
 
 export function markBestTake({
@@ -430,8 +568,25 @@ export function markBestTake({
 	initialTolerance: MediaTime;
 }): SequenceTracks {
 	const window = nearestBestWindow({ tracks, marker, best, initialTolerance });
-	if (!window) return tracks;
-	const ids = new Set(window.clipIds);
+	return window
+		? tagBestTake({
+				tracks,
+				markerId: marker.id,
+				clipIds: window.parts.flatMap((part) => part.clipIds),
+			})
+		: tracks;
+}
+
+export function tagBestTake({
+	tracks,
+	markerId,
+	clipIds,
+}: {
+	tracks: SequenceTracks;
+	markerId: string;
+	clipIds: string[];
+}): SequenceTracks {
+	const ids = new Set(clipIds);
 	return mapTracks({
 		tracks,
 		map: (clips) =>
@@ -439,7 +594,7 @@ export function markBestTake({
 				ids.has(clip.id)
 					? {
 							...clip,
-							bestTakeMarkerIds: [...(clip.bestTakeMarkerIds ?? []), marker.id],
+							bestTakeMarkerIds: [...(clip.bestTakeMarkerIds ?? []), markerId],
 						}
 					: clip,
 			),
@@ -451,11 +606,13 @@ export function swapTakeClips({
 	marker,
 	best,
 	chosen,
+	chosenPlacements,
 }: {
 	tracks: SequenceTracks;
 	marker: RemovalMarker;
 	best: ResolvedTake;
 	chosen: ResolvedTake;
+	chosenPlacements?: TakePlacement[];
 }) {
 	const bestWindow = nearestBestWindow({ tracks, marker, best });
 	if (!bestWindow) {
@@ -464,54 +621,121 @@ export function swapTakeClips({
 		);
 	}
 
-	const { start, end, trackId, separated } = bestWindow;
-	const audioWindow = separated
-		? alignedAudioWindow({
-				tracks,
-				take: best,
-				window: bestWindow,
-			})
-		: undefined;
-	if (separated && !audioWindow) {
-		throw new RemovalTakeError(
-			"Align the extracted audio with the best take before swapping.",
-		);
+	const { start, end, parts } = bestWindow;
+	const videoParts = parts.filter(({ range }) => range.item.type === "video");
+	const audioParts = parts.filter(({ range }) => range.item.type === "audio");
+	const audioForVideo = new Map(
+		videoParts.map((part) => [
+			part,
+			linkedAudioWindows({ tracks, parts: [part] }),
+		]),
+	);
+	const linkedAudio = [...audioForVideo.values()].flat();
+
+	const windowsByTrack = new Map<string, RangeWindow[]>();
+	for (const part of [...parts, ...linkedAudio]) {
+		const windows = windowsByTrack.get(part.trackId) ?? [];
+		windows.push(part);
+		windowsByTrack.set(part.trackId, windows);
 	}
-	const replacement = {
-		...createTakeClip({ take: chosen, at: start }),
-		bestTakeMarkerIds: [marker.id],
-		sourceAudioGroupId:
-			separated &&
-			chosen.item.type === "video" &&
-			chosen.item.hasAudio !== false
-				? generateUUID()
-				: undefined,
-	};
-	const delta = replacement.duration - (end - start);
+
+	const video: PlacedClip<VideoClip>[] = [];
+	const audio: PlacedClip<AudioClip>[] = [];
+	let replacementEnd = start;
+	let videoIndex = 0;
+	let audioIndex = 0;
+	for (const [index, range] of chosen.entries()) {
+		const placement = chosenPlacements?.[index];
+		const clip = {
+			...createTakeClip({ take: range, at: replacementEnd }),
+			bestTakeMarkerIds: [marker.id],
+		};
+		replacementEnd = roundMediaTime({ time: replacementEnd + clip.duration });
+		if (clip.type === "audio") {
+			const partIndex = Math.min(audioIndex++, audioParts.length - 1);
+			const trackId =
+				tracks.audio.find(({ id }) => id === placement?.trackId)?.id ??
+				audioParts[partIndex]?.trackId ??
+				linkedAudio[0]?.trackId;
+			audio.push({ clip, trackId });
+			continue;
+		}
+		const partIndex = Math.min(videoIndex++, videoParts.length - 1);
+		const trackId =
+			[tracks.main, ...tracks.overlay].find(
+				({ id, type }) => id === placement?.trackId && type === "video",
+			)?.id ??
+			videoParts[partIndex]?.trackId ??
+			(tracks.main.clips.length === 0 ? tracks.main.id : undefined);
+		const audioTrackId =
+			placement && !placement.audioTrackId
+				? undefined
+				: (tracks.audio.find(({ id }) => id === placement?.audioTrackId)?.id ??
+					audioForVideo.get(videoParts[partIndex])?.[0]?.trackId ??
+					linkedAudio[0]?.trackId);
+		if (audioTrackId && range.item.hasAudio !== false) {
+			const paired = {
+				...clip,
+				isSourceAudioEnabled: false,
+				sourceAudioGroupId: generateUUID(),
+			};
+			video.push({ clip: paired, trackId });
+			audio.push({
+				clip: {
+					...buildSeparatedAudioClip({ sourceClip: paired }),
+					id: generateUUID(),
+				},
+				trackId: audioTrackId,
+			});
+		} else {
+			video.push({ clip, trackId });
+		}
+	}
+
+	const delta = replacementEnd - end;
 	const shifted = mapTracks({
 		tracks,
 		map: (clips, id) => {
-			if (id === trackId || id === audioWindow?.trackId) {
-				return spliceClips({ clips, start, end, delta });
-			}
-			const precedingEnd = clips.reduce<number>(
+			const windows = windowsByTrack.get(id) ?? [];
+			const remaining = windows.reduce(
+				(current, part) =>
+					spliceClips({
+						clips: current,
+						start: part.start,
+						end: part.end,
+						delta: 0,
+					}),
+				clips,
+			);
+			const precedingEnd = remaining.reduce<number>(
 				(latest, clip) =>
 					clip.startTime < end
 						? Math.max(latest, clip.startTime + clip.duration)
 						: latest,
 				ZERO_MEDIA_TIME,
 			);
-			const firstFollowing = clips.reduce(
+			const firstFollowing = remaining.reduce(
 				(earliest, clip) =>
 					clip.startTime >= end ? Math.min(earliest, clip.startTime) : earliest,
 				Infinity,
 			);
-			if (firstFollowing + delta < precedingEnd) {
+			const insertions = [...video, ...audio].filter(
+				({ trackId }) => trackId === id,
+			);
+			const insertionOverlaps = insertions.some(({ clip: insert }) =>
+				remaining.some(
+					(clip) =>
+						clip.startTime < end &&
+						clip.startTime < insert.startTime + insert.duration &&
+						insert.startTime < clip.startTime + clip.duration,
+				),
+			);
+			if (insertionOverlaps || firstFollowing + delta < precedingEnd) {
 				throw new RemovalTakeError(
 					"Swapping would overlap clips on another track.",
 				);
 			}
-			return clips.map((clip) =>
+			return remaining.map((clip) =>
 				clip.startTime < end
 					? clip
 					: {
@@ -522,40 +746,23 @@ export function swapTakeClips({
 		},
 	});
 
-	const video =
-		replacement.type === "video"
-			? [
-					{
-						...replacement,
-						isSourceAudioEnabled: !separated || chosen.item.hasAudio === false,
-					},
-				]
-			: [];
-	const audio =
-		replacement.type === "audio"
-			? [replacement]
-			: audioWindow && chosen.item.hasAudio !== false
-				? [
-						{
-							...buildSeparatedAudioClip({ sourceClip: replacement }),
-							id: generateUUID(),
-						},
-					]
-				: [];
+	const spansTracks =
+		new Set(parts.map(({ trackId }) => trackId)).size > 1 ||
+		new Set(linkedAudio.map(({ trackId }) => trackId)).size > 1;
 	return {
+		previousPlacements: spansTracks
+			? parts.map((part): TakePlacement => {
+					const audioTrackId = audioForVideo.get(part)?.[0]?.trackId;
+					return {
+						trackId: part.trackId,
+						...(audioTrackId ? { audioTrackId } : {}),
+					};
+				})
+			: null,
 		tracks: insertTakeClips({
 			tracks: clearBestTake({ tracks: shifted, markerId: marker.id }),
 			video,
 			audio,
-			videoTrackId:
-				best.item.type === "video"
-					? trackId
-					: shifted.main.clips.length === 0
-						? shifted.main.id
-						: undefined,
-			audioTrackId:
-				audioWindow?.trackId ??
-				(best.item.type === "audio" ? trackId : undefined),
 		}),
 		start,
 		end,

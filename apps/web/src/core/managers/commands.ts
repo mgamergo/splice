@@ -1,11 +1,16 @@
 import type { EditorCore } from "@/core";
-import type { Command, CommandResult } from "@/commands";
+import {
+	type Command,
+	type CommandResult,
+	createClipSelectionResult,
+} from "@/commands/base-command";
 import type { EditorSelectionSnapshot } from "@/selection/editor-selection";
 import { applyRippleAdjustments, computeRippleAdjustments } from "@/ripple";
 import type { SequenceTracks } from "@/timeline/types";
 
 interface CommandHistoryEntry {
 	command: Command;
+	sequenceId: string | undefined;
 	previousSelection: EditorSelectionSnapshot;
 	selectionOverride?: EditorSelectionSnapshot;
 }
@@ -22,6 +27,7 @@ export class CommandManager {
 	constructor(private editor: EditorCore) {}
 
 	execute({ command }: { command: Command }): Command {
+		const sequenceId = this.editor.sequences.getActiveSequenceOrNull()?.id;
 		const beforeTracks = this.shouldRipple({ command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
@@ -32,6 +38,7 @@ export class CommandManager {
 		this.runReactors();
 		this.history.push({
 			command,
+			sequenceId,
 			previousSelection,
 			selectionOverride,
 		});
@@ -43,6 +50,7 @@ export class CommandManager {
 	push({ command }: { command: Command }): void {
 		this.history.push({
 			command,
+			sequenceId: this.editor.sequences.getActiveSequenceOrNull()?.id,
 			previousSelection: this.getSelectionSnapshot(),
 		});
 		this.redoStack = [];
@@ -57,8 +65,9 @@ export class CommandManager {
 	undo(): void {
 		if (this.history.length === 0) return;
 		const entry = this.history.pop();
-		entry?.command.undo();
 		if (entry) {
+			this.activateHistorySequence({ sequenceId: entry.sequenceId });
+			entry.command.undo();
 			// Only restore selection for commands that explicitly changed it.
 			// Commands without selection intent leave selection untouched,
 			// preserving any UI-driven selection changes (clicks, box select)
@@ -81,6 +90,7 @@ export class CommandManager {
 			return;
 		}
 
+		this.activateHistorySequence({ sequenceId: entry.sequenceId });
 		const beforeTracks = this.shouldRipple({ command: entry.command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
 			: null;
@@ -92,10 +102,26 @@ export class CommandManager {
 
 		this.history.push({
 			command: entry.command,
+			sequenceId: entry.sequenceId,
 			previousSelection,
 			selectionOverride,
 		});
 		this.bumpRevision();
+	}
+
+	private activateHistorySequence({
+		sequenceId,
+	}: {
+		sequenceId: string | undefined;
+	}): void {
+		const manager = this.editor.sequences;
+		if (!sequenceId || manager.getActiveSequenceOrNull()?.id === sequenceId)
+			return;
+		const sequences = manager.getSequences();
+		// A sequence-deletion command may restore its target during undo.
+		if (!sequences.some(({ id }) => id === sequenceId)) return;
+		manager.setSequences({ sequences, activeSequenceId: sequenceId });
+		this.applySelectionOverride(createClipSelectionResult([]));
 	}
 
 	private shouldRipple({ command }: { command: Command }): boolean {
@@ -123,7 +149,7 @@ export class CommandManager {
 		return () => this.revisionListeners.delete(listener);
 	}
 
-	private bumpRevision(): void {
+	bumpRevision(): void {
 		this.revision++;
 		for (const listener of this.revisionListeners) {
 			listener(this.revision);

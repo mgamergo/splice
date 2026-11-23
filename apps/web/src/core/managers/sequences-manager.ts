@@ -53,7 +53,9 @@ export class SequencesManager {
 			throw new Error("Sequence not found");
 		}
 
-		const { canDelete, reason } = canDeleteSequence({ sequence: sequenceToDelete });
+		const { canDelete, reason } = canDeleteSequence({
+			sequence: sequenceToDelete,
+		});
 		if (!canDelete) {
 			throw new Error(reason);
 		}
@@ -84,7 +86,11 @@ export class SequencesManager {
 		this.editor.command.execute({ command });
 	}
 
-	async switchToSequence({ sequenceId }: { sequenceId: string }): Promise<void> {
+	async switchToSequence({
+		sequenceId,
+	}: {
+		sequenceId: string;
+	}): Promise<void> {
 		const targetSequence = this.list.find((s) => s.id === sequenceId);
 
 		if (!targetSequence) {
@@ -106,8 +112,10 @@ export class SequencesManager {
 			this.editor.project.setActiveProject({ project: updatedProject });
 		}
 
+		const changed = this.active?.id !== targetSequence.id;
 		this.active = targetSequence;
 		this.notify();
+		if (changed) this.editor.command.bumpRevision();
 	}
 
 	async toggleMarker({ time }: { time: MediaTime }): Promise<void> {
@@ -171,7 +179,11 @@ export class SequencesManager {
 		});
 	}
 
-	async loadProjectSequences({ projectId }: { projectId: string }): Promise<void> {
+	async loadProjectSequences({
+		projectId,
+	}: {
+		projectId: string;
+	}): Promise<void> {
 		try {
 			const result = await storageService.loadProject({ id: projectId });
 			if (result?.project.sequences) {
@@ -262,7 +274,8 @@ export class SequencesManager {
 		this.list = sequences;
 		const nextActiveSequenceId = activeSequenceId ?? this.active?.id ?? null;
 		this.active = nextActiveSequenceId
-			? (sequences.find((sequence) => sequence.id === nextActiveSequenceId) ?? null)
+			? (sequences.find((sequence) => sequence.id === nextActiveSequenceId) ??
+				null)
 			: null;
 		this.notify();
 
@@ -271,6 +284,7 @@ export class SequencesManager {
 			const updatedProject = {
 				...activeProject,
 				sequences,
+				currentSequenceId: this.active?.id ?? activeProject.currentSequenceId,
 				metadata: {
 					...activeProject.metadata,
 					updatedAt: new Date(),
