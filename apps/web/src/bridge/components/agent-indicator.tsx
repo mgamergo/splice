@@ -1,25 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/ui";
 import { useAgentBridgeStore } from "../bridge-store";
-
-const EDITING_WINDOW_MS = 2_000;
-
-function useIsAgentEditing(): boolean {
-	const lastEditAt = useAgentBridgeStore((state) => state.lastEditAt);
-	const [expiredEditAt, setExpiredEditAt] = useState<number | null>(null);
-	useEffect(() => {
-		if (lastEditAt === null) return;
-		const timer = setTimeout(
-			() => setExpiredEditAt(lastEditAt),
-			EDITING_WINDOW_MS,
-		);
-		return () => clearTimeout(timer);
-	}, [lastEditAt]);
-	return lastEditAt !== null && expiredEditAt !== lastEditAt;
-}
 
 const LABELS = {
 	connecting: "Connecting to Splice…",
@@ -41,7 +24,7 @@ export function AgentIndicator() {
 	const status = useAgentBridgeStore((state) => state.status);
 	const blocked = useAgentBridgeStore((state) => state.blocked);
 	const setBlocked = useAgentBridgeStore((state) => state.setBlocked);
-	const editing = useIsAgentEditing();
+	const editing = useAgentBridgeStore((state) => state.agentEditing);
 
 	if (status === "unavailable") return null;
 
@@ -72,7 +55,10 @@ export function AgentIndicator() {
 							"bg-destructive",
 					)}
 				/>
-				<span className="text-muted-foreground" role="status">
+				<span
+					className="text-muted-foreground sr-only md:not-sr-only"
+					role="status"
+				>
 					{label}
 				</span>
 			</span>
@@ -80,10 +66,12 @@ export function AgentIndicator() {
 				<Button
 					variant="outline"
 					size="sm"
-					className="h-7 px-2 text-xs"
+					className="h-7 gap-1 px-2 text-xs"
+					aria-label={blocked ? "Allow agent" : "Stop agent"}
 					onClick={() => setBlocked(!blocked)}
 				>
-					{blocked ? "Allow agent" : "Stop agent"}
+					{blocked ? "Allow" : "Stop"}
+					<span className="hidden sm:inline">agent</span>
 				</Button>
 			)}
 		</div>
