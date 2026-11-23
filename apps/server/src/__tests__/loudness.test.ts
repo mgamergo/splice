@@ -14,6 +14,7 @@ import {
 	parseEbur128Summary,
 	planSourceGains,
 	runEbur128,
+	UnmeasurableError,
 } from "../loudness";
 
 const noRenders = {
@@ -335,11 +336,21 @@ test("plans one gain per measurable source and says why others were skipped", as
 				clipIds: ["f"],
 				ranges: [{ start: 0, end: 1 }],
 			},
+			{
+				projectItemId: "damaged",
+				path: "damaged.mov",
+				noiseReduction: false,
+				missing: false,
+				clipIds: ["g"],
+				ranges: [{ start: 0, end: 1 }],
+			},
 		],
 		measure: async (request) => {
 			measured.push(request);
 			if (request.path === "deleted.wav")
 				throw new MissingFootageError("Gone since the editor checked.");
+			if (request.path === "damaged.mov")
+				throw new UnmeasurableError("ffmpeg exited with 183.");
 			return request.path === "quiet.wav"
 				? { integratedLufs: -28, truePeakDbtp: -12.5, lraLu: 5 }
 				: { integratedLufs: null, truePeakDbtp: null, lraLu: 0 };
@@ -361,6 +372,11 @@ test("plans one gain per measurable source and says why others were skipped", as
 			ranges: [{ start: 0, end: 1 }],
 			noiseReduction: false,
 		},
+		{
+			path: "damaged.mov",
+			ranges: [{ start: 0, end: 1 }],
+			noiseReduction: false,
+		},
 	]);
 	expect(plan.sourceGains).toEqual([{ projectItemId: "quiet", gainDb: 11.45 }]);
 	expect(
@@ -371,10 +387,28 @@ test("plans one gain per measurable source and says why others were skipped", as
 		"Silent.",
 		expect.stringContaining("Missing from Footage"),
 		expect.stringContaining("Missing from Footage"),
+		"Couldn't be measured: ffmpeg exited with 183.",
 	]);
 	expect(plan.sources[0]).toMatchObject({
 		gain: { gainDb: 11.45, limitedBy: "true_peak", expectedLufs: -16.5 },
 	});
+	// Anything else, such as a refused request or a lost connection, stops the plan.
+	await expect(
+		planSourceGains({
+			audioSources: [
+				{
+					projectItemId: "quiet",
+					path: "quiet.wav",
+					missing: false,
+					clipIds: ["a"],
+					ranges: [{ start: 0, end: 1 }],
+				},
+			],
+			measure: async () => {
+				throw new Error("No splice running");
+			},
+		}),
+	).rejects.toThrow("No splice running");
 });
 
 // Real FFmpeg, on generated audio. Skipped where FFmpeg isn't installed.

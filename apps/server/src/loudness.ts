@@ -215,6 +215,9 @@ export function loudnessGain({
 /** The Footage file a measurement asked for isn't there. */
 export class MissingFootageError extends Error {}
 
+/** `splice` couldn't measure the recording, for example a damaged file. */
+export class UnmeasurableError extends Error {}
+
 export type MeasureLoudness = (request: {
 	path: string;
 	ranges: SourceRange[];
@@ -270,6 +273,17 @@ export async function planSourceGains({
 		try {
 			measured = await measure({ path, ranges, noiseReduction });
 		} catch (error) {
+			// One recording that can't be measured keeps its level; the rest
+			// are still normalized.
+			if (error instanceof UnmeasurableError) {
+				sources.push({
+					projectItemId,
+					path,
+					noiseReduction,
+					skipped: `Couldn't be measured: ${error.message}`,
+				});
+				continue;
+			}
 			if (!(error instanceof MissingFootageError)) throw error;
 			sources.push({ projectItemId, path, noiseReduction, skipped: MISSING });
 			continue;
@@ -321,8 +335,11 @@ async function audioOnly({
 		.digest("hex");
 	const audio = join(cacheDir, `audio-${key}.mka`);
 	if (await access(audio).then(() => true, () => false)) return audio;
-	const partial = `${audio}.${process.pid}.partial`;
+	// Each copy is written in its own folder, then moved into place whole, so
+	// measurements of the same recording never share a half-written file.
+	const job = await mkdtemp(join(cacheDir, ".audio-"));
 	try {
+		const partial = join(job, "audio.mka");
 		await run({
 			command,
 			args: [
@@ -337,14 +354,16 @@ async function audioOnly({
 				"copy",
 				"-f",
 				"matroska",
-				"-y",
 				partial,
 			],
 			signal,
 		});
-		await rename(partial, audio);
+		await rename(partial, audio).catch(async (error) => {
+			// Another measurement published the same copy first.
+			if (!(await access(audio).then(() => true, () => false))) throw error;
+		});
 	} finally {
-		await rm(partial, { force: true });
+		await rm(job, { recursive: true, force: true });
 	}
 	return audio;
 }
