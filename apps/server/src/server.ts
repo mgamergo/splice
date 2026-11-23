@@ -6,6 +6,7 @@ import {
 	parseRpcMessage,
 	RPC_ERRORS,
 	SERVER_NAME,
+	SESSION_COOKIE,
 	TAB_CLOSE_CODES,
 	TAB_HELLO,
 	type RpcId,
@@ -13,6 +14,13 @@ import {
 	type ServerStatus,
 } from "@splice/bridge";
 import type { Server, ServerWebSocket } from "bun";
+import {
+	FOOTAGE_FOLDER,
+	listFootage,
+	mediaTypeForPath,
+	resolveFootagePath,
+	serveFile,
+} from "./footage";
 import { tokensMatch } from "./session";
 import { BridgeError, TabBridge } from "./tab-bridge";
 
@@ -89,6 +97,20 @@ export function isAllowedHost({
 	return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
+function readCookie({
+	request,
+	name,
+}: {
+	request: Request;
+	name: string;
+}): string | null {
+	for (const part of (request.headers.get("cookie") ?? "").split(";")) {
+		const [key, ...rest] = part.trim().split("=");
+		if (key === name) return rest.join("=");
+	}
+	return null;
+}
+
 export function isAllowedOrigin({
 	origin,
 	port,
@@ -147,6 +169,21 @@ export function startServer({
 			);
 		}
 		const { id, method, params } = message;
+		if (method === "footage.list") {
+			try {
+				return Response.json(
+					rpcResult({ id, result: await listFootage({ root }) }),
+				);
+			} catch (error) {
+				return Response.json(
+					rpcError({
+						id,
+						code: RPC_ERRORS.INTERNAL,
+						message: `Couldn't list ${root}/${FOOTAGE_FOLDER}: ${error instanceof Error ? error.message : String(error)}`,
+					}),
+				);
+			}
+		}
 		if (isServerMethod(method)) {
 			const status: ServerStatus = {
 				tabConnected: bridge.isConnected(),
@@ -165,7 +202,12 @@ export function startServer({
 			);
 		}
 		try {
-			const result = await bridge.call({ method, params });
+			const result = await bridge.call({
+				method,
+				params,
+				// Importing probes every file, which can take minutes for long recordings.
+				timeoutMs: method === "editor.importItems" ? 10 * 60_000 : undefined,
+			});
 			return Response.json(rpcResult({ id, result }));
 		} catch (error) {
 			if (error instanceof BridgeError) {
@@ -180,6 +222,84 @@ export function startServer({
 			}
 			throw error;
 		}
+	}
+
+	/** Whether a request carries the token, as a bearer token or the session cookie. */
+	function isAuthorized(request: Request): boolean {
+		const auth = request.headers.get("authorization");
+		if (auth?.startsWith("Bearer ")) {
+			return tokensMatch({
+				expected: token,
+				actual: auth.slice("Bearer ".length),
+			});
+		}
+		return tokensMatch({
+			expected: token,
+			actual: readCookie({ request, name: SESSION_COOKIE }),
+		});
+	}
+
+	/** Trades the tab's token for an HttpOnly cookie, so media elements can load footage. */
+	function handleSession({
+		request,
+		port: actualPort,
+	}: {
+		request: Request;
+		port: number;
+	}): Response {
+		if (request.method !== "POST") {
+			return new Response("Method not allowed", { status: 405 });
+		}
+		if (
+			!isAllowedOrigin({
+				origin: request.headers.get("origin"),
+				port: actualPort,
+			})
+		) {
+			return new Response("Forbidden", { status: 403 });
+		}
+		if (!isAuthorized(request)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+		return new Response(null, {
+			status: 204,
+			headers: {
+				"set-cookie": `${SESSION_COOKIE}=${token}; Path=/splice; HttpOnly; SameSite=Strict`,
+			},
+		});
+	}
+
+	async function handleMedia({
+		request,
+		url,
+	}: {
+		request: Request;
+		url: URL;
+	}): Promise<Response> {
+		if (request.method !== "GET" && request.method !== "HEAD") {
+			return new Response("Method not allowed", { status: 405 });
+		}
+		if (!isAuthorized(request)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+		let path: string;
+		try {
+			path = url.pathname
+				.slice(BRIDGE_PATHS.media.length)
+				.split("/")
+				.map((segment) => decodeURIComponent(segment))
+				.join("/");
+		} catch {
+			return new Response("Bad path", { status: 400 });
+		}
+		const contentType = mediaTypeForPath(path);
+		const absolutePath = contentType
+			? await resolveFootagePath({ root, path })
+			: null;
+		if (!contentType || !absolutePath) {
+			return new Response("Not found", { status: 404 });
+		}
+		return serveFile({ request, absolutePath, contentType });
 	}
 
 	async function proxy({
@@ -334,6 +454,12 @@ export function startServer({
 			}
 			if (url.pathname === BRIDGE_PATHS.rpc) {
 				return handleRpc(request);
+			}
+			if (url.pathname === BRIDGE_PATHS.session) {
+				return handleSession({ request, port: actualPort });
+			}
+			if (url.pathname.startsWith(BRIDGE_PATHS.media)) {
+				return handleMedia({ request, url });
 			}
 			if (url.pathname.startsWith("/splice/")) {
 				return new Response("Not found", { status: 404 });

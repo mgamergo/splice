@@ -11,6 +11,7 @@ import {
 	useAgentBridgeStore,
 } from "./bridge-store";
 import { createTabHandlers } from "./handlers";
+import { ensureMediaSession } from "./media-session";
 import { captureBridgeToken, readBridgeToken } from "./token";
 
 /** The highest revision any tab of this editor has used, so revisions only grow across reloads. */
@@ -44,6 +45,7 @@ export function useAgentBridge(): void {
 			store.setStatus("unavailable");
 			return;
 		}
+		void ensureMediaSession();
 		const editor = EditorCore.getInstance();
 		const api = new EditorApi(editor);
 		const scheme = window.location.protocol === "https:" ? "wss" : "ws";
@@ -95,5 +97,6 @@ export function useAgentBridge(): void {
 export function useCaptureBridgeToken(): void {
 	useEffect(() => {
 		captureBridgeToken();
+		void ensureMediaSession();
 	}, []);
 }

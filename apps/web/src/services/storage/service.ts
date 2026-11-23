@@ -1,6 +1,8 @@
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
-import type { ProjectItem } from "@/media/types";
+import { mediaUrlForPath } from "@splice/bridge";
+import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
+import type { DiskMedia, ProjectItem } from "@/media/types";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
 import { OPFSAdapter } from "./opfs-adapter";
 import {
@@ -46,6 +48,44 @@ function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
 			};
 		})
 		.filter((b): b is Marker => b !== null);
+}
+
+/**
+ * Rebuilds a disk item from its stored path. A file that left the Footage folder
+ * still loads, marked missing, so its clips stay in the sequence until it's relinked.
+ */
+async function loadDiskProjectItem({
+	metadata,
+	diskPath,
+}: {
+	metadata: ProjectItemData;
+	diskPath: string;
+}): Promise<ProjectItem> {
+	const probed = await probeDiskMedia({ path: diskPath }).catch(() => null);
+	const file: DiskMedia = probed ?? {
+		kind: "disk",
+		path: diskPath,
+		url: mediaUrlForPath(diskPath),
+		name: metadata.name,
+		type: "application/octet-stream",
+		size: metadata.size,
+		lastModified: metadata.lastModified,
+	};
+	return {
+		id: metadata.id,
+		name: metadata.name,
+		type: metadata.type,
+		file,
+		url: file.url,
+		width: metadata.width,
+		height: metadata.height,
+		duration: metadata.duration,
+		fps: metadata.fps,
+		hasAudio: metadata.hasAudio,
+		thumbnailUrl: metadata.thumbnailUrl,
+		ephemeral: metadata.ephemeral,
+		missing: probed === null,
+	};
 }
 
 class StorageService {
@@ -298,14 +338,26 @@ class StorageService {
 			width: projectItem.width,
 			height: projectItem.height,
 			duration: projectItem.duration,
+			fps: projectItem.fps,
+			hasAudio: projectItem.hasAudio,
 			thumbnailUrl: projectItem.thumbnailUrl,
 			ephemeral: projectItem.ephemeral,
 		};
 
+		const data = projectItem.file;
+		if (isDiskMedia(data)) {
+			// The file stays on disk; only its path and metadata are stored.
+			await mediaMetadataAdapter.set({
+				key: projectItem.id,
+				value: { ...metadata, diskPath: data.path },
+			});
+			return;
+		}
+
 		try {
 			await projectItemsAdapter.set({
 				key: projectItem.id,
-				value: projectItem.file,
+				value: data,
 			});
 			await mediaMetadataAdapter.set({
 				key: projectItem.id,
@@ -320,7 +372,7 @@ class StorageService {
 
 			if (this.isQuotaExceededError({ error })) {
 				throw new StorageQuotaExceededError({
-					requiredBytes: projectItem.file.size,
+					requiredBytes: data.size,
 				});
 			}
 
@@ -338,10 +390,11 @@ class StorageService {
 		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
-		const [file, metadata] = await Promise.all([
-			projectItemsAdapter.get(id),
-			mediaMetadataAdapter.get(id),
-		]);
+		const metadata = await mediaMetadataAdapter.get(id);
+		if (metadata?.diskPath) {
+			return loadDiskProjectItem({ metadata, diskPath: metadata.diskPath });
+		}
+		const file = await projectItemsAdapter.get(id);
 
 		if (!file || !metadata) return null;
 
@@ -371,6 +424,8 @@ class StorageService {
 			width: metadata.width,
 			height: metadata.height,
 			duration: metadata.duration,
+			fps: metadata.fps,
+			hasAudio: metadata.hasAudio,
 			thumbnailUrl: metadata.thumbnailUrl,
 			ephemeral: metadata.ephemeral,
 		};

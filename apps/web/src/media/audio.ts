@@ -6,7 +6,7 @@ import type {
 	SequenceTracks,
 } from "@/timeline";
 import { shouldMaintainPitch } from "@/retime/rate";
-import type { ProjectItem } from "@/media/types";
+import type { MediaData, ProjectItem } from "@/media/types";
 import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
 import type { AudioCapableClip } from "@/timeline/audio-state";
 import {
@@ -19,7 +19,8 @@ import { canClipHaveAudio, hasMediaId } from "@/timeline/clip-utils";
 import { canTrackHaveAudio } from "@/timeline";
 import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
-import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
+import { Input, ALL_FORMATS, AudioBufferSink } from "mediabunny";
+import { createMediaSource, isDiskMedia } from "@/media/media-data";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	computeRmsBuckets,
@@ -252,7 +253,8 @@ async function resolveAudioBufferForProjectItem({
 	projectItem: ProjectItem;
 	audioContext: AudioContext;
 }): Promise<AudioBuffer | null> {
-	if (projectItem.type === "audio") {
+	// Uploaded audio decodes in one go; long recordings on disk stream through mediabunny.
+	if (projectItem.type === "audio" && !isDiskMedia(projectItem.file)) {
 		try {
 			const arrayBuffer = await projectItem.file.arrayBuffer();
 			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
@@ -263,7 +265,7 @@ async function resolveAudioBufferForProjectItem({
 	}
 
 	const input = new Input({
-		source: new BlobSource(projectItem.file),
+		source: createMediaSource(projectItem.file),
 		formats: ALL_FORMATS,
 	});
 
@@ -340,7 +342,7 @@ async function resolveAudioBufferForProjectItem({
 
 interface AudioMixSource {
 	timelineClip: AudioCapableClip;
-	file: File;
+	file: MediaData;
 	startTime: number;
 	duration: number;
 	trimStart: number;
@@ -353,7 +355,7 @@ export interface AudioClipSource {
 	timelineClip: AudioCapableClip;
 	id: string;
 	sourceKey: string;
-	file: File;
+	file: MediaData;
 	startTime: number;
 	duration: number;
 	trimStart: number;

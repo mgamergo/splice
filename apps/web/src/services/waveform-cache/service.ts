@@ -3,13 +3,17 @@
 import { createAudioContext } from "@/media/audio";
 import {
 	buildSourceWaveformSummary,
+	buildStreamedWaveformSummary,
 	type SourceWaveformSummary,
 } from "@/media/waveform-summary";
+import { createMediaSource, isDiskMedia } from "@/media/media-data";
+import type { MediaData } from "@/media/types";
+import { ALL_FORMATS, AudioBufferSink, Input } from "mediabunny";
 
 interface GetSourceWaveformSummaryArgs {
 	sourceKey: string;
 	audioBuffer?: AudioBuffer;
-	sourceFile?: File;
+	sourceFile?: MediaData;
 	audioUrl?: string;
 }
 
@@ -59,6 +63,10 @@ export class WaveformCache {
 			return buildSourceWaveformSummary({ sourceKey, buffer: audioBuffer });
 		}
 
+		if (sourceFile && isDiskMedia(sourceFile)) {
+			return buildDiskWaveformSummary({ sourceKey, source: sourceFile });
+		}
+
 		let arrayBuffer: ArrayBuffer | null = null;
 		if (sourceFile) {
 			arrayBuffer = await sourceFile.arrayBuffer();
@@ -81,6 +89,31 @@ export class WaveformCache {
 		} finally {
 			void audioContext.close();
 		}
+	}
+}
+
+async function buildDiskWaveformSummary({
+	sourceKey,
+	source,
+}: {
+	sourceKey: string;
+	source: MediaData;
+}): Promise<SourceWaveformSummary> {
+	const input = new Input({ source: createMediaSource(source), formats: ALL_FORMATS });
+	try {
+		const track = await input.getPrimaryAudioTrack();
+		if (!track) {
+			throw new Error(`No audio track in ${sourceKey}`);
+		}
+		const sink = new AudioBufferSink(track);
+		async function* chunks() {
+			for await (const { buffer } of sink.buffers()) {
+				yield buffer;
+			}
+		}
+		return await buildStreamedWaveformSummary({ sourceKey, chunks: chunks() });
+	} finally {
+		input.dispose();
 	}
 }
 

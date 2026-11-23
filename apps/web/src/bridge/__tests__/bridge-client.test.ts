@@ -110,10 +110,11 @@ describe("AgentBridgeClient", () => {
 		expect(statuses).toEqual(["connecting", "connected"]);
 	});
 
-	test("answers requests through the handlers", () => {
+	test("answers requests through the handlers", async () => {
 		const { connect } = setUp();
 		const socket = connect();
 		socket.receive({ jsonrpc: "2.0", id: 9, method: "editor.getState" });
+		await Bun.sleep(0);
 		expect(socket.sent.at(-1)).toEqual({
 			jsonrpc: "2.0",
 			id: 9,
@@ -121,7 +122,7 @@ describe("AgentBridgeClient", () => {
 		});
 	});
 
-	test("reports a stopped agent as AGENT_BLOCKED", () => {
+	test("reports a stopped agent as AGENT_BLOCKED", async () => {
 		const { connect } = setUp({
 			"editor.apply": () => {
 				throw new AgentBlockedError();
@@ -134,16 +135,18 @@ describe("AgentBridgeClient", () => {
 			method: "editor.apply",
 			params: {},
 		});
+		await Bun.sleep(0);
 		expect(socket.sent.at(-1)).toMatchObject({
 			id: 1,
 			error: { code: RPC_ERRORS.AGENT_BLOCKED },
 		});
 	});
 
-	test("refuses methods the tab doesn't offer", () => {
+	test("refuses methods the tab doesn't offer", async () => {
 		const { connect } = setUp();
 		const socket = connect();
 		socket.receive({ jsonrpc: "2.0", id: 1, method: "fs.read" });
+		await Bun.sleep(0);
 		expect(socket.sent.at(-1)).toMatchObject({
 			id: 1,
 			error: { code: RPC_ERRORS.METHOD_NOT_FOUND },

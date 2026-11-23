@@ -10,6 +10,10 @@ export const BRIDGE_PATHS = {
 	rpc: "/splice/rpc",
 	/** Unauthenticated liveness check. */
 	health: "/splice/health",
+	/** The tab posts its token here to get the cookie that authorizes media requests. */
+	session: "/splice/session",
+	/** Prefix for files under the Footage folder: `/splice/media/<path>`. */
+	media: "/splice/media/",
 } as const;
 
 /** The URL fragment key that hands the bridge token to the editor tab. */
@@ -18,7 +22,12 @@ export const TOKEN_FRAGMENT_KEY = "splice-token";
 export const SERVER_NAME = "splice";
 
 /** Methods the server forwards to the editor tab. */
-export const TAB_METHODS = ["editor.getState", "editor.apply"] as const;
+export const TAB_METHODS = [
+	"editor.getState",
+	"editor.apply",
+	"editor.listItems",
+	"editor.importItems",
+] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 
 export function isTabMethod(method: string): method is TabMethod {
@@ -26,7 +35,7 @@ export function isTabMethod(method: string): method is TabMethod {
 }
 
 /** Methods the server answers itself. */
-export const SERVER_METHODS = ["server.status"] as const;
+export const SERVER_METHODS = ["server.status", "footage.list"] as const;
 export type ServerMethod = (typeof SERVER_METHODS)[number];
 
 export function isServerMethod(method: string): method is ServerMethod {
@@ -47,6 +56,41 @@ export interface EditorState {
 	digest: string;
 }
 
+/** The cookie that authorizes `/splice/media/*` requests from the editor tab. */
+export const SESSION_COOKIE = "splice_session";
+
+/** The URL of a file under Footage, for a path relative to that folder with forward slashes. */
+export function mediaUrlForPath(path: string): string {
+	return `${BRIDGE_PATHS.media}${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** A file under the Footage folder, as `footage.list` reports it. */
+export interface FootageFile {
+	/** Relative to the Footage folder, with forward slashes. */
+	path: string;
+	size: number;
+	modifiedAt: string;
+	contentType: string;
+}
+
+/** A project item as `editor.listItems` reports it. */
+export interface ItemSummary {
+	id: string;
+	name: string;
+	type: "video" | "audio" | "image";
+	/** Seconds. */
+	duration: number | null;
+	/** Set for items that reference a file under Footage. */
+	path: string | null;
+	/** The file is no longer in Footage. */
+	missing: boolean;
+}
+
+export interface ImportItemsResult {
+	imported: ItemSummary[];
+	failed: Array<{ path: string; error: string }>;
+}
+
 export interface ServerStatus {
 	tabConnected: boolean;
 	/** The last revision the tab reported, or null before it reported one. */
@@ -58,6 +102,7 @@ export const RPC_ERRORS = {
 	PARSE_ERROR: -32700,
 	INVALID_REQUEST: -32600,
 	METHOD_NOT_FOUND: -32601,
+	INVALID_PARAMS: -32602,
 	TAB_NOT_CONNECTED: -32001,
 	TAB_TIMEOUT: -32002,
 	TAB_DISCONNECTED: -32003,

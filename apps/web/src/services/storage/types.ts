@@ -27,6 +27,8 @@ export interface ProjectItemData {
 	hasAudio?: boolean;
 	ephemeral?: boolean;
 	thumbnailUrl?: string;
+	/** Set for items that reference a file under Footage instead of a stored copy. */
+	diskPath?: string;
 }
 
 export type SerializedSequence = Omit<TSequence, "createdAt" | "updatedAt"> & {

@@ -14,6 +14,7 @@ import { getBarFractionFromOutputAmplitude } from "@/timeline/audio-display";
 import { waveformCache } from "@/services/waveform-cache/service";
 import { findScrollParent } from "@/utils/browser";
 import { cn } from "@/utils/ui";
+import type { MediaData } from "@/media/types";
 
 const BAR_WIDTH = 1;
 const BAR_GAP = 1;
@@ -43,7 +44,7 @@ function sampleGainAtClipTime({
 
 interface AudioWaveformProps {
 	sourceKey: string;
-	sourceFile?: File;
+	sourceFile?: MediaData;
 	audioUrl?: string;
 	audioBuffer?: AudioBuffer;
 	gainSamples?: number[];

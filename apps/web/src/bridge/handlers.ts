@@ -1,8 +1,18 @@
-import type { EditorState, TabMethod } from "@splice/bridge";
+import type { EditorState, ItemSummary, TabMethod } from "@splice/bridge";
+import { z } from "zod";
 import type { EditorApi } from "@/agent/editor-api";
 import type { EditorCore } from "@/core";
+import { importDiskItems, summarizeItem } from "@/media/import-disk";
 
 export type TabHandlers = Record<TabMethod, (params: unknown) => unknown>;
+
+/** Thrown for malformed params; the bridge reports it as INVALID_PARAMS. */
+export class InvalidParamsError extends Error {}
+
+const importItemsSchema = z.strictObject({
+	/** Paths relative to the Footage folder, with forward slashes. */
+	paths: z.array(z.string().min(1)).min(1).max(200),
+});
 
 /** Thrown when the creator has pressed Stop; the bridge reports it as AGENT_BLOCKED. */
 export class AgentBlockedError extends Error {
@@ -39,6 +49,20 @@ export function createTabHandlers({
 				throw new AgentBlockedError();
 			}
 			return api.apply(params);
+		},
+		"editor.listItems": (): ItemSummary[] =>
+			editor.media.getProjectItems().map(summarizeItem),
+		"editor.importItems": (params) => {
+			if (isBlocked()) {
+				throw new AgentBlockedError();
+			}
+			const parsed = importItemsSchema.safeParse(params);
+			if (!parsed.success) {
+				throw new InvalidParamsError(
+					parsed.error.issues.map((issue) => issue.message).join("; "),
+				);
+			}
+			return importDiskItems({ editor, paths: parsed.data.paths });
 		},
 	};
 }

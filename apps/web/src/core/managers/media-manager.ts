@@ -94,6 +94,13 @@ export class MediaManager {
 			});
 			this.projectItems = projectItems;
 			this.notify();
+			const missing = projectItems.filter((item) => item.missing);
+			if (missing.length > 0) {
+				toast.warning(
+					`${missing.length} project ${missing.length === 1 ? "item is" : "items are"} missing from the Footage folder`,
+					{ description: missing.map((item) => item.name).join(", ") },
+				);
+			}
 		} catch (error) {
 			console.error("Failed to load project items:", error);
 		} finally {
