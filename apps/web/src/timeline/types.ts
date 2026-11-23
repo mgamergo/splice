@@ -2,7 +2,7 @@ import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
-import type { RemovalMarkerData } from "@splice/bridge/ops";
+import type { CaptionsRequest, RemovalMarkerData } from "@splice/bridge/ops";
 import type { MediaTime } from "@/wasm";
 
 export type ClipRef = {
@@ -32,6 +32,8 @@ export interface TSequence {
 	isMain: boolean;
 	tracks: SequenceTracks;
 	markers: Marker[];
+	/** Transcript words and style the Captions track is rebuilt from. */
+	captions?: CaptionsRequest;
 	createdAt: Date;
 	updatedAt: Date;
 }
@@ -221,9 +223,7 @@ export type VisualClip = Extract<
 
 export type CreateUploadAudioClip = Omit<UploadAudioClip, "id">;
 export type CreateLibraryAudioClip = Omit<LibraryAudioClip, "id">;
-export type CreateAudioClip =
-	| CreateUploadAudioClip
-	| CreateLibraryAudioClip;
+export type CreateAudioClip = CreateUploadAudioClip | CreateLibraryAudioClip;
 export type CreateVideoClip = Omit<VideoClip, "id">;
 export type CreateImageClip = Omit<ImageClip, "id">;
 export type CreateTextClip = Omit<TextClip, "id">;

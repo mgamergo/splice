@@ -9,6 +9,7 @@ import {
 	findFfmpeg,
 	parseHasAudio,
 	probeRecording,
+	SOURCE_TIMELINE_FILTER,
 	run,
 } from "./transcription-tools";
 
@@ -21,7 +22,7 @@ const SCAN_MIN_SILENCE_SECONDS = 0.1;
 /** A sound between two silences that is shorter than this and holds no word is a click, not speech. */
 const BRIDGE_SECONDS = 0.12;
 /** Bump when cached pause semantics change. */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 export const FILLER_WORDS: ReadonlySet<string> = new Set([
 	"um",
@@ -83,10 +84,11 @@ export function silencedetectArgs({
 		"-hide_banner",
 		"-loglevel",
 		"info",
-		"-nostats",
 		...ffmpegInputArgs({ source }),
+		"-map",
+		"0:a:0",
 		"-af",
-		`silencedetect=noise=${noiseDb}dB:duration=${SCAN_MIN_SILENCE_SECONDS}`,
+		`${SOURCE_TIMELINE_FILTER},silencedetect=noise=${noiseDb}dB:duration=${SCAN_MIN_SILENCE_SECONDS}`,
 		"-f",
 		"null",
 		"-",

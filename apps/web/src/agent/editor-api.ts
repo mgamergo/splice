@@ -5,18 +5,29 @@ import {
 	sequenceDurationSeconds,
 } from "@/agent/rough-cut";
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
+import { CaptionError, withCaptionTrack } from "@/agent/captions";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
-	rawSequenceRequestSchema,
-	roughCutPlanSchema,
-	roughCutSourcesRequestSchema,
-	takesListRequestSchema,
-} from "@splice/bridge/ops";
+	applySourceGains,
+	collectAudioSources,
+	formatGain,
+	LoudnessError,
+} from "@/agent/loudness";
+import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
+import { canClipHaveAudio } from "@/timeline/clip-utils";
+import { hasAnimatedVolume } from "@/timeline/audio-state";
 import { buildSequenceDigest } from "@/agent/digest";
 import type { RoughCutSources } from "@splice/bridge";
 import {
 	type ApplyRequest,
 	applyRequestSchema,
+	addCaptionsRequestSchema,
+	audioSourcesRequestSchema,
 	type EditOp,
+	rawSequenceRequestSchema,
+	roughCutSourcesRequestSchema,
+	roughCutTabRequestSchema,
+	takesListRequestSchema,
 } from "@splice/bridge/ops";
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
@@ -198,12 +209,18 @@ export class EditorApi {
 	}
 
 	roughCut(request: unknown) {
-		const parsed = roughCutPlanSchema.safeParse(request);
+		const parsed = roughCutTabRequestSchema.safeParse(request);
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const conflict = this.checkWrite(parsed.data);
 		if (conflict) return conflict;
-		const { label = "Agent: rough cut", ...plan } = parsed.data;
-		const source = this.findRoughCutSource(plan);
+		const {
+			label = "Agent: rough cut",
+			captions,
+			plan,
+			sourceGains,
+			...request
+		} = parsed.data;
+		const source = this.findRoughCutSource(request);
 		if ("ok" in source) return source;
 		const names = new Set(
 			this.editor.sequences.getSequences().map(({ name }) => name),
@@ -212,23 +229,106 @@ export class EditorApi {
 		for (let suffix = 2; names.has(name); suffix++)
 			name = `Rough Cut ${suffix}`;
 		try {
+			const projectItems = this.editor.media.getProjectItems();
 			const cut = buildRoughCut({
 				source,
 				name,
-				plan,
-				projectItems: this.editor.media.getProjectItems(),
+				plan: request,
+				projectItems,
 				sliverDuration: resolveTimeSpec({
 					spec: { frame: 2 },
 					fps: this.editor.project.getActive().settings.fps,
 				}),
 			});
+			// A plan builds the same cut without applying it, so `splice` can
+			// measure what it keeps and send the gains with the same revision.
+			if (plan)
+				return {
+					ok: true as const,
+					revision: this.getRevision(),
+					audioSources: collectAudioSources({
+						tracks: cut.sequence.tracks,
+						projectItems,
+					}),
+				};
+			const tracks = sourceGains
+				? applySourceGains({
+						tracks: cut.sequence.tracks,
+						projectItems,
+						gains: sourceGains,
+					})
+				: cut.sequence.tracks;
+			const captioned = captions
+				? withCaptionTrack({
+						tracks,
+						captions,
+						canvasSize: this.editor.project.getActive().settings.canvasSize,
+					})
+				: null;
+			const sequence = captioned
+				? { ...cut.sequence, tracks: captioned.tracks, captions }
+				: sourceGains
+					? { ...cut.sequence, tracks }
+					: cut.sequence;
 			return {
-				...this.addPreparedSequence({ sequence: cut.sequence, label }),
+				...this.addPreparedSequence({ sequence, label }),
 				sections: cut.sections,
 				tightening: cut.tightening,
+				...(captioned && {
+					captionCount: captioned.captionCount,
+					uncaptionedItemIds: captioned.uncaptionedItemIds,
+				}),
 			};
 		} catch (error) {
-			if (!(error instanceof RemovalTakeError)) throw error;
+			if (
+				!(error instanceof RemovalTakeError) &&
+				!(error instanceof LoudnessError) &&
+				!(error instanceof CaptionError)
+			)
+				throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	/** Replaces the sequence's Captions track with word-by-word captions. */
+	addCaptions(request: unknown) {
+		const parsed = addCaptionsRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const { sequenceId, sources, style } = parsed.data;
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			);
+		try {
+			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
+				tracks: sequence.tracks,
+				captions: { sources, style },
+				canvasSize: this.editor.project.getActive().settings.canvasSize,
+			});
+			const label = "Agent: captions";
+			this.editor.command.execute({
+				command: new UpdateSequenceCommand({
+					editor: this.editor,
+					sequenceId: sequence.id,
+					updates: { tracks, captions: { sources, style } },
+					label,
+				}),
+			});
+			return {
+				ok: true as const,
+				sequenceId: sequence.id,
+				revision: this.getRevision(),
+				label,
+				captionCount,
+				uncaptionedItemIds,
+			};
+		} catch (error) {
+			if (!(error instanceof CaptionError)) throw error;
 			return this.invalidOp(error.message);
 		}
 	}
@@ -261,6 +361,28 @@ export class EditorApi {
 						]
 					: [],
 			),
+		};
+	}
+
+	audioSources(request: unknown) {
+		const parsed = audioSourcesRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const { sequenceId } = parsed.data;
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			);
+		return {
+			ok: true as const,
+			sequenceId: sequence.id,
+			revision: this.getRevision(),
+			audioSources: collectAudioSources({
+				tracks: sequence.tracks,
+				projectItems: this.editor.media.getProjectItems(),
+			}),
 		};
 	}
 
@@ -485,6 +607,29 @@ export class EditorApi {
 				return {
 					command: new AddMarkerCommand({ marker: fields }),
 					description: `added marker at ${formatSeconds({ time: at })}`,
+				};
+			}
+			case "set_gain": {
+				const clips = this.findClipRefs({
+					tracks: sequence.tracks,
+					clipIds: op.clipIds,
+				});
+				const updates = clips.map(({ trackId, clipId, clip }) => {
+					if (!canClipHaveAudio(clip))
+						throw new InvalidOpError(`set_gain: clip ${clipId} has no audio`);
+					if (hasAnimatedVolume({ clip }))
+						throw new InvalidOpError(
+							`set_gain: clip ${clipId} has volume keyframes, which a gain would not override`,
+						);
+					return {
+						trackId,
+						clipId,
+						patch: { params: { ...clip.params, volume: op.gainDb } },
+					};
+				});
+				return {
+					command: new UpdateClipsCommand({ updates }),
+					description: `set ${clips.length} clip(s) to ${formatGain(op.gainDb)}`,
 				};
 			}
 			case "restore_takes":

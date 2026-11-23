@@ -1,4 +1,5 @@
 import type { FrameRate } from "opencut-wasm";
+import type { ProjectFormat } from "@splice/bridge";
 import type { TSequence } from "@/timeline/types";
 import type { MediaTime } from "@/wasm";
 
@@ -27,6 +28,8 @@ export interface TProjectMetadata {
 }
 
 export interface TProjectSettings {
+	/** Chosen at creation. Projects saved before formats existed are horizontal. */
+	format?: ProjectFormat;
 	fps: FrameRate;
 	canvasSize: TCanvasSize;
 	canvasSizeMode?: "preset" | "custom";

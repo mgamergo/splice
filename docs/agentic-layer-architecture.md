@@ -163,7 +163,7 @@ Built on the official MCP TypeScript SDK, over stdio. The tools:
 | Project | `project_create` (format: horizontal or Short), `project_open`, `project_list` |
 | Project items | `items_import` (paths under `D:\Splice\Footage`), `items_list`, `items_probe` |
 | Read | `sequence_get` (digest or full), `frame_render` |
-| Edit | `sequence_apply` (a batch of `EditOp`s) |
+| Edit | `sequence_apply` (a batch of `EditOp`s), `normalize_loudness` |
 | Analysis | `transcribe`, `detect_pauses`, `measure_loudness` |
 | Rough cut | `rough_cut` (the whole pipeline in §5, as one undo step), `takes_list` |
 | Profile | `profile_get`, `profile_pending`, `profile_apply` |

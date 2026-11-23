@@ -80,7 +80,7 @@ test("parses silencedetect output, clamping negative starts and closing a silenc
 		"-map",
 		"0:a:0",
 		"-af",
-		"silencedetect=noise=-40dB:duration=0.1",
+		"aresample=async=1:first_pts=0,silencedetect=noise=-40dB:duration=0.1",
 		"-f",
 		"null",
 		"-",

@@ -1,4 +1,4 @@
-import type { RoughCutPlan, SourceRange } from "@splice/bridge/ops";
+import type { RoughCutPlan, ItemRange } from "@splice/bridge/ops";
 import {
 	closeSlivers,
 	countOverlapping,
@@ -97,9 +97,9 @@ function clampToItems({
 	ranges,
 	projectItems,
 }: {
-	ranges: SourceRange[];
+	ranges: ItemRange[];
 	projectItems: ProjectItem[];
-}): SourceRange[] {
+}): ItemRange[] {
 	return ranges.map((range) => {
 		const duration = projectItems.find(
 			({ id }) => id === range.projectItemId,
@@ -118,7 +118,7 @@ function mapSourceRanges({
 	context,
 }: {
 	tracks: TSequence["tracks"];
-	ranges: SourceRange[];
+	ranges: ItemRange[];
 	projectItems: ProjectItem[];
 	context: string;
 }): Window[][] {
@@ -210,7 +210,7 @@ export function buildRoughCut({
 		ranges,
 		context,
 	}: {
-		ranges: SourceRange[];
+		ranges: ItemRange[];
 		context: string;
 	}) =>
 		mapSourceRanges({ tracks: source.tracks, ranges, projectItems, context });

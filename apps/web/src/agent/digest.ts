@@ -1,7 +1,9 @@
+import { formatGain } from "@/agent/loudness";
 import { formatSeconds } from "@/agent/time";
+import { projectFormat } from "@/project/format";
 import type { TProject } from "@/project/types";
 import { getSourceSpanAtClipTime } from "@/retime";
-import { isRetimableClip } from "@/timeline";
+import { canClipHaveAudio, isRetimableClip } from "@/timeline";
 import type { TimelineClip, TSequence } from "@/timeline";
 import { addMediaTime, roundMediaTime } from "@/wasm";
 
@@ -17,6 +19,13 @@ function describeClip({ clip }: { clip: TimelineClip }): string {
 		});
 		const sourceEnd = addMediaTime({ a: clip.trimStart, b: sourceSpan });
 		text += ` (src ${formatSeconds({ time: clip.trimStart })}–${formatSeconds({ time: sourceEnd })})`;
+	}
+	const volume = canClipHaveAudio(clip) ? clip.params.volume : undefined;
+	if (typeof volume === "number" && volume !== 0)
+		text += ` gain ${formatGain(volume)}`;
+	if (clip.type === "text") {
+		const content = String(clip.params.content ?? "").replace(/\s+/g, " ");
+		text += ` ${JSON.stringify(content.length > 40 ? `${content.slice(0, 39)}…` : content)}`;
 	}
 	return `${text}]`;
 }
@@ -37,13 +46,18 @@ export function buildSequenceDigest({
 }): string {
 	const { canvasSize, fps } = project.settings;
 	const lines = [
-		`project "${project.metadata.name}" ${canvasSize.width}x${canvasSize.height} @${fps.numerator / fps.denominator}fps, revision ${revision}`,
+		`project "${project.metadata.name}" ${projectFormat({ project })} ${canvasSize.width}x${canvasSize.height} @${fps.numerator / fps.denominator}fps, revision ${revision}`,
 		`sequence "${sequence.name}" (${sequence.id})`,
 	];
-	const videoTracks = [sequence.tracks.main, ...[...sequence.tracks.overlay].reverse()];
+	const videoTracks = [
+		sequence.tracks.main,
+		...[...sequence.tracks.overlay].reverse(),
+	];
 	videoTracks.forEach((track, index) => {
 		const clips = track.clips.map((clip) => describeClip({ clip })).join(" ");
-		lines.push(`V${index + 1} ${track.type} (${track.id}): ${clips || "(empty)"}`);
+		lines.push(
+			`V${index + 1} ${track.type} (${track.id}): ${clips || "(empty)"}`,
+		);
 	});
 	sequence.tracks.audio.forEach((track, index) => {
 		const clips = track.clips.map((clip) => describeClip({ clip })).join(" ");

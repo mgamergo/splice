@@ -1,4 +1,4 @@
-import type { SourceRange } from "@splice/bridge/ops";
+import type { ItemRange } from "@splice/bridge/ops";
 
 interface Span {
 	start: number;
@@ -26,18 +26,18 @@ export function planTightenCuts({
 	fillerWords,
 	paddingSeconds,
 }: {
-	pauses: SourceRange[];
-	falseStarts: SourceRange[];
-	fillerWords: SourceRange[];
+	pauses: ItemRange[];
+	falseStarts: ItemRange[];
+	fillerWords: ItemRange[];
 	paddingSeconds: number;
-}): SourceRange[] {
+}): ItemRange[] {
 	const itemIds = new Set(
 		[...pauses, ...falseStarts, ...fillerWords].map(
 			({ projectItemId }) => projectItemId,
 		),
 	);
 	return [...itemIds].flatMap((projectItemId) => {
-		const of = (ranges: SourceRange[]) =>
+		const of = (ranges: ItemRange[]) =>
 			ranges.filter((range) => range.projectItemId === projectItemId);
 		const silences = of(pauses);
 		const inside = (at: number) =>

@@ -23,7 +23,7 @@ const sourceOutMessage = {
 	message: "Source out must be after source in",
 };
 
-const sourceRangeSchema = z
+const itemRangeSchema = z
 	.strictObject(sourceRangeFields)
 	.refine(sourceOutAfterIn, sourceOutMessage);
 
@@ -53,6 +53,11 @@ const takeSchema = z.union([
 const takePlacementSchema = z.strictObject({
 	trackId: z.string().min(1),
 	audioTrackId: z.string().min(1).optional(),
+	/**
+	 * The clip volume in dB the take played at when it was swapped out, so it
+	 * keeps its recording's gain even once no other clip of that recording is left.
+	 */
+	volume: z.number().optional(),
 });
 
 export const removalMarkerDataSchema = z.strictObject({
@@ -65,6 +70,18 @@ export const removalMarkerDataSchema = z.strictObject({
 		.array(z.array(takePlacementSchema).nullable())
 		.optional(),
 });
+
+/** Clip volume bounds in dB, matching the editor's volume control. */
+export const CLIP_GAIN_DB = { min: -60, max: 20 } as const;
+export const DEFAULT_TARGET_LUFS = -14;
+/** Normalization never pushes the measured true peak above this. */
+export const MAX_TRUE_PEAK_DBTP = -1;
+
+const gainDbSchema = z
+	.number()
+	.min(CLIP_GAIN_DB.min)
+	.max(CLIP_GAIN_DB.max)
+	.describe("Clip volume in dB; 0 plays the source at its own level");
 
 export const editOpSchema = z.discriminatedUnion("op", [
 	z.strictObject({
@@ -103,6 +120,11 @@ export const editOpSchema = z.discriminatedUnion("op", [
 		markerId: z.string().min(1),
 		takeIndex: z.number().int().nonnegative(),
 	}),
+	z.strictObject({
+		op: z.literal("set_gain"),
+		clipIds: z.array(z.string().min(1)).min(1),
+		gainDb: gainDbSchema,
+	}),
 ]);
 
 export const applyRequestSchema = z.strictObject({
@@ -136,6 +158,60 @@ export const rawSequenceRequestSchema = z.strictObject({
 		.describe("Project item IDs in recording order, earliest first"),
 });
 
+const targetLufs = z
+	.number()
+	.min(-40)
+	.max(-5)
+	.optional()
+	.describe(
+		`Integrated loudness target in LUFS. Defaults to ${DEFAULT_TARGET_LUFS}.`,
+	);
+const captionWordSchema = z.strictObject({
+	start: z.number().nonnegative(),
+	end: z.number().nonnegative(),
+	text: z.string(),
+});
+
+/** Source-relative word timings of one recording, from its transcript. */
+const captionSourceSchema = z.strictObject({
+	projectItemId: z.string().min(1),
+	words: z.array(captionWordSchema).max(200_000),
+});
+
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use #rrggbb");
+
+export const captionStyleSchema = z.strictObject({
+	wordsPerCaption: z
+		.number()
+		.int()
+		.min(1)
+		.max(8)
+		.optional()
+		.describe("Most words shown at once (default 3)"),
+	fontFamily: z.string().min(1).max(100).optional(),
+	fontSize: z
+		.number()
+		.positive()
+		.max(40)
+		.optional()
+		.describe("Editor text units, relative to the canvas height (default 8)"),
+	color: hexColor.optional().describe("Text color (default #ffffff)"),
+	background: z
+		.union([hexColor, z.literal("none")])
+		.optional()
+		.describe('Box behind the words, or "none" (default #000000)'),
+	position: z
+		.enum(["top", "middle", "bottom"])
+		.optional()
+		.describe("Vertical placement (default bottom, clear of the Shorts UI)"),
+	uppercase: z.boolean().optional(),
+});
+
+export const captionsRequestSchema = z.strictObject({
+	sources: z.array(captionSourceSchema).min(1),
+	style: captionStyleSchema.optional(),
+});
+
 export const DEFAULT_PAUSE_PADDING_SECONDS = 0.2;
 
 const roughCutBaseSchema = z.strictObject({
@@ -163,7 +239,7 @@ const roughCutBaseSchema = z.strictObject({
 			"Sections with retakes. Omit or pass [] when nothing was retaken.",
 		),
 	falseStarts: z
-		.array(sourceRangeSchema)
+		.array(itemRangeSchema)
 		.default([])
 		.describe(
 			"Abandoned phrases to cut, in source seconds: from the false start's first word to the first word of its restart. Whisper's word times drift by up to half a second, so when a pause from detect_pauses sits next to an edge, put the edge inside that pause: Splice snaps it to the pause and keeps the breath padding.",
@@ -178,10 +254,65 @@ const roughCutBaseSchema = z.strictObject({
 		),
 });
 
+const sourceGainSchema = z.strictObject({
+	projectItemId: z.string().min(1),
+	gainDb: gainDbSchema,
+});
+
+export const audioSourcesRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Sequence to inspect. Defaults to the active sequence."),
+});
+
+export const normalizeLoudnessRequestSchema = z.strictObject({
+	expectedRevision,
+	targetLufs,
+	label: applyRequestSchema.shape.label.optional(),
+});
+
+export const sourceRangeSchema = z
+	.strictObject({
+		start: z.number().nonnegative().describe("Source seconds"),
+		end: z.number().positive().describe("Source seconds"),
+	})
+	.refine((range) => range.end > range.start, {
+		path: ["end"],
+		message: "End must be after start",
+	});
+
+/** The audible audio of one project item in a sequence, in source seconds. */
+export const audioSourceSchema = z.strictObject({
+	projectItemId: z.string(),
+	/** The Footage path, or null for items stored in the browser. */
+	path: z.string().nullable(),
+	/** The file has left Footage, so playback skips it until it's relinked. */
+	missing: z.boolean(),
+	clipIds: z.array(z.string()),
+	/**
+	 * Source ranges, one per clip in the order they play, so repeated audio
+	 * counts each time and joins are measured as heard.
+	 */
+	ranges: z.array(sourceRangeSchema),
+});
+
+export const addCaptionsRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Sequence to caption. Defaults to the active sequence."),
+	expectedRevision,
+	...captionsRequestSchema.shape,
+});
+
+/** What the agent sends to `rough_cut`. `splice` resolves pauses and fillers before the tab sees it. */
 /** What the agent sends to `rough_cut`. `splice` resolves pauses and fillers before the tab sees it. */
 export const roughCutRequestSchema = roughCutBaseSchema.extend({
 	pauses: z
-		.union([z.literal("auto"), z.array(sourceRangeSchema)])
+		.union([z.literal("auto"), z.array(itemRangeSchema)])
 		.default("auto")
 		.describe(
 			'"auto" (the default) removes the pauses detect_pauses finds in every recording on the source sequence. Or pass silence ranges with project item IDs, or [] to keep every pause.',
@@ -199,12 +330,44 @@ export const roughCutRequestSchema = roughCutBaseSchema.extend({
 		.describe(
 			"Also cut English filler words (um, uh, erm…) found in the cached transcripts. Off by default.",
 		),
+	loudness: z
+		.union([z.strictObject({ targetLufs }), z.literal(false)])
+		.optional()
+		.describe(
+			`Normalizes each recording's kept audio to ${DEFAULT_TARGET_LUFS} LUFS, or targetLufs, in the same undo step. Pass false to keep source levels.`,
+		),
+	captions: captionsRequestSchema
+		.optional()
+		.describe(
+			"Word timings for burned-in captions. splice mcp fills this for Short projects.",
+		),
 });
 
-/** What the tab applies: every tightening range is explicit. */
+/**
+ * Lets `splice mcp` build the cut in two passes. With `plan`, the tab builds
+ * the cut without applying it and returns its audio sources, so `splice` can
+ * measure them and send `sourceGains` with the same request.
+ */
+const roughCutPassFields = {
+	plan: z.boolean().optional(),
+	sourceGains: z.array(sourceGainSchema).optional(),
+};
+
+/** What `splice mcp` sends `splice` for `editor.roughCut`: loudness is already measured. */
+export const roughCutCallSchema = roughCutRequestSchema
+	.omit({ loudness: true })
+	.extend(roughCutPassFields);
+
+/** The cut itself, with every tightening range explicit. */
 export const roughCutPlanSchema = roughCutBaseSchema.extend({
-	pauses: z.array(sourceRangeSchema).default([]),
-	fillerWords: z.array(sourceRangeSchema).default([]),
+	pauses: z.array(itemRangeSchema).default([]),
+	fillerWords: z.array(itemRangeSchema).default([]),
+});
+
+/** What `splice` sends the tab for `editor.roughCut`. */
+export const roughCutTabRequestSchema = roughCutPlanSchema.extend({
+	captions: captionsRequestSchema.optional(),
+	...roughCutPassFields,
 });
 
 export const roughCutSourcesRequestSchema = roughCutBaseSchema.pick({
@@ -245,8 +408,13 @@ export type TakePlacement = z.infer<typeof takePlacementSchema>;
 export type Take = z.infer<typeof takeSchema>;
 export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
 export type RoughCutPlan = z.infer<typeof roughCutPlanSchema>;
-export type SourceRange = z.infer<typeof sourceRangeSchema>;
+export type ItemRange = z.infer<typeof itemRangeSchema>;
 export type RoughCutSources = z.infer<typeof roughCutSourcesSchema>;
+export type SourceGain = z.infer<typeof sourceGainSchema>;
+export type SourceRange = z.infer<typeof sourceRangeSchema>;
+export type AudioSource = z.infer<typeof audioSourceSchema>;
+export type CaptionStyle = z.infer<typeof captionStyleSchema>;
+export type CaptionsRequest = z.infer<typeof captionsRequestSchema>;
 
 export type TakeSourceRange = z.infer<typeof takeSourceRangeSchema>;
 export type RemovalMarkerData = z.infer<typeof removalMarkerDataSchema>;

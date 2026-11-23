@@ -318,3 +318,44 @@ test.skipIf(!ffmpeg)(
 		}
 	},
 );
+
+test("transcript words come from the cache and skip paths without one instead of failing", async () => {
+	const root = await mkdtemp(join(tmpdir(), "splice-words-"));
+	const jobs = createTranscriptionJobs({
+		root,
+		extract: async () => 9.7,
+		createTools: () => ({
+			async transcribe() {
+				return { value: whisperOutput, backend: "cpu" };
+			},
+		}),
+	});
+	try {
+		await mkdir(join(root, "Footage", "Day 1"), { recursive: true });
+		await writeFile(join(root, "Footage", source), "placeholder");
+		await writeFile(join(root, "Footage", "logo.png"), "png");
+		await writeFile(join(root, "Footage", "untranscribed.mp4"), "video");
+		await jobs.start({ path: source, waitSeconds: 5 });
+		const result = await jobs.words({
+			paths: [source, "logo.png", "untranscribed.mp4", "gone.mp4"],
+		});
+		expect(result.missing).toEqual([
+			"logo.png",
+			"untranscribed.mp4",
+			"gone.mp4",
+		]);
+		expect(result.transcripts).toHaveLength(1);
+		expect(result.transcripts[0].path).toBe(source);
+		expect(result.transcripts[0].words).toContainEqual(
+			expect.objectContaining({ text: expect.stringContaining("blue") }),
+		);
+		await expect(
+			jobs.words({ paths: ["../escape.mp4"] }),
+		).rejects.toMatchObject({
+			code: RPC_ERRORS.INVALID_PARAMS,
+		});
+	} finally {
+		await jobs.stop();
+		await rm(root, { force: true, recursive: true });
+	}
+});

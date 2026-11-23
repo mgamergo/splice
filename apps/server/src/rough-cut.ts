@@ -1,5 +1,5 @@
 import type { RoughCutSources } from "@splice/bridge";
-import { roughCutRequestSchema, type SourceRange } from "@splice/bridge/ops";
+import { type ItemRange, roughCutCallSchema } from "@splice/bridge/ops";
 import type { PauseDetector } from "./pauses";
 
 type Failure = Extract<RoughCutSources, { ok: false }>;
@@ -22,7 +22,7 @@ export async function resolveRoughCutRequest({
 	detect: PauseDetector["detect"];
 	fillerCuts: PauseDetector["fillerCuts"];
 }): Promise<{ plan: unknown } | { result: Failure }> {
-	const parsed = roughCutRequestSchema.safeParse(params);
+	const parsed = roughCutCallSchema.safeParse(params);
 	if (!parsed.success) return { plan: params };
 	const { pauses, pauseDetection, removeFillerWords, ...plan } = parsed.data;
 	if (pauses !== "auto" && !removeFillerWords)
@@ -39,8 +39,8 @@ export async function resolveRoughCutRequest({
 		},
 	});
 
-	const detected: SourceRange[] = [];
-	const fillerWords: SourceRange[] = [];
+	const detected: ItemRange[] = [];
+	const fillerWords: ItemRange[] = [];
 	for (const item of sources.items) {
 		if (!item.path)
 			return failure(

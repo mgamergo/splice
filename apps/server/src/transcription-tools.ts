@@ -134,21 +134,33 @@ export function run({
 	});
 }
 
-/** Reads only local files in the container formats Footage allows. */
-function ffmpegSourceArgs({ source }: { source: string }): string[] {
+/**
+ * Starts the first audio stream at 0 and fills gaps, so its timestamps are the
+ * source seconds transcripts and Take ranges use.
+ */
+export const SOURCE_TIMELINE_FILTER = "aresample=async=1:first_pts=0";
+
+/**
+ * Reads only local files in the formats Footage holds. With `concat`, the
+ * source is an ffconcat list of ranges of one such file.
+ */
+export function ffmpegInputArgs({
+	source,
+	concat = false,
+}: {
+	source: string;
+	concat?: boolean;
+}): string[] {
 	return [
+		"-nostats",
 		"-protocol_whitelist",
 		"file",
 		"-format_whitelist",
-		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
+		`${concat ? "concat," : ""}mov,matroska,webm,wav,mp3,aac,flac,ogg`,
+		...(concat ? ["-f", "concat", "-safe", "0"] : []),
 		"-i",
 		source,
 	];
-}
-
-/** Like ffmpegSourceArgs, and maps the first audio stream, which must exist. */
-export function ffmpegInputArgs({ source }: { source: string }): string[] {
-	return [...ffmpegSourceArgs({ source }), "-map", "0:a:0"];
 }
 
 /** Lists the input's streams without decoding any. */
@@ -158,8 +170,7 @@ function probeArgs({ source }: { source: string }): string[] {
 		"-hide_banner",
 		"-loglevel",
 		"info",
-		"-nostats",
-		...ffmpegSourceArgs({ source }),
+		...ffmpegInputArgs({ source }),
 		"-f",
 		"ffmetadata",
 		"-",
@@ -207,10 +218,11 @@ export function ffmpegArgs({
 		"-hide_banner",
 		"-loglevel",
 		"error",
-		"-nostats",
 		...ffmpegInputArgs({ source }),
+		"-map",
+		"0:a:0",
 		"-af",
-		"aresample=async=1:first_pts=0",
+		SOURCE_TIMELINE_FILTER,
 		"-ac",
 		"1",
 		"-ar",
@@ -258,6 +270,7 @@ export function whisperArgs({
 	];
 }
 
+/** FFmpeg from the data folder's Tools, else from PATH. */
 export async function findFfmpeg({ root }: { root: string }): Promise<string> {
 	const name = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
 	const local = join(root, "Tools", name);
