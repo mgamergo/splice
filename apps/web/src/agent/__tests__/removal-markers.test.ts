@@ -199,11 +199,18 @@ describe("removal markers", () => {
 			[s(4), s(1), s(6)],
 			[s(5), s(4), s(8)],
 		]);
-		expect(markers()[0]?.data).toEqual({
+		const { badTakePlacements, ...swapped } = markers()[0]?.data ?? {};
+		expect(swapped).toEqual({
 			...data,
 			bestTake: first,
 			badTakes: [bestTake, second],
 		});
+		// The outgoing take remembers its track, even though it used only one.
+		const mainId = editor.sequences.getActiveSequence().tracks.main.id;
+		expect(badTakePlacements?.[1]).toBeNull();
+		expect(badTakePlacements?.[0]?.length).toBeGreaterThan(0);
+		for (const placement of badTakePlacements?.[0] ?? [])
+			expect(placement.trackId).toBe(mainId);
 		expect(markers()[1]).toEqual({ time: s(6.5), note: "Later" });
 		const after = editor.sequences.getActiveSequence();
 		editor.command.undo();
