@@ -110,3 +110,11 @@ On reopen, retain completed edits and offer Resume for an interrupted pass. Resu
 Music is opt-in for the first horizontal workflow. The creator selects a track. The agent fits it to the sequence, fades its ends and ducks it under speech. The creator can audition and adjust the mix.
 
 Publish the MP4 and SRT together only after both succeed. Preserve the previous complete pair on failure, identify the failed step and offer a retry. Edits during rendering create a newer revision. Finish rendering the approved revision and tell the creator when a newer edit is available.
+
+### Graphics milestones and evaluation
+
+Cut the footage first, then add editable zooms and basic cards. Review how this pass feels on real footage before introducing HyperFrames or richer graphics. Keep each planned graphic linked to its spoken passage, source frames and intended target so the creator can inspect the evidence.
+
+Keep the chosen style with the project. Offer a preview before applying updated style defaults and preserve properties the creator adjusted. Repeated visual corrections can inform reversible framing preferences separately from take-selection preferences. Keep one-off corrections local to the project.
+
+First review an exported passage with a search, a menu transition and a visible state change at normal speed. Check that the viewer can follow the action, read the control and see the result. Keep failed passages as regression examples. Then test responsiveness, recovery and MP4/SRT sync on a real 30–45 minute laptop project.
