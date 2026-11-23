@@ -157,6 +157,8 @@ export function ffmpegArgs({
 		source,
 		"-map",
 		"0:a:0",
+		"-af",
+		"aresample=async=1:first_pts=0",
 		"-ac",
 		"1",
 		"-ar",

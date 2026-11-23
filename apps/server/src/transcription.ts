@@ -64,7 +64,7 @@ export function transcriptCacheKey({
 }): string {
 	// Bump the version when cached transcript semantics change.
 	return createHash("sha256")
-		.update(JSON.stringify([1, path, size, mtimeMs, model]))
+		.update(JSON.stringify([2, path, size, mtimeMs, model]))
 		.digest("hex");
 }
 
@@ -291,14 +291,18 @@ export function createTranscriptionJobs({
 			const { jobId, path, ...page } = parsed.data;
 			if (Boolean(jobId) === Boolean(path))
 				throw invalidParams("Provide either jobId or path.");
-			const job = jobId
-				? jobs.get(jobId)
-				: Array.from(jobs.values())
-						.reverse()
-						.find((item) => item.path === path);
-			if (job) return result({ job, page });
+			if (jobId) {
+				const job = jobs.get(jobId);
+				if (job) return result({ job, page });
+			}
 			if (path) {
-				const { cachePath } = await identifySource({ path });
+				const { cachePath, key } = await identifySource({ path });
+				const job =
+					active.get(key) ??
+					Array.from(jobs.values())
+						.reverse()
+						.find((item) => item.cachePath === cachePath);
+				if (job) return result({ job, page });
 				if (await readCache({ cachePath })) {
 					const cached: Job = {
 						id: randomUUID(),

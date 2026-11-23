@@ -46,6 +46,9 @@ export function normalizeTranscript({
 	durationSeconds,
 }: Omit<Transcript, "segments" | "language"> & { value: unknown }): Transcript {
 	const output = whisperOutput.parse(value);
+	const segmenter = new Intl.Segmenter(output.result.language, {
+		granularity: "word",
+	});
 	function seconds(milliseconds: number): number {
 		return Math.min(durationSeconds, Math.max(0, milliseconds / 1000));
 	}
@@ -59,32 +62,56 @@ export function normalizeTranscript({
 			const start = seconds(segment.offsets.from);
 			const end = Math.max(start, seconds(segment.offsets.to));
 			const words: TranscriptWord[] = [];
-			let pieces = 0;
-			let word: TranscriptWord | undefined;
-			for (const token of segment.tokens) {
-				if (/^\[_.*\]$/.test(token.text)) continue;
-				const text = token.text.trim();
-				if (!text) continue;
-				if (/^\s/.test(token.text)) word = undefined;
-				// The full JSON contains subword tokens and untimed punctuation.
-				// Keep punctuation with its word and average the token probabilities.
-				if (!word) {
-					if (!token.offsets) continue;
-					const wordStart = Math.max(
-						start,
-						Math.min(end, seconds(token.offsets.from)),
-					);
-					word = { start: wordStart, end: wordStart, text: "", probability: 0 };
-					words.push(word);
-					pieces = 0;
+			let text = "";
+			const tokens = segment.tokens.flatMap((token) => {
+				if (/^\[_.*\]$/.test(token.text) || !token.text) return [];
+				const from = text.length;
+				text += token.text;
+				return [{ ...token, from, to: text.length }];
+			});
+			// Use character spans to align linguistic words to Whisper's subword tokens.
+			const spans: Array<{ from: number; to: number }> = [];
+			for (const part of segmenter.segment(text)) {
+				const to = part.index + part.segment.length;
+				const previous = spans.at(-1);
+				if (part.isWordLike) spans.push({ from: part.index, to });
+				else if (previous?.to === part.index && !/^\s/.test(part.segment))
+					previous.to = to;
+			}
+			let cursor = 0;
+			for (const span of spans) {
+				while (cursor < tokens.length && tokens[cursor].to <= span.from)
+					cursor++;
+				let probability = 0;
+				let pieces = 0;
+				let wordStart = Infinity;
+				let wordEnd = start;
+				for (
+					let index = cursor;
+					index < tokens.length && tokens[index].from < span.to;
+					index++
+				) {
+					const token = tokens[index];
+					probability += token.p;
+					pieces++;
+					if (token.offsets) {
+						wordStart = Math.min(
+							wordStart,
+							Math.max(start, Math.min(end, seconds(token.offsets.from))),
+						);
+						wordEnd = Math.max(
+							wordEnd,
+							Math.min(end, seconds(token.offsets.to)),
+						);
+					}
 				}
-				word.text += text;
-				word.probability += (token.p - word.probability) / ++pieces;
-				if (token.offsets) {
-					word.end = Math.max(
-						word.end,
-						Math.min(end, seconds(token.offsets.to)),
-					);
+				if (Number.isFinite(wordStart)) {
+					words.push({
+						start: wordStart,
+						end: Math.max(wordStart, wordEnd),
+						text: text.slice(span.from, span.to),
+						probability: probability / pieces,
+					});
 				}
 			}
 			return { start, end, text: segment.text.trim(), words };

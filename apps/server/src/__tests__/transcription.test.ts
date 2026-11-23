@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcClient } from "../rpc-client";
 import { startServer } from "../server";
-import { ffmpegArgs, whisperArgs } from "../transcription-tools";
+import { extractAudio, ffmpegArgs, whisperArgs } from "../transcription-tools";
 import { createTranscriptionJobs, transcriptCacheKey } from "../transcription";
 import { normalizeTranscript } from "../transcript";
 import whisperOutput from "./fixtures/whisper-base-en.json";
@@ -31,6 +31,8 @@ test("builds shell-free FFmpeg and whisper.cpp arguments", () => {
 		source,
 		"-map",
 		"0:a:0",
+		"-af",
+		"aresample=async=1:first_pts=0",
 		"-ac",
 		"1",
 		"-ar",
@@ -173,6 +175,14 @@ test("concurrent requests join one job, then read the full cache and compact pag
 			cached: false,
 		});
 		expect(runs).toBe(2);
+		const recording = join(root, "Footage", source);
+		await writeFile(recording, "a different recording");
+		await expect(jobs.status({ path: source })).rejects.toMatchObject({
+			code: RPC_ERRORS.INVALID_PARAMS,
+		});
+		expect(await jobs.status({ jobId: cached.jobId })).toMatchObject({
+			status: "completed",
+		});
 	} finally {
 		gate.resolve();
 		await jobs.stop();
@@ -214,3 +224,92 @@ test("transcription RPC refuses traversal, escape symlinks, missing files and im
 		await rm(root, { force: true, recursive: true });
 	}
 });
+
+test("maps Japanese words without spaces to their own tokens", () => {
+	const transcript = normalizeTranscript({
+		path: source,
+		model: "base",
+		durationSeconds: 3,
+		value: {
+			result: { language: "ja" },
+			transcription: [
+				{
+					offsets: { from: 0, to: 3000 },
+					text: "猫が好き。",
+					tokens: [
+						{ text: "猫", p: 0.9, offsets: { from: 0, to: 1000 } },
+						{ text: "が", p: 0.9, offsets: { from: 1000, to: 1500 } },
+						{ text: "好き", p: 0.9, offsets: { from: 1500, to: 2700 } },
+						{ text: "。", p: 0.9, offsets: { from: 2700, to: 3000 } },
+					],
+				},
+			],
+		},
+	});
+	expect(transcript.segments[0].words).toEqual([
+		{ text: "猫", start: 0, end: 1, probability: 0.9 },
+		{ text: "が", start: 1, end: 1.5, probability: 0.9 },
+		{ text: "好き。", start: 1.5, end: 3, probability: 0.9 },
+	]);
+});
+
+const ffmpeg = Bun.which("ffmpeg");
+test.skipIf(!ffmpeg)(
+	"preserves leading source time when audio starts after video",
+	async () => {
+		if (!ffmpeg) throw new Error("FFmpeg is required");
+		const root = await mkdtemp(join(tmpdir(), "splice-delayed-audio-"));
+		const source = join(root, "delayed.mp4");
+		const wav = join(root, "extract.wav");
+		try {
+			const created = Bun.spawnSync([
+				ffmpeg,
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=black:s=16x16:d=3",
+				"-itsoffset",
+				"2",
+				"-f",
+				"lavfi",
+				"-i",
+				"sine=frequency=1000:duration=1",
+				"-c:v",
+				"mpeg4",
+				"-c:a",
+				"aac",
+				source,
+			]);
+			expect(created.stderr.toString()).toBe("");
+			expect(created.exitCode).toBe(0);
+			const duration = await extractAudio({
+				root,
+				source,
+				wav,
+				signal: AbortSignal.timeout(5000),
+			});
+			const bytes = Buffer.from(await Bun.file(wav).arrayBuffer());
+			let chunk = 12;
+			while (
+				chunk + 8 <= bytes.length &&
+				bytes.toString("ascii", chunk, chunk + 4) !== "data"
+			) {
+				const size = bytes.readUInt32LE(chunk + 4);
+				chunk += 8 + size + (size % 2);
+			}
+			expect(bytes.toString("ascii", chunk, chunk + 4)).toBe("data");
+			const samples = bytes.subarray(
+				chunk + 8,
+				chunk + 8 + bytes.readUInt32LE(chunk + 4),
+			);
+			expect(duration).toBeGreaterThan(2.95);
+			expect(samples.length / 32000).toBeCloseTo(duration, 3);
+			expect(samples.subarray(0, 32000).every((byte) => byte === 0)).toBe(true);
+			expect(samples.subarray(2 * 32000).some((byte) => byte !== 0)).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
