@@ -63,7 +63,12 @@ export function useAgentBridge(): void {
 				if (status === "connected") void ensureMediaSession();
 			},
 			onRequest: (method) => {
-				if (method === "editor.apply" && !isAgentBlocked()) {
+				if (
+					(method === "editor.apply" ||
+						method === "editor.rawSequence" ||
+						method === "editor.roughCut") &&
+					!isAgentBlocked()
+				) {
 					store.markEdit();
 				}
 			},

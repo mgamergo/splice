@@ -53,10 +53,23 @@ export class EditorCore {
 			}
 
 			const tracks = activeSequence.tracks;
+			const storedTakeTrackIds = new Set(
+				activeSequence.markers.flatMap(
+					({ data }) =>
+						data?.badTakePlacements?.flatMap(
+							(placements) =>
+								placements?.flatMap(({ trackId, audioTrackId }) =>
+									audioTrackId ? [trackId, audioTrackId] : [trackId],
+								) ?? [],
+						) ?? [],
+				),
+			);
+			const keepTrack = (track: { id: string; clips: unknown[] }) =>
+				track.clips.length > 0 || storedTakeTrackIds.has(track.id);
 			const prunedTracks = {
 				...tracks,
-				overlay: tracks.overlay.filter((track) => track.clips.length > 0),
-				audio: tracks.audio.filter((track) => track.clips.length > 0),
+				overlay: tracks.overlay.filter(keepTrack),
+				audio: tracks.audio.filter(keepTrack),
 			};
 			if (
 				prunedTracks.overlay.length !== tracks.overlay.length ||

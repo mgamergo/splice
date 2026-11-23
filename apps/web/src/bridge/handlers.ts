@@ -50,6 +50,15 @@ export function createTabHandlers({
 			}
 			return api.apply(params);
 		},
+		"editor.rawSequence": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.rawSequence(params);
+		},
+		"editor.roughCut": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.roughCut(params);
+		},
+		"editor.takesList": (params) => api.takesList(params),
 		"editor.listItems": (): ItemSummary[] =>
 			editor.media.getProjectItems().map(summarizeItem),
 		"editor.importItems": (params) => {

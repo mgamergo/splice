@@ -6,7 +6,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useEditor } from "@/editor/use-editor";
 import type { RemovalMarker } from "@/timeline/types";
-import { RemovalTakeError } from "../removal-takes";
+import { RemovalTakeError, takeRanges } from "../removal-takes";
 
 export function RemovalMarkerPopover({ marker }: { marker: RemovalMarker }) {
 	const editor = useEditor();
@@ -33,7 +33,15 @@ export function RemovalMarkerPopover({ marker }: { marker: RemovalMarker }) {
 					const label = take.label || `Take ${index + 1}`;
 					return (
 						<li
-							key={`${take.projectItemId}:${take.sourceIn}:${take.sourceOut}`}
+							key={JSON.stringify(
+								takeRanges(take).map(
+									({ projectItemId, sourceIn, sourceOut }) => [
+										projectItemId,
+										sourceIn,
+										sourceOut,
+									],
+								),
+							)}
 							className="flex flex-col gap-1.5 border-t pt-2"
 						>
 							<div className="break-words text-xs font-medium">{label}</div>

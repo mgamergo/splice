@@ -24,11 +24,35 @@ const takeSourceRangeSchema = z
 		message: "Source out must be after source in",
 	});
 
+// Keep the original single-range marker shape readable on disk.
+const takeSchema = z.union([
+	takeSourceRangeSchema,
+	z.strictObject({
+		ranges: z
+			.array(takeSourceRangeSchema)
+			.min(2)
+			.describe(
+				"Consecutive source ranges in recording order for one take spanning files",
+			),
+		label: z.string().optional(),
+		transcriptSnippet: z.string().optional(),
+	}),
+]);
+
+const takePlacementSchema = z.strictObject({
+	trackId: z.string().min(1),
+	audioTrackId: z.string().min(1).optional(),
+});
+
 export const removalMarkerDataSchema = z.strictObject({
 	kind: z.literal("removal"),
 	sectionName: z.string().trim().min(1),
-	bestTake: takeSourceRangeSchema,
-	badTakes: z.array(takeSourceRangeSchema).min(1),
+	bestTake: takeSchema,
+	badTakes: z.array(takeSchema).min(1),
+	// A stored take can retain its original layers when it was swapped out.
+	badTakePlacements: z
+		.array(z.array(takePlacementSchema).nullable())
+		.optional(),
 });
 
 export const editOpSchema = z.discriminatedUnion("op", [
@@ -89,6 +113,52 @@ export const applyRequestSchema = z.strictObject({
 		.describe('Short undo label shown to the creator, e.g. "Remove bad takes"'),
 	ops: z.array(editOpSchema).min(1),
 });
+
+const expectedRevision = applyRequestSchema.shape.expectedRevision;
+
+export const rawSequenceRequestSchema = z.strictObject({
+	expectedRevision,
+	projectItemIds: z
+		.array(z.string().min(1))
+		.min(1)
+		.max(200)
+		.describe("Project item IDs in recording order, earliest first"),
+});
+
+export const roughCutRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe('Source sequence ID. Defaults to the sequence named "Raw".'),
+	expectedRevision,
+	label: applyRequestSchema.shape.label.optional(),
+	sections: z
+		.array(
+			z.strictObject({
+				name: z.string().trim().min(1),
+				takes: z.array(takeSchema).min(2),
+				bestTakeIndex: z
+					.number()
+					.int()
+					.nonnegative()
+					.describe("Zero-based index of the take to keep"),
+			}),
+		)
+		.min(1),
+});
+
+export const takesListRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Sequence to inspect. Defaults to the active sequence."),
+});
+
+export type TakePlacement = z.infer<typeof takePlacementSchema>;
+export type Take = z.infer<typeof takeSchema>;
+export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
 
 export type TakeSourceRange = z.infer<typeof takeSourceRangeSchema>;
 export type RemovalMarkerData = z.infer<typeof removalMarkerDataSchema>;

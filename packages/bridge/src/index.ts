@@ -27,6 +27,9 @@ export const TAB_METHODS = [
 	"editor.apply",
 	"editor.listItems",
 	"editor.importItems",
+	"editor.rawSequence",
+	"editor.roughCut",
+	"editor.takesList",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 

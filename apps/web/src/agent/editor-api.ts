@@ -1,5 +1,21 @@
+import {
+	buildRawSequence,
+	buildRoughCut,
+	RAW_SEQUENCE_NAME,
+	sequenceDurationSeconds,
+} from "@/agent/rough-cut";
+import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
+import {
+	rawSequenceRequestSchema,
+	roughCutRequestSchema,
+	takesListRequestSchema,
+} from "@splice/bridge/ops";
 import { buildSequenceDigest } from "@/agent/digest";
-import { type ApplyRequest, applyRequestSchema, type EditOp } from "@splice/bridge/ops";
+import {
+	type ApplyRequest,
+	applyRequestSchema,
+	type EditOp,
+} from "@splice/bridge/ops";
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";
@@ -15,21 +31,32 @@ import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ran
 import { DeleteClipsCommand } from "@/commands/timeline/clip/delete-clips";
 import { RazorClipsCommand } from "@/commands/timeline/clip/razor-clips";
 import type { EditorCore } from "@/core";
-import type { ClipRef, SequenceTracks, TimelineClip, TSequence } from "@/timeline";
-import { addMediaTime } from "@/wasm";
+import type {
+	ClipRef,
+	SequenceTracks,
+	TimelineClip,
+	TSequence,
+} from "@/timeline";
+import { addMediaTime, mediaTimeToSeconds } from "@/wasm";
 
-export type ApplyErrorCode = "INVALID_REQUEST" | "REVISION_CONFLICT" | "INVALID_OP" | "NO_PROJECT";
+export type ApplyErrorCode =
+	| "INVALID_REQUEST"
+	| "REVISION_CONFLICT"
+	| "INVALID_OP"
+	| "NO_PROJECT";
+
+type EditorError = {
+	ok: false;
+	code: ApplyErrorCode;
+	message: string;
+	revision: number;
+	/** The current digest, so the agent can re-plan after a conflict. */
+	digest?: string;
+};
 
 export type ApplyResult =
 	| { ok: true; revision: number; label: string; summary: string[] }
-	| {
-			ok: false;
-			code: ApplyErrorCode;
-			message: string;
-			revision: number;
-			/** The current digest, so the agent can re-plan after a conflict. */
-			digest?: string;
-	  };
+	| EditorError;
 
 class InvalidOpError extends Error {}
 
@@ -42,9 +69,8 @@ function allTracks({ tracks }: { tracks: SequenceTracks }) {
 }
 
 /**
- * The agent's way into the editor. Every write goes through `apply`, which
- * runs all its ops as one undo step and refuses to run against a sequence the
- * creator has changed since the agent last read it.
+ * The agent's way into the editor. Writes check the revision and enter the
+ * creator's command history as one undo step.
  */
 export class EditorApi {
 	constructor(private readonly editor: EditorCore) {}
@@ -54,59 +80,223 @@ export class EditorApi {
 	}
 
 	getDigest(): string {
-		const project = this.editor.project.getActive();
+		const project = this.editor.project.getActiveOrNull();
 		const sequence = this.editor.sequences.getActiveSequenceOrNull();
 		if (!project || !sequence) {
 			return "(no project open)";
 		}
-		return buildSequenceDigest({ project, sequence, revision: this.getRevision() });
+		return buildSequenceDigest({
+			project,
+			sequence,
+			revision: this.getRevision(),
+		});
 	}
 
 	apply(request: unknown): ApplyResult {
-		const revision = this.getRevision();
 		const parsed = applyRequestSchema.safeParse(request);
-		if (!parsed.success) {
-			return {
-				ok: false,
-				code: "INVALID_REQUEST",
-				message: parsed.error.issues
-					.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`)
-					.join("; "),
-				revision,
-			};
-		}
-		if (!this.editor.project.getActive() || !this.editor.sequences.getActiveSequenceOrNull()) {
-			return { ok: false, code: "NO_PROJECT", message: "No project is open", revision };
-		}
-		if (this.editor.timeline.isPreviewActive()) {
-			// Applying now would wipe the creator's uncommitted drag.
-			return {
-				ok: false,
-				code: "REVISION_CONFLICT",
-				message: "The creator is in the middle of an edit. Wait a moment, re-read the sequence and plan again.",
-				revision,
-			};
-		}
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
 		const activeSequenceId = this.editor.sequences.getActiveSequence().id;
 		if (parsed.data.sequenceId !== activeSequenceId) {
 			return {
 				ok: false,
 				code: "REVISION_CONFLICT",
 				message: `The creator switched to another sequence (${activeSequenceId}). Re-read it and plan again.`,
-				revision,
-				digest: this.getDigest(),
-			};
-		}
-		if (parsed.data.expectedRevision !== revision) {
-			return {
-				ok: false,
-				code: "REVISION_CONFLICT",
-				message: `The sequence changed (revision ${revision}, expected ${parsed.data.expectedRevision}). Re-read it and plan again.`,
-				revision,
+				revision: this.getRevision(),
 				digest: this.getDigest(),
 			};
 		}
 		return this.run({ request: parsed.data });
+	}
+
+	rawSequence(request: unknown) {
+		const parsed = rawSequenceRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		if (
+			this.editor.sequences
+				.getSequences()
+				.some(({ name }) => name === RAW_SEQUENCE_NAME)
+		) {
+			return this.invalidOp(
+				"A sequence named Raw already exists. Use it as the source or rename it before building another.",
+			);
+		}
+		try {
+			const sequence = buildRawSequence({
+				projectItemIds: parsed.data.projectItemIds,
+				projectItems: this.editor.media.getProjectItems(),
+			});
+			return this.addPreparedSequence({
+				sequence,
+				label: "Agent: raw sequence",
+			});
+		} catch (error) {
+			if (!(error instanceof RemovalTakeError)) throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	roughCut(request: unknown) {
+		const parsed = roughCutRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const { sequenceId, sections, label = "Agent: rough cut" } = parsed.data;
+		const sequences = this.editor.sequences.getSequences();
+		const sources = sequences.filter((sequence) =>
+			sequenceId
+				? sequence.id === sequenceId
+				: sequence.name === RAW_SEQUENCE_NAME,
+		);
+		if (sources.length > 1)
+			return this.invalidOp(
+				"More than one sequence is named Raw. Pass the source sequenceId from sequence_get.",
+			);
+		const [source] = sources;
+		if (!source)
+			return this.invalidOp(
+				sequenceId
+					? `Unknown source sequence ${sequenceId}. Read the sequence ID from sequence_get.`
+					: "No sequence named Raw. Run raw_sequence or provide a source sequenceId.",
+			);
+		const names = new Set(sequences.map(({ name }) => name));
+		let name = "Rough Cut";
+		for (let suffix = 2; names.has(name); suffix++)
+			name = `Rough Cut ${suffix}`;
+		try {
+			const cut = buildRoughCut({
+				source,
+				name,
+				sections,
+				projectItems: this.editor.media.getProjectItems(),
+			});
+			return {
+				...this.addPreparedSequence({ sequence: cut.sequence, label }),
+				sections: cut.sections,
+			};
+		} catch (error) {
+			if (!(error instanceof RemovalTakeError)) throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	takesList(request: unknown) {
+		const parsed = takesListRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const { sequenceId } = parsed.data;
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			);
+		return {
+			ok: true as const,
+			sequenceId: sequence.id,
+			revision: this.getRevision(),
+			markers: sequence.markers.flatMap((marker) =>
+				marker.data
+					? [
+							{
+								id: marker.id,
+								time: mediaTimeToSeconds({ time: marker.time }),
+								sectionName: marker.data.sectionName,
+								bestTake: marker.data.bestTake,
+								badTakes: marker.data.badTakes,
+							},
+						]
+					: [],
+			),
+		};
+	}
+
+	private addPreparedSequence({
+		sequence,
+		label,
+	}: {
+		sequence: TSequence;
+		label: string;
+	}) {
+		this.editor.command.execute({
+			command: new AddPreparedSequenceCommand({
+				editor: this.editor,
+				sequence,
+				label,
+			}),
+		});
+		return {
+			ok: true as const,
+			sequenceId: sequence.id,
+			revision: this.getRevision(),
+			label,
+			durationSeconds: sequenceDurationSeconds(sequence),
+		};
+	}
+
+	private invalidRequest(error: {
+		issues: Array<{ path: PropertyKey[]; message: string }>;
+	}): EditorError {
+		return {
+			ok: false,
+			code: "INVALID_REQUEST",
+			message: error.issues
+				.map(
+					(issue) => `${issue.path.join(".") || "request"}: ${issue.message}`,
+				)
+				.join("; "),
+			revision: this.getRevision(),
+		};
+	}
+
+	private invalidOp(message: string): EditorError {
+		return {
+			ok: false,
+			code: "INVALID_OP",
+			message,
+			revision: this.getRevision(),
+		};
+	}
+
+	private checkWrite({
+		expectedRevision,
+	}: {
+		expectedRevision: number;
+	}): EditorError | undefined {
+		const revision = this.getRevision();
+		if (
+			!this.editor.project.getActiveOrNull() ||
+			!this.editor.sequences.getActiveSequenceOrNull()
+		) {
+			return {
+				ok: false,
+				code: "NO_PROJECT",
+				message: "No project is open",
+				revision,
+			};
+		}
+		if (this.editor.timeline.isPreviewActive()) {
+			// Applying now would wipe the creator's uncommitted drag.
+			return {
+				ok: false,
+				code: "REVISION_CONFLICT",
+				message:
+					"The creator is in the middle of an edit. Wait a moment, re-read the sequence and plan again.",
+				revision,
+			};
+		}
+		if (expectedRevision !== revision) {
+			return {
+				ok: false,
+				code: "REVISION_CONFLICT",
+				message: `The sequence changed (revision ${revision}, expected ${expectedRevision}). Re-read it and plan again.`,
+				revision,
+				digest: this.getDigest(),
+			};
+		}
 	}
 
 	private run({ request }: { request: ApplyRequest }): ApplyResult {
@@ -140,10 +330,18 @@ export class EditorApi {
 			}
 			throw error;
 		}
-		return { ok: true, revision: this.getRevision(), label: request.label, summary };
+		return {
+			ok: true,
+			revision: this.getRevision(),
+			label: request.label,
+			summary,
+		};
 	}
 
-	private buildCommand({ op }: { op: EditOp }): { command: Command; description: string } {
+	private buildCommand({ op }: { op: EditOp }): {
+		command: Command;
+		description: string;
+	} {
 		const fps = this.editor.project.getActive().settings.fps;
 		const sequence = this.editor.sequences.getActiveSequence();
 		const time = (spec: Parameters<typeof resolveTimeSpec>[0]["spec"]) =>
@@ -164,29 +362,43 @@ export class EditorApi {
 				return {
 					command: new RippleDeleteRangesCommand(ranges),
 					description: `ripple deleted ${ranges
-						.map((r) => `${formatSeconds({ time: r.start })}–${formatSeconds({ time: r.end })}`)
+						.map(
+							(r) =>
+								`${formatSeconds({ time: r.start })}–${formatSeconds({ time: r.end })}`,
+						)
 						.join(", ")}`,
 				};
 			}
 			case "razor": {
 				const at = time(op.at);
 				const spansAt = (clip: TimelineClip) =>
-					clip.startTime < at && at < addMediaTime({ a: clip.startTime, b: clip.duration });
-				const clips = this.findClipRefs({ tracks: sequence.tracks, clipIds: op.clipIds }).filter(
-					(ref) => spansAt(ref.clip),
-				);
-				if (clips.length === 0 || (op.clipIds && clips.length !== op.clipIds.length)) {
+					clip.startTime < at &&
+					at < addMediaTime({ a: clip.startTime, b: clip.duration });
+				const clips = this.findClipRefs({
+					tracks: sequence.tracks,
+					clipIds: op.clipIds,
+				}).filter((ref) => spansAt(ref.clip));
+				if (
+					clips.length === 0 ||
+					(op.clipIds && clips.length !== op.clipIds.length)
+				) {
 					throw new InvalidOpError(
 						`razor: ${op.clipIds ? "not every listed clip" : "no clip"} spans ${formatSeconds({ time: at })}`,
 					);
 				}
 				return {
-					command: new RazorClipsCommand({ clips: clips.map(toClipRef), splitTime: at }),
+					command: new RazorClipsCommand({
+						clips: clips.map(toClipRef),
+						splitTime: at,
+					}),
 					description: `razored ${clips.length} clip(s) at ${formatSeconds({ time: at })}`,
 				};
 			}
 			case "delete": {
-				const clips = this.findClipRefs({ tracks: sequence.tracks, clipIds: op.clipIds });
+				const clips = this.findClipRefs({
+					tracks: sequence.tracks,
+					clipIds: op.clipIds,
+				});
 				return {
 					command: new DeleteClipsCommand({ clips: clips.map(toClipRef) }),
 					description: `deleted ${clips.length} clip(s)`,
@@ -278,7 +490,13 @@ class AgentBatchCommand extends BatchCommand {
 	private sequencesAfter: TSequence[] | null = null;
 	private executeResult: CommandResult | undefined;
 
-	constructor({ editor, commands }: { editor: EditorCore; commands: Command[] }) {
+	constructor({
+		editor,
+		commands,
+	}: {
+		editor: EditorCore;
+		commands: Command[];
+	}) {
 		super(commands);
 		this.editor = editor;
 	}

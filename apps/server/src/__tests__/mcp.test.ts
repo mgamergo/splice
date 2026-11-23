@@ -37,8 +37,11 @@ describe("splice mcp tools", () => {
 			"footage_list",
 			"items_import",
 			"items_list",
+			"raw_sequence",
+			"rough_cut",
 			"sequence_apply",
 			"sequence_get",
+			"takes_list",
 			"transcribe",
 			"transcribe_status",
 		]);

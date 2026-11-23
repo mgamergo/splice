@@ -45,32 +45,55 @@ export class EditRemovalMarkerCommand extends Command {
 		}
 
 		const projectItems = editor.media.getProjectItems();
-		const { badTakes, bestTake } = marker.data;
+		const { badTakePlacements, ...data } = marker.data;
+		const { badTakes, bestTake } = data;
 		const chosen =
 			edit.takeIndex === undefined ? undefined : badTakes[edit.takeIndex];
 		if (edit.takeIndex !== undefined && !chosen) {
 			throw new RemovalTakeError("That stored take is no longer available.");
 		}
 		const remaining = badTakes.filter((_, index) => index !== edit.takeIndex);
-		const update =
+		const swap =
 			edit.op === "swap_take" && chosen
 				? swapTakeClips({
 						tracks: sequence.tracks,
 						marker,
 						best: resolveTake({ take: bestTake, projectItems }),
 						chosen: resolveTake({ take: chosen, projectItems }),
+						chosenPlacements: badTakePlacements?.[edit.takeIndex] ?? undefined,
 					})
-				: {
-						...restoreTakeClips({
-							tracks: sequence.tracks,
-							takes: (chosen ? [chosen] : badTakes).map((take) =>
-								resolveTake({ take, projectItems }),
-							),
-							at: marker.time,
-						}),
-						start: marker.time,
-						end: marker.time,
-					};
+				: undefined;
+		const update = swap ?? {
+			...restoreTakeClips({
+				tracks: sequence.tracks,
+				takes: badTakes.flatMap((take, index) =>
+					edit.takeIndex === undefined || index === edit.takeIndex
+						? [
+								{
+									take: resolveTake({ take, projectItems }),
+									placements: badTakePlacements?.[index],
+								},
+							]
+						: [],
+				),
+				at: marker.time,
+			}),
+			start: marker.time,
+			end: marker.time,
+		};
+		const nextPlacements = swap
+			? badTakes.map((_, index) =>
+					index === edit.takeIndex
+						? swap.previousPlacements
+						: (badTakePlacements?.[index] ?? null),
+				)
+			: badTakePlacements?.filter((_, index) => index !== edit.takeIndex);
+		const markerData = {
+			...data,
+			...(nextPlacements?.some((ids) => ids !== null)
+				? { badTakePlacements: nextPlacements }
+				: {}),
+		};
 
 		const shiftMarkerTime = ({ time }: Marker) =>
 			time >= update.end
@@ -78,12 +101,13 @@ export class EditRemovalMarkerCommand extends Command {
 				: time >= update.start
 					? update.start
 					: time;
+		const markerIndex = sequence.markers.indexOf(marker);
 		const markers = sequence.markers
-			.flatMap((candidate): Marker[] => {
+			.flatMap((candidate, index): Marker[] => {
 				if (candidate === marker) {
 					if (edit.op === "restore_takes") {
 						return chosen && remaining.length
-							? [{ ...marker, data: { ...marker.data, badTakes: remaining } }]
+							? [{ ...marker, data: { ...markerData, badTakes: remaining } }]
 							: [];
 					}
 					if (chosen) {
@@ -92,7 +116,7 @@ export class EditRemovalMarkerCommand extends Command {
 								...marker,
 								time: shiftMarkerTime(marker),
 								data: {
-									...marker.data,
+									...markerData,
 									bestTake: chosen,
 									badTakes: badTakes.map((take, index) =>
 										index === edit.takeIndex ? bestTake : take,
@@ -102,6 +126,14 @@ export class EditRemovalMarkerCommand extends Command {
 						];
 					}
 				}
+				// Markers that collapsed to one time keep their source order: those
+				// before this one stay ahead of the restored takes.
+				if (
+					edit.op === "restore_takes" &&
+					candidate.time === marker.time &&
+					index < markerIndex
+				)
+					return [candidate];
 				const time = shiftMarkerTime(candidate);
 				return [time === candidate.time ? candidate : { ...candidate, time }];
 			})
