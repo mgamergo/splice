@@ -24,6 +24,7 @@ import {
 	parseNoiseScanLine,
 	pickNoiseWindow,
 	type RenderDenoised,
+	sampledDenoiseFilter,
 } from "../noise-reduction";
 import { startServer } from "../server";
 
@@ -90,7 +91,7 @@ test("samples the noise profile from the window, then renders the whole recordin
 		"[0:a:0]atrim=duration=1.000000,asetpts=PTS-STARTPTS[noise];" +
 			"[1:a:0]aresample=async=1:first_pts=0[recording];" +
 			"[noise][recording]concat=n=2:v=0:a=1,highpass=f=80:poles=2,highpass=f=80:poles=2," +
-			"asendcmd=c='0 afftdn sn start;1.000000 afftdn sn stop',afftdn=nr=20:nf=-50," +
+			"asendcmd=c='0 afftdn sn start;1.000000 afftdn sn stop',afftdn=nr=20:nf=-55," +
 			"atrim=start=1.000000,asetpts=PTS-STARTPTS[out]",
 	);
 	expect(args.slice(-6)).toEqual([
@@ -201,6 +202,18 @@ describe("noise reducer", () => {
 				cached: false,
 			});
 		}));
+});
+
+test("sets afftdn's noise floor to the sampled stretch's level, within its range", () => {
+	expect(sampledDenoiseFilter({ start: 0, rmsDb: -45.8 })).toBe(
+		"afftdn=nr=20:nf=-46",
+	);
+	expect(sampledDenoiseFilter({ start: 0, rmsDb: -88 })).toBe(
+		"afftdn=nr=20:nf=-80",
+	);
+	expect(sampledDenoiseFilter({ start: 0, rmsDb: -12 })).toBe(
+		"afftdn=nr=20:nf=-20",
+	);
 });
 
 test("loudness with noise reduction on measures the render, cached apart from the source", () =>

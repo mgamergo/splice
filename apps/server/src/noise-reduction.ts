@@ -16,7 +16,7 @@ export const renderNoiseReductionInput = { path: footagePath };
 const renderSchema = z.object(renderNoiseReductionInput);
 
 /** Bump when the filters change, so earlier renders aren't reused. */
-export const NOISE_REDUCTION_VERSION = 1;
+export const NOISE_REDUCTION_VERSION = 2;
 /** Length of the quiet stretch the noise profile is learned from. */
 export const NOISE_WINDOW_SECONDS = 1;
 /** The quietest window counts as noise only this far below the loud windows. */
@@ -30,8 +30,16 @@ const SCAN_SAMPLE_RATE = 48_000;
  * fundamentals and rumble, which afftdn's coarse bands leave behind.
  */
 const RUMBLE_FILTER = "highpass=f=80:poles=2,highpass=f=80:poles=2";
-/** Up to 20 dB of reduction, from a profile sampled in a quiet stretch. */
-const SAMPLED_DENOISE_FILTER = "afftdn=nr=20:nf=-50";
+/**
+ * Up to 20 dB of reduction, from a profile sampled in a quiet stretch. afftdn
+ * reduces little of the noise above its noise floor, so the floor is set to the
+ * stretch's level.
+ */
+export function sampledDenoiseFilter({ rmsDb }: NoiseWindow): string {
+	// afftdn accepts a floor from -80 to -20 dB.
+	const floor = Math.min(-20, Math.max(-80, Math.round(rmsDb)));
+	return `afftdn=nr=20:nf=${floor}`;
+}
 /** Without a quiet stretch, afftdn tracks the floor itself, more gently. */
 const TRACKED_DENOISE_FILTER = "afftdn=nr=12:nf=-50:tn=1";
 
@@ -152,7 +160,7 @@ export function denoiseArgs({
 				"[noise][recording]concat=n=2:v=0:a=1",
 				RUMBLE_FILTER,
 				`asendcmd=c='0 afftdn sn start;${length} afftdn sn stop'`,
-				SAMPLED_DENOISE_FILTER,
+				sampledDenoiseFilter(window),
 				`atrim=start=${length}`,
 				"asetpts=PTS-STARTPTS[out]",
 			].join(","),
