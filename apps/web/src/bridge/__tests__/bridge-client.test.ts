@@ -67,6 +67,8 @@ function setUp(handlers: Partial<TabHandlers> = {}) {
 		handlers: {
 			"editor.getState": () => ({ revision: 3 }),
 			"editor.apply": () => ({ ok: true }),
+			"editor.listItems": () => [],
+			"editor.importItems": () => ({ imported: [], failed: [] }),
 			...handlers,
 		},
 		onStatus: (status) => statuses.push(status),

@@ -1,4 +1,5 @@
 import { Command, type CommandResult } from "@/commands/base-command";
+import { isDiskMedia } from "@/media/media-data";
 import { EditorCore } from "@/core";
 import type { ProjectItem } from "@/media/types";
 import { buildWaveformSourceKey } from "@/media/waveform-summary";
@@ -93,7 +94,9 @@ export class RemoveProjectItemCommand extends Command {
 		if (this.savedProjectItems && this.removedProjectItem) {
 			const restoredProjectItem: ProjectItem = {
 				...this.removedProjectItem,
-				url: URL.createObjectURL(this.removedProjectItem.file),
+				url: isDiskMedia(this.removedProjectItem.file)
+					? this.removedProjectItem.file.url
+					: URL.createObjectURL(this.removedProjectItem.file),
 			};
 
 			editor.media.setProjectItems({
