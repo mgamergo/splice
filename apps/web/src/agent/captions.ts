@@ -34,8 +34,8 @@ const CAPTION_BREAK_GAP_SECONDS = 0.5;
 /** whisper.cpp sometimes gives a word no duration; it still gets shown. */
 const MIN_WORD_SECONDS = 0.08;
 /**
- * The shortest caption shown: three frames at 30 fps. Captions stacked on one
- * time merge rather than flash by unseen.
+ * The shortest caption shown: three frames at 30 fps. Shorter captions merge
+ * with the next one rather than flash by unseen.
  */
 const MIN_CAPTION_SECONDS = 0.1;
 const SENTENCE_END = /[.!?,;:…]["')\]]*$/;
@@ -209,7 +209,27 @@ export function buildCaptionCues({
 		}
 		index = runEnd;
 	}
-	return cues;
+	return mergeShortCues({ cues });
+}
+
+/** A caption too short to read joins the one that follows it straight away. */
+function mergeShortCues({ cues }: { cues: SubtitleCue[] }): SubtitleCue[] {
+	const merged: SubtitleCue[] = [];
+	for (const cue of cues) {
+		const previous = merged.at(-1);
+		if (
+			previous &&
+			previous.duration < MIN_CAPTION_SECONDS - 1e-9 &&
+			cue.startTime - (previous.startTime + previous.duration) < 1e-6
+		) {
+			merged[merged.length - 1] = {
+				...previous,
+				text: `${previous.text} ${cue.text}`,
+				duration: cue.startTime + cue.duration - previous.startTime,
+			};
+		} else merged.push(cue);
+	}
+	return merged;
 }
 
 function styleOverrides({

@@ -325,6 +325,20 @@ describe("buildCaptionCues", () => {
 		]);
 	});
 
+	test("a word too short to read shares a caption with the next one", () => {
+		const cues = buildCaptionCues({
+			words: [
+				word(0, 0.3, "This"),
+				word(0.3, 0.34, "a"),
+				word(0.34, 0.6, "test"),
+			],
+			style: { wordsPerCaption: 1 },
+		});
+		expect(cues.map(({ text }) => text)).toEqual(["This", "a test"]);
+		expect(cues[1]).toMatchObject({ startTime: 0.3 });
+		expect(cues[1].duration).toBeCloseTo(0.6);
+	});
+
 	test("applies the style", () => {
 		const [cue] = buildCaptionCues({
 			words: [word(0, 0.5, "hello"), word(0.5, 1, "there")],
