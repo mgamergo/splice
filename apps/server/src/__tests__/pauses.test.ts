@@ -134,7 +134,7 @@ test("moves filler words from Whisper's times to their sound between two silence
 		word(["Then", 27, 27.2]),
 		word(["we", 27.23, 27.38]),
 		word(["Erm,", 28.07, 28.29]),
-		word(["check", 29, 29.79]),
+		word(["check", 29.95, 30.6]),
 		word(["umbrella", 33, 33.5]),
 		word(["uh.", 40, 40.3]),
 	];
@@ -171,6 +171,74 @@ test("moves filler words from Whisper's times to their sound between two silence
 			silences,
 		}),
 	).toEqual([]);
+	// When "check" drifts into the silence and touches that sound, it is as
+	// likely the word's sound as the filler's, so nothing is cut.
+	expect(
+		findFillerWords({
+			transcript: transcript({
+				words: words.map((each) =>
+					each.text === "check" ? word(["check", 29, 29.79]) : each,
+				),
+			}),
+			silences,
+		})[0],
+	).toEqual({ start: 28.07, end: 28.29, text: "Erm,", aligned: false });
+});
+
+test("never cuts a sound a real word's times barely miss", () => {
+	// Heard: "um" at 0–0.22 s and "go" at 0.50–0.75 s. Whisper puts "um" at
+	// 0.23–0.49 and starts "go" 10 ms after its sound ends.
+	const silences = [
+		{ start: 0.22, end: 0.5 },
+		{ start: 0.75, end: 1.2 },
+	];
+	const [um] = findFillerWords({
+		transcript: transcript({
+			words: [
+				word(["um", 0.23, 0.49]),
+				word(["go", 0.76, 1.05]),
+				word(["next", 1.22, 1.5]),
+			],
+		}),
+		silences,
+	});
+	expect(um).toEqual({ start: 0.23, end: 0.49, text: "um", aligned: false });
+	expect(fillerCut({ filler: um, paddingSeconds: 0.2 })).toBeNull();
+	// A word closer to the sound than the filler claims it too.
+	expect(
+		findFillerWords({
+			transcript: transcript({
+				words: [word(["um", 0.1, 0.4]), word(["go", 0.8, 1.05])],
+			}),
+			silences,
+		})[0].aligned,
+	).toBe(false);
+});
+
+test("aligns each of two isolated fillers whose times touch both sounds", () => {
+	// Heard: "uh" at 2.00–2.30 s and "um" at 2.45–2.80 s. Whisper's "um" starts
+	// 10 ms inside the sound of "uh".
+	const silences = [
+		{ start: 1.4, end: 2 },
+		{ start: 2.3, end: 2.45 },
+		{ start: 2.8, end: 3.4 },
+	];
+	const fillers = findFillerWords({
+		transcript: transcript({
+			words: [
+				word(["uh", 1.94, 2.29]),
+				word(["um", 2.29, 2.7]),
+				word(["next", 3.42, 3.72]),
+			],
+		}),
+		silences,
+	});
+	expect(
+		fillers.map(({ start, end, aligned }) => [start, end, aligned]),
+	).toEqual([
+		[2, 2.3, true],
+		[2.45, 2.8, true],
+	]);
 });
 
 test("leaves a filler in place when its sound could be a real word", () => {

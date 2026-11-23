@@ -747,6 +747,37 @@ export function tagBestTake({
 	});
 }
 
+/**
+ * Where a range that Tighten cut whole goes back: on the tracks of the
+ * nearest surviving range, preferring one of the same kind, at its own
+ * recording's gain.
+ */
+function neighborPlacement({
+	take,
+	index,
+	placed,
+}: {
+	take: ResolvedTake;
+	index: number;
+	placed: Map<ResolvedRange, TakePlacement>;
+}): TakePlacement {
+	const kind = take[index].item.type;
+	const rank = (at: number) =>
+		Math.abs(at - index) + (take[at].item.type === kind ? 0 : take.length);
+	const [nearest] = take
+		.flatMap((range, at) => {
+			const placement = placed.get(range);
+			return placement ? [{ placement, at }] : [];
+		})
+		.sort((a, b) => rank(a.at) - rank(b.at));
+	if (!nearest)
+		throw new RemovalTakeError(
+			"Could not identify the best take near this marker.",
+		);
+	const { trackId, audioTrackId } = nearest.placement;
+	return { trackId, ...(audioTrackId ? { audioTrackId } : {}) };
+}
+
 export function swapTakeClips({
 	tracks,
 	marker,
@@ -897,10 +928,8 @@ export function swapTakeClips({
 		},
 	});
 
-	// Saved even for one track, so swapping back can return to an overlay
-	// that would otherwise be pruned once it's empty.
-	return {
-		previousPlacements: parts.map((part): TakePlacement => {
+	const placed = new Map(
+		parts.map((part): [ResolvedRange, TakePlacement] => {
 			const linked = audioForVideo.get(part) ?? [];
 			const audioTrackId = linked[0]?.trackId;
 			const clipIds = new Set(
@@ -910,13 +939,25 @@ export function swapTakeClips({
 				clips: allClips(tracks).filter(({ id }) => clipIds.has(id)),
 				items: new Map([[part.range.item.id, part.range.item]]),
 			}).get(part.range.item.id);
-			return {
-				trackId: part.trackId,
-				...(audioTrackId ? { audioTrackId } : {}),
-				// 0 dB is the default volume, so it needs no record.
-				...(volume ? { volume } : {}),
-			};
+			return [
+				part.range,
+				{
+					trackId: part.trackId,
+					...(audioTrackId ? { audioTrackId } : {}),
+					// 0 dB is the default volume, so it needs no record.
+					...(volume ? { volume } : {}),
+				},
+			];
 		}),
+	);
+	// Saved even for one track, so swapping back can return to an overlay
+	// that would otherwise be pruned once it's empty. Placements follow the
+	// take's ranges, which is how restoring reads them.
+	return {
+		previousPlacements: best.map(
+			(range, index): TakePlacement =>
+				placed.get(range) ?? neighborPlacement({ take: best, index, placed }),
+		),
 		tracks: insertTakeClips({
 			tracks: clearBestTake({ tracks: shifted, markerId: marker.id }),
 			video,

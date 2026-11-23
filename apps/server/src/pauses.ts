@@ -207,6 +207,10 @@ export type FillerWord = TimeRange & {
 const overlap = ({ a, b }: { a: TimeRange; b: TimeRange }) =>
 	Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
 
+/** Seconds between `a` and `b`, or 0 when they touch or overlap. */
+const gap = ({ a, b }: { a: TimeRange; b: TimeRange }) =>
+	Math.max(0, b.start - a.end, a.start - b.end);
+
 /**
  * English filler words, moved from Whisper's drifting times to their sound:
  * the nearest short sound between two silences. Alignment is conservative,
@@ -214,9 +218,12 @@ const overlap = ({ a, b }: { a: TimeRange; b: TimeRange }) =>
  * transcript times with `aligned: false` when no free sound is within reach,
  * or when the filler's own times lie more in another sound than in that one,
  * which means Whisper heard it inside continuous speech. A real word claims a
- * sound that holds its middle, or the sound it overlaps most when it overlaps
- * that sound more than the filler does. A few milliseconds of drift from a
- * neighbor don't claim a sound.
+ * sound that holds its middle. Unless it overlaps another sound more, it also
+ * claims a sound it overlaps more than the filler does, or one its times are
+ * at least as close to as the filler's: Whisper can miss a word's sound by a
+ * few milliseconds and leave the word in silence. A filler whose
+ * times overlap the sound more keeps it, so a few milliseconds of drift from a
+ * neighbor don't claim it.
  */
 export function findFillerWords({
 	transcript,
@@ -253,15 +260,20 @@ export function findFillerWords({
 		const middle = (word.start + word.end) / 2;
 		if (sound.start <= middle && middle <= sound.end) return true;
 		const shared = overlap({ a: word, b: sound });
+		const fillerShared = overlap({ a: filler, b: sound });
+		if (
+			fillerShared > shared ||
+			audible.some((other) => overlap({ a: word, b: other }) > shared)
+		)
+			return false;
 		return (
-			shared > overlap({ a: filler, b: sound }) &&
-			audible.every((other) => overlap({ a: word, b: other }) <= shared)
+			shared > fillerShared ||
+			gap({ a: word, b: sound }) <= gap({ a: filler, b: sound })
 		);
 	};
 	return words.flatMap((word) => {
 		if (!isFiller(word.text)) return [];
-		const distance = ({ start, end }: TimeRange) =>
-			Math.max(0, start - word.end, word.start - end);
+		const distance = (sound: TimeRange) => gap({ a: word, b: sound });
 		const sound = audible
 			.filter(
 				(candidate) =>
@@ -273,7 +285,13 @@ export function findFillerWords({
 						claims({ word: other, sound: candidate, filler: word }),
 					),
 			)
-			.sort((a, b) => distance(a) - distance(b))[0];
+			// Two sounds can both touch the filler's times; the one it overlaps
+			// more is the one Whisper heard.
+			.sort(
+				(a, b) =>
+					distance(a) - distance(b) ||
+					overlap({ a: b, b: word }) - overlap({ a, b: word }),
+			)[0];
 		const heardElsewhere =
 			sound !== undefined &&
 			audible.some(

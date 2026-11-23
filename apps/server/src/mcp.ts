@@ -198,9 +198,7 @@ function withCaptionWarning({
 	if (!parsed.success) return result;
 	const { uncaptionedItemIds, ...rest } = parsed.data;
 	const uncaptioned = [
-		...new Set(
-			(uncaptionedItemIds ?? []).map((id) => pathById.get(id) ?? id),
-		),
+		...new Set((uncaptionedItemIds ?? []).map((id) => pathById.get(id) ?? id)),
 	];
 	if (!uncaptioned.length) return rest;
 	return {

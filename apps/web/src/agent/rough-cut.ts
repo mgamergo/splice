@@ -206,13 +206,7 @@ export function buildRoughCut({
 		falseStarts: clampToItems({ ranges: plan.falseStarts, projectItems }),
 		fillerWords: clampToItems({ ranges: plan.fillerWords, projectItems }),
 	};
-	const map = ({
-		ranges,
-		context,
-	}: {
-		ranges: ItemRange[];
-		context: string;
-	}) =>
+	const map = ({ ranges, context }: { ranges: ItemRange[]; context: string }) =>
 		mapSourceRanges({ tracks: source.tracks, ranges, projectItems, context });
 	const falseStarts = map({
 		ranges: clamped.falseStarts,
