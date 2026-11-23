@@ -11,6 +11,8 @@ export class MediaManager {
 	private projectItems: ProjectItem[] = [];
 	private isLoading = false;
 	private listeners = new Set<() => void>();
+	/** Changes whenever the library is cleared (a project closes or another loads). */
+	private generation = 0;
 
 	constructor(private editor: EditorCore) {}
 
@@ -153,7 +155,16 @@ export class MediaManager {
 		});
 
 		this.projectItems = [];
+		this.generation++;
 		this.notify();
+	}
+
+	/**
+	 * Lets async work, like an agent import, detect that the library it started
+	 * against was cleared, even before the next project becomes active.
+	 */
+	getGeneration(): number {
+		return this.generation;
 	}
 
 	getProjectItems(): ProjectItem[] {

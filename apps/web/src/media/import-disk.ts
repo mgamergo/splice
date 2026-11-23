@@ -103,21 +103,36 @@ async function describe({
 	return { ...base, ...(await readImage({ url: media.url })) };
 }
 
+const PROJECT_CHANGED =
+	"The creator closed or switched the project during the import";
+
 /** Imports in flight, by project and path, so overlapping requests share one item. */
 const inFlight = new Map<string, Promise<ProjectItem>>();
+
+/** How an import reads a file; replaceable so tests don't need a server or decoder. */
+export interface ImportReaders {
+	probe: typeof probeDiskMedia;
+	describe: typeof describe;
+}
+
+const defaultReaders: ImportReaders = { probe: probeDiskMedia, describe };
 
 async function importOne({
 	editor,
 	projectId,
 	path,
 	isBlocked,
+	isStale,
+	readers,
 }: {
 	editor: EditorCore;
 	projectId: string;
 	path: string;
 	isBlocked: () => boolean;
+	isStale: () => boolean;
+	readers: ImportReaders;
 }): Promise<ProjectItem> {
-	const media = await probeDiskMedia({ path });
+	const media = await readers.probe({ path });
 	if (!media) {
 		throw new Error("Not found in the Footage folder");
 	}
@@ -125,13 +140,13 @@ async function importOne({
 	if (!type) {
 		throw new Error(`Unsupported file type ${media.type}`);
 	}
-	const projectItem = await describe({ media, type });
+	const projectItem = await readers.describe({ media, type });
 	// Probing takes a while; the creator may have stopped the agent or switched projects.
 	if (isBlocked()) {
 		throw new Error("The creator stopped the agent");
 	}
-	if (editor.project.getActiveOrNull()?.metadata.id !== projectId) {
-		throw new Error("The creator opened another project during the import");
+	if (isStale()) {
+		throw new Error(PROJECT_CHANGED);
 	}
 	const item = await editor.media.addProjectItem({ projectId, projectItem });
 	if (!item) {
@@ -148,27 +163,31 @@ export async function importDiskItems({
 	editor,
 	paths,
 	isBlocked,
+	readers = defaultReaders,
 }: {
 	editor: EditorCore;
 	paths: string[];
 	isBlocked: () => boolean;
+	readers?: ImportReaders;
 }): Promise<ImportItemsResult> {
 	const project = editor.project.getActiveOrNull();
 	if (!project) {
 		throw new Error("No project is open");
 	}
 	const projectId = project.metadata.id;
+	const generation = editor.media.getGeneration();
+	// A project switch clears the library before the next project becomes active.
+	const isStale = () =>
+		editor.media.getGeneration() !== generation ||
+		editor.project.getActiveOrNull()?.metadata.id !== projectId;
 	const result: ImportItemsResult = { imported: [], failed: [] };
 	for (const path of paths) {
 		if (isBlocked()) {
 			result.failed.push({ path, error: "The creator stopped the agent" });
 			continue;
 		}
-		if (editor.project.getActiveOrNull()?.metadata.id !== projectId) {
-			result.failed.push({
-				path,
-				error: "The creator opened another project during the import",
-			});
+		if (isStale()) {
+			result.failed.push({ path, error: PROJECT_CHANGED });
 			continue;
 		}
 		const key = `${projectId}\n${path}`;
@@ -183,9 +202,14 @@ export async function importDiskItems({
 				result.imported.push(summarizeItem(existing));
 				continue;
 			}
-			pending = importOne({ editor, projectId, path, isBlocked }).finally(() =>
-				inFlight.delete(key),
-			);
+			pending = importOne({
+				editor,
+				projectId,
+				path,
+				isBlocked,
+				isStale,
+				readers,
+			}).finally(() => inFlight.delete(key));
 			inFlight.set(key, pending);
 		}
 		try {
