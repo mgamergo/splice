@@ -368,6 +368,40 @@ describe("loudness tools", () => {
 		});
 	});
 
+	test("rough_cut skips a recording splice can't measure and still cuts", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
+			if (method === "loudness.measure") {
+				const path = field({ params, key: "path" });
+				if (path === "loud.wav")
+					throw new RpcCallError({
+						code: -32603,
+						message: "ffmpeg exited with 183.",
+					});
+				return { path, ...measurements[String(path)], cached: false };
+			}
+			if (field({ params, key: "plan" }))
+				return { ok: true, revision: 3, audioSources };
+			return { ok: true, revision: 4 };
+		});
+		const result = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 3, sections },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(calls.at(-1)?.[1]).toMatchObject({
+			sourceGains: [{ projectItemId: "rec-1", gainDb: 14 }],
+		});
+		expect(JSON.parse(textOf(result)).loudness.sources[1]).toEqual({
+			projectItemId: "rec-2",
+			path: "loud.wav",
+			skipped: "Couldn't be measured: ffmpeg exited with 183.",
+		});
+	});
+
 	test("rough_cut in a Short project captions and normalizes in one cut", async () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {

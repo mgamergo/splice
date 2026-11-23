@@ -12,7 +12,7 @@ import {
 	takesListRequestSchema,
 } from "@splice/bridge/ops";
 import { z } from "zod";
-import { BRIDGE_PATHS, SERVER_NAME } from "@splice/bridge";
+import { BRIDGE_PATHS, RPC_ERRORS, SERVER_NAME } from "@splice/bridge";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -28,6 +28,7 @@ import {
 	MissingFootageError,
 	planSourceGains,
 	type SourceLoudness,
+	UnmeasurableError,
 } from "./loudness";
 
 const START_TIMEOUT_MS = 150_000;
@@ -223,6 +224,9 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					.success
 			)
 				throw new MissingFootageError(error.message);
+			// splice failed to measure it, as opposed to a refused request.
+			if (error instanceof RpcCallError && error.code === RPC_ERRORS.INTERNAL)
+				throw new UnmeasurableError(error.message);
 			throw error;
 		}
 	};
