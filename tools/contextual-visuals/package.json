@@ -1,0 +1,31 @@
+{
+  "name": "splice-contextual-visuals",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.2.18",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "build": "bun build src/app.tsx --outdir dist --minify",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun run scripts/check-model.ts",
+    "test:browser": "bun run scripts/browser.ts",
+    "prepare:media": "bash scripts/prepare-media.sh",
+    "analyze": "bun run scripts/analyze.ts"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.2.0",
+    "react": "19",
+    "react-dom": "19",
+    "zod": "4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2",
+    "@types/bun": "1.2",
+    "@types/react": "19",
+    "@types/react-dom": "19",
+    "playwright": "^1.65.1",
+    "typescript": "6"
+  }
+}

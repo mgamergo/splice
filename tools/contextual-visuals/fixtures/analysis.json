@@ -1,0 +1,179 @@
+{
+  "cues": [
+    {
+      "id": 1,
+      "start": 0.12,
+      "end": 2.76,
+      "text": "Look at these great shirts, fantastic."
+    },
+    {
+      "id": 2,
+      "start": 2.76,
+      "end": 4.96,
+      "text": "So we're having a lot of fun in Wikimania."
+    },
+    {
+      "id": 3,
+      "start": 6.08,
+      "end": 8.6,
+      "text": "Everybody, stay busy, edit a lot."
+    },
+    {
+      "id": 4,
+      "start": 8.6,
+      "end": 11.32,
+      "text": "So all over the world, people are editing Wikipedia"
+    },
+    {
+      "id": 5,
+      "start": 11.32,
+      "end": 16.12,
+      "text": "from big languages to very, very small languages."
+    },
+    {
+      "id": 6,
+      "start": 16.12,
+      "end": 19.12,
+      "text": "Somewhere in the middle would be a language like Bangla,"
+    },
+    {
+      "id": 7,
+      "start": 19.12,
+      "end": 21.48,
+      "text": "a lot of speakers, but it's sort of a small wiki"
+    },
+    {
+      "id": 8,
+      "start": 21.48,
+      "end": 23.6,
+      "text": "but growing very quickly, and it's very exciting."
+    },
+    {
+      "id": 9,
+      "start": 23.6,
+      "end": 28.16,
+      "text": "So hopefully, in a few more years,"
+    },
+    {
+      "id": 10,
+      "start": 28.16,
+      "end": 31.12,
+      "text": "we're almost 25 years, maybe in the next 25 years,"
+    },
+    {
+      "id": 11,
+      "start": 31.12,
+      "end": 34.32,
+      "text": "we'll fully realize our dream of a free encyclopedia"
+    },
+    {
+      "id": 12,
+      "start": 34.32,
+      "end": 37.52,
+      "text": "for every single person on the planet in their own language."
+    },
+    {
+      "id": 13,
+      "start": 37.52,
+      "end": 40.6,
+      "text": "So I think one of the key pieces of advice I have"
+    },
+    {
+      "id": 14,
+      "start": 40.6,
+      "end": 45.6,
+      "text": "for a growing language community of Wikipedia"
+    },
+    {
+      "id": 15,
+      "start": 45.6,
+      "end": 47.8,
+      "text": "is really think about those newcomers."
+    },
+    {
+      "id": 16,
+      "start": 47.8,
+      "end": 50,
+      "text": "People come in and maybe they make one edit,"
+    },
+    {
+      "id": 17,
+      "start": 50,
+      "end": 52.12,
+      "text": "and then they don't come back, or they come back"
+    },
+    {
+      "id": 18,
+      "start": 52.12,
+      "end": 53.6,
+      "text": "maybe a couple of times."
+    },
+    {
+      "id": 19,
+      "start": 53.6,
+      "end": 56.56,
+      "text": "You've got to really greet them, it's very useful."
+    },
+    {
+      "id": 20,
+      "start": 56.56,
+      "end": 59.36,
+      "text": "Someone make one small edit, you pop on their talk page"
+    },
+    {
+      "id": 21,
+      "start": 59.36,
+      "end": 62.08,
+      "text": "and you say, \"Ah, thank you, it's so nice to meet you.\""
+    },
+    {
+      "id": 22,
+      "start": 62.08,
+      "end": 64.04,
+      "text": "You edited about this, did you meet so-and-so?"
+    },
+    {
+      "id": 23,
+      "start": 64.04,
+      "end": 65.88,
+      "text": "That's who really knows about this topic."
+    },
+    {
+      "id": 24,
+      "start": 65.88,
+      "end": 67.32,
+      "text": "You don't know what they might like,"
+    },
+    {
+      "id": 25,
+      "start": 67.32,
+      "end": 71,
+      "text": "but it really helps to show people the human side"
+    },
+    {
+      "id": 26,
+      "start": 71,
+      "end": 72,
+      "text": "of Wikipedia."
+    }
+  ],
+  "drafts": [
+    {
+      "cue": 7,
+      "title": "Wikipedia in smaller languages",
+      "kind": "focus"
+    },
+    {
+      "cue": 11,
+      "title": "A free encyclopedia in every language",
+      "kind": "label"
+    },
+    {
+      "cue": 20,
+      "title": "Welcome a new editor",
+      "kind": "flow",
+      "steps": ["Visit their talk page", "Thank them", "Connect them"]
+    }
+  ],
+  "planner": "Qwen 2.5 3B · Reviewed sample"
+}
