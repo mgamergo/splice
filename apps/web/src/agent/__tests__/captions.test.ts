@@ -212,6 +212,7 @@ describe("EditorApi captions", () => {
 		expect(
 			track.clips.map((clip) => (clip as TextClip).params.content),
 		).toEqual(["Hello world.", "Bye"]);
+		expect(api.getDigest()).toContain('"Caption 1" 0.50–1.70 "Hello world."]');
 
 		api.addCaptions({
 			expectedRevision: api.getRevision(),

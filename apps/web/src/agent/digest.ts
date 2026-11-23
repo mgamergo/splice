@@ -19,6 +19,10 @@ function describeClip({ clip }: { clip: TimelineClip }): string {
 		const sourceEnd = addMediaTime({ a: clip.trimStart, b: sourceSpan });
 		text += ` (src ${formatSeconds({ time: clip.trimStart })}–${formatSeconds({ time: sourceEnd })})`;
 	}
+	if (clip.type === "text") {
+		const content = String(clip.params.content ?? "").replace(/\s+/g, " ");
+		text += ` ${JSON.stringify(content.length > 40 ? `${content.slice(0, 39)}…` : content)}`;
+	}
 	return `${text}]`;
 }
 
