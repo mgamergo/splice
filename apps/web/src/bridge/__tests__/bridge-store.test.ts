@@ -9,6 +9,8 @@ function fakeStorage({ writable }: { writable: boolean }) {
 	const values = new Map<string, string>();
 	return {
 		getItem: (key: string) => values.get(key) ?? null,
+		// Mirrors the Storage API.
+		// eslint-disable-next-line opencut/prefer-object-params
 		setItem: (key: string, value: string) => {
 			if (!writable) throw new Error("QuotaExceededError");
 			values.set(key, value);
