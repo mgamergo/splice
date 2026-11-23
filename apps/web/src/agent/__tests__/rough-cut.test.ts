@@ -792,4 +792,33 @@ test("rejects a take duplicated across tracks quickly instead of listing every p
 		}),
 	).toThrow("multiple places");
 	expect(performance.now() - started).toBeLessThan(1_000);
+
+test("burns in captions for the kept words inside the same undo step", () => {
+	raw();
+	const before = editor.sequences.getSequences().length;
+	const result = api.roughCut({
+		sections: [section],
+		expectedRevision: api.getRevision(),
+		captions: {
+			sources: [
+				{
+					projectItemId: second,
+					words: [
+						{ start: 1, end: 1.4, text: "cut" },
+						{ start: 4.5, end: 5, text: "We" },
+						{ start: 5, end: 5.4, text: "applied" },
+					],
+				},
+			],
+		},
+	});
+	expect(result).toMatchObject({ ok: true, captionCount: 1 });
+	const captions = active().tracks.overlay.find(
+		({ name }) => name === "Captions",
+	);
+	expect(captions?.clips).toHaveLength(1);
+	expect(editor.sequences.getSequences()).toHaveLength(before + 1);
+	editor.command.undo();
+	expect(editor.sequences.getSequences()).toHaveLength(before);
+	expect(active().name).toBe("Raw");
 });

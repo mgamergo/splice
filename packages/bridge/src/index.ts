@@ -30,6 +30,7 @@ export const TAB_METHODS = [
 	"editor.rawSequence",
 	"editor.roughCut",
 	"editor.takesList",
+	"editor.addCaptions",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 
@@ -43,6 +44,7 @@ export const SERVER_METHODS = [
 	"footage.list",
 	"transcribe.start",
 	"transcribe.status",
+	"transcript.words",
 ] as const;
 export type ServerMethod = (typeof SERVER_METHODS)[number];
 
@@ -55,9 +57,20 @@ export const TAB_HELLO = "tab.hello";
 /** Notification from the tab whenever its command revision changes. */
 export const STATE_CHANGED = "state.changed";
 
+/** A project's format, chosen when it's created. */
+export type ProjectFormat = "horizontal" | "short";
+
+export const PROJECT_FORMATS: Record<
+	ProjectFormat,
+	{ label: string; width: number; height: number; fps: number }
+> = {
+	horizontal: { label: "Horizontal", width: 1920, height: 1080, fps: 30 },
+	short: { label: "Short", width: 1080, height: 1920, fps: 30 },
+};
+
 export interface EditorState {
 	revision: number;
-	project: { id: string; name: string } | null;
+	project: { id: string; name: string; format: ProjectFormat } | null;
 	/** The active sequence; `editor.apply` must name it. */
 	sequenceId: string | null;
 	/** Compact text form of the active sequence, see `buildSequenceDigest`. */
