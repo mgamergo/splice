@@ -130,7 +130,7 @@ project items: rec-01.mkv (42:10, 1080p, audio), rec-02.mkv (06:30)
 | Find pauses | `splice` | FFmpeg `silencedetect`, cached in `Cache\`. The transcript only joins silences around a click: Whisper's word times drift, so pause edges always come from the audio. |
 | Find sections and takes | agent | From the transcript: restarts of the same passage are takes of one section. |
 | Rank takes | agent | Completeness, then fluency, then pacing, guided by `profile.md`. |
-| Find false starts and filler words | agent and `splice` | The agent finds false starts in the transcript. `splice` finds English filler words and moves them to their sound between two silences. |
+| Find false starts and filler words | agent and `splice` | The agent finds false starts in the transcript. `splice` finds English filler words and moves them to their sound between two silences, leaving any filler whose sound could be a real word. |
 | Build the cut | tab | Create the **Rough Cut** sequence from the raw sequence in one undo step: ripple deletes plus removal markers for bad takes; pauses (keeping 0.2 s of breath per side), false starts and filler words are ripple deleted without markers. |
 | Loudness | `splice` and tab | FFmpeg `ebur128` measures; a gain param applies the correction. |
 | Captions (Shorts) | tab | Word-by-word captions from the same transcript. |

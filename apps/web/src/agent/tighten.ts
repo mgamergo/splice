@@ -5,13 +5,20 @@ interface Span {
 	end: number;
 }
 
-type Edge = { at: number; padded: boolean };
+/**
+ * A cut edge. Padding moves it toward the cut's middle by up to
+ * `paddingSeconds`, but never past `limit`, the far side of the silence the
+ * edge sits in: breath kept from one silence can't eat the speech beside it.
+ * An edge outside any silence has `limit === at` and stays put.
+ */
+type Edge = { at: number; limit: number };
 
 /**
  * Source-second cuts for pauses, false starts and filler words, one list for
- * all recordings. Pauses keep `paddingSeconds` of breath on each side. A false
- * start or filler edge that lies inside a pause snaps to that pause, so the
- * cut follows the audio and keeps the same breath. Overlapping cuts merge.
+ * all recordings. Pauses keep `paddingSeconds` of breath on each side, up to
+ * the whole pause. A false start or filler edge that lies inside a pause snaps
+ * to that pause, so the cut follows the audio and keeps the same breath.
+ * Overlapping cuts merge.
  */
 export function planTightenCuts({
 	pauses,
@@ -39,8 +46,8 @@ export function planTightenCuts({
 			);
 		const cuts: Array<{ start: Edge; end: Edge }> = [
 			...silences.map(({ sourceIn, sourceOut }) => ({
-				start: { at: sourceIn, padded: true },
-				end: { at: sourceOut, padded: true },
+				start: { at: sourceIn, limit: sourceOut },
+				end: { at: sourceOut, limit: sourceIn },
 			})),
 			...[...of(falseStarts), ...of(fillerWords)].map(
 				({ sourceIn, sourceOut }) => {
@@ -48,11 +55,11 @@ export function planTightenCuts({
 					const after = inside(sourceOut);
 					return {
 						start: before
-							? { at: before.sourceIn, padded: true }
-							: { at: sourceIn, padded: false },
+							? { at: before.sourceIn, limit: before.sourceOut }
+							: { at: sourceIn, limit: sourceIn },
 						end: after
-							? { at: after.sourceOut, padded: true }
-							: { at: sourceOut, padded: false },
+							? { at: after.sourceOut, limit: after.sourceIn }
+							: { at: sourceOut, limit: sourceOut },
 					};
 				},
 			),
@@ -65,14 +72,16 @@ export function planTightenCuts({
 				merged.push({ start: { ...cut.start }, end: { ...cut.end } });
 				continue;
 			}
+			// At a shared edge, the padded one wins.
 			if (cut.start.at === last.start.at)
-				last.start.padded ||= cut.start.padded;
+				last.start.limit = Math.max(last.start.limit, cut.start.limit);
 			if (cut.end.at > last.end.at) last.end = { ...cut.end };
-			else if (cut.end.at === last.end.at) last.end.padded ||= cut.end.padded;
+			else if (cut.end.at === last.end.at)
+				last.end.limit = Math.min(last.end.limit, cut.end.limit);
 		}
 		return merged.flatMap(({ start, end }) => {
-			const sourceIn = start.at + (start.padded ? paddingSeconds : 0);
-			const sourceOut = end.at - (end.padded ? paddingSeconds : 0);
+			const sourceIn = Math.min(start.at + paddingSeconds, start.limit);
+			const sourceOut = Math.max(end.at - paddingSeconds, end.limit);
 			return sourceOut - sourceIn > 0.001
 				? [{ projectItemId, sourceIn, sourceOut }]
 				: [];
@@ -94,6 +103,41 @@ export function unionSpans<T extends Span>(spans: T[]): T[] {
 	return merged;
 }
 
+/** The parts of `within` outside every span in `without`, sorted and disjoint. */
+function subtractSpans({
+	within,
+	without,
+}: {
+	within: Span[];
+	without: Span[];
+}): Span[] {
+	const holes = unionSpans(without);
+	const kept: Span[] = [];
+	let first = 0;
+	for (const area of unionSpans(within)) {
+		while (first < holes.length && holes[first].end <= area.start) first++;
+		let start = area.start;
+		for (let i = first; i < holes.length && holes[i].start < area.end; i++) {
+			if (holes[i].start > start) kept.push({ start, end: holes[i].start });
+			start = Math.max(start, holes[i].end);
+		}
+		if (area.end > start) kept.push({ start, end: area.end });
+	}
+	return kept;
+}
+
+/** Index of the first of the sorted, disjoint `spans` that ends after `at`. */
+function firstEndingAfter({ spans, at }: { spans: Span[]; at: number }) {
+	let low = 0;
+	let high = spans.length;
+	while (low < high) {
+		const middle = (low + high) >> 1;
+		if (spans[middle].end <= at) low = middle + 1;
+		else high = middle;
+	}
+	return low;
+}
+
 /** Total length of `spans` that lies inside `within` and outside every span in `without`. */
 export function measureSpans({
 	spans,
@@ -104,23 +148,38 @@ export function measureSpans({
 	within: Span[];
 	without?: Span[];
 }): number {
-	const kept = unionSpans(within);
-	const excluded = unionSpans(without);
+	const kept = subtractSpans({ within, without });
 	let total = 0;
+	let first = 0;
 	for (const span of unionSpans(spans)) {
-		for (const area of kept) {
-			let start = Math.max(span.start, area.start);
-			const end = Math.min(span.end, area.end);
-			if (end <= start) continue;
-			for (const hole of excluded) {
-				if (hole.end <= start || hole.start >= end) continue;
-				total += Math.max(0, hole.start - start);
-				start = Math.max(start, hole.end);
-			}
-			total += Math.max(0, end - start);
-		}
+		while (first < kept.length && kept[first].end <= span.start) first++;
+		for (let i = first; i < kept.length && kept[i].start < span.end; i++)
+			total +=
+				Math.min(span.end, kept[i].end) - Math.max(span.start, kept[i].start);
 	}
 	return total;
+}
+
+/**
+ * How many groups have some length inside `within` and outside every span in
+ * `without`. Sorted once, then one binary search per span.
+ */
+export function countOverlapping({
+	groups,
+	within,
+	without = [],
+}: {
+	groups: Span[][];
+	within: Span[];
+	without?: Span[];
+}): number {
+	const kept = subtractSpans({ within, without });
+	return groups.filter((spans) =>
+		spans.some(({ start, end }) => {
+			const piece = kept[firstEndingAfter({ spans: kept, at: start })];
+			return piece !== undefined && piece.start < end && start < end;
+		}),
+	).length;
 }
 
 /**
@@ -138,16 +197,24 @@ export function closeSlivers<T extends Span>({
 	minimum: number;
 }): T[] {
 	const sorted = [...new Set(edges)].sort((a, b) => a - b);
+	// Cuts come sorted from unionSpans, so one pointer walks the edges.
+	let next = 0;
 	const widened = unionSpans(cuts).map((cut) => {
-		const previous = sorted.findLast((edge) => edge < cut.start);
-		const next = sorted.find((edge) => edge > cut.end);
+		while (next < sorted.length && sorted[next] < cut.start) next++;
+		const previous = next > 0 ? sorted[next - 1] : undefined;
+		let after = next;
+		while (after < sorted.length && sorted[after] <= cut.end) after++;
+		const following = sorted[after];
 		return {
 			...cut,
 			start:
 				previous !== undefined && cut.start - previous < minimum
 					? previous
 					: cut.start,
-			end: next !== undefined && next - cut.end < minimum ? next : cut.end,
+			end:
+				following !== undefined && following - cut.end < minimum
+					? following
+					: cut.end,
 		};
 	});
 	const closed: T[] = [];

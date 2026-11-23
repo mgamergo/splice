@@ -83,6 +83,79 @@ describe("rippleDeleteRanges", () => {
 	});
 });
 
+describe("rippleDeleteRanges in one pass", () => {
+	// A small deterministic generator, so a failure reproduces.
+	let seed = 11;
+	const random = (max: number) => {
+		seed = (seed * 48271) % 2147483647;
+		return Math.floor((seed / 2147483647) * max);
+	};
+	const shape = ({ tracks, markers }: ReturnType<typeof rippleDeleteRanges>) => ({
+		clips: [tracks.main, ...tracks.audio].map(({ clips }) =>
+			clips.map(({ startTime, duration, trimStart, trimEnd }) => [startTime, duration, trimStart, trimEnd]),
+		),
+		markers: markers.map(({ time }) => time),
+		ids: tracks.main.clips.map(({ id }) => (id.startsWith("new-") ? "new" : id)),
+	});
+
+	test.each(Array.from({ length: 25 }, (_, index) => index))(
+		"matches deleting the ranges one at a time, last first (case %i)",
+		() => {
+			const { tracks } = buildDefaultSequence({ name: "Main sequence", isMain: true });
+			const main = [0, 7, 15, 28].map((start, index) => ({
+				...videoClip({ id: `v${index}`, start, duration: 4 + random(4), trimStart: random(3) }),
+				...(index === 2 ? { retime: { rate: 1.5 } } : {}),
+			}));
+			const input = {
+				...tracks,
+				main: { ...tracks.main, clips: main },
+				audio: [
+					{
+						id: "a1",
+						name: "A1",
+						type: "audio" as const,
+						muted: false,
+						clips: [audioClip({ id: "m", start: 1, duration: 30 })],
+					},
+				],
+			};
+			const markers = Array.from({ length: 6 }, (_, index) => ({
+				time: s(random(340) / 10),
+				...(index % 2 ? { data: { kind: "removal" } } : {}),
+			})) as Parameters<typeof rippleDeleteRanges>[0]["markers"];
+			const ranges = Array.from({ length: 6 }, () => {
+				const start = random(340) / 10;
+				return { start: s(start), end: s(start + 0.5 + random(30) / 10) };
+			});
+			const once = rippleDeleteRanges({ tracks: input, markers, ranges, generateId });
+			const stepwise = normalizeRanges({ ranges })
+				.reverse()
+				.reduce(
+					(result, range) => rippleDeleteRanges({ ...result, ranges: [range], generateId }),
+					{ tracks: input, markers },
+				);
+			expect(shape(once)).toEqual(shape(stepwise));
+		},
+	);
+
+	test("deletes 10,000 ranges from one long clip quickly", () => {
+		const ranges = Array.from({ length: 10_000 }, (_, index) => ({
+			start: s(index * 3),
+			end: s(index * 3 + 1),
+		}));
+		const started = performance.now();
+		const result = rippleDeleteRanges({
+			tracks: tracksWith([videoClip({ id: "long", start: 0, duration: 30_000 })]),
+			markers: [],
+			ranges,
+			generateId,
+		});
+		expect(performance.now() - started).toBeLessThan(1_000);
+		expect(result.tracks.main.clips).toHaveLength(10_000);
+		expect(result.tracks.main.clips.at(-1)).toMatchObject({ startTime: s(19_998), duration: s(2) });
+	});
+});
+
 describe("normalizeRanges", () => {
 	test("sorts, merges overlapping or touching ranges and drops empty ones", () => {
 		expect(

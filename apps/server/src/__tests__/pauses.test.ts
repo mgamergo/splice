@@ -8,10 +8,12 @@ import {
 	createPauseDetector,
 	fillerCut,
 	findFillerWords,
+	lastsAtLeast,
 	parseSilencedetect,
 	silencedetectArgs,
 } from "../pauses";
 import { resolveRoughCutRequest } from "../rough-cut";
+import { extractAudio, parseHasAudio } from "../transcription-tools";
 
 // Captured from FFmpeg 6.1 on a generated recording; one silence is still open at the end.
 const silencedetectOutput = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'rec-01.mp4':
@@ -170,6 +172,87 @@ test("moves filler words from Whisper's times to their sound between two silence
 	).toEqual([]);
 });
 
+test("leaves a filler in place when its sound could be a real word", () => {
+	// "um" sits inside continuous speech; the next isolated sound is "go",
+	// whose transcript time drifted past it.
+	const silences = [
+		{ start: 0, end: 1 },
+		{ start: 3, end: 3.12 },
+		{ start: 3.4, end: 4 },
+	];
+	expect(
+		findFillerWords({
+			transcript: transcript({
+				words: [
+					word(["We", 1.2, 1.6]),
+					word(["um", 2.3, 2.6]),
+					word(["go", 3.45, 3.75]),
+				],
+			}),
+			silences,
+		}),
+	).toEqual([{ start: 2.3, end: 2.6, text: "um", aligned: false }]);
+	// Heard in a silence, but a real word's times overlap the only short sound.
+	expect(
+		findFillerWords({
+			transcript: transcript({
+				words: [word(["uh", 3.02, 3.1]), word(["go", 3.3, 3.6])],
+			}),
+			silences,
+		}),
+	).toEqual([{ start: 3.02, end: 3.1, text: "uh", aligned: false }]);
+	// The same sound with no word on it is the filler.
+	expect(
+		findFillerWords({
+			transcript: transcript({
+				words: [word(["uh", 3.02, 3.1]), word(["go", 4.2, 4.5])],
+			}),
+			silences,
+		}),
+	).toEqual([
+		{
+			start: 3.12,
+			end: 3.4,
+			text: "uh",
+			aligned: true,
+			silenceBefore: silences[1],
+			silenceAfter: silences[2],
+		},
+	]);
+});
+
+test("measures pause length in whole milliseconds, wherever the pause sits", () => {
+	expect(8.6 - 8).toBeLessThan(0.6);
+	expect(lastsAtLeast({ start: 8, end: 8.6 }, 0.6)).toBe(true);
+	expect(lastsAtLeast({ start: 8, end: 8.599 }, 0.6)).toBe(false);
+	expect(
+		combineSilencesWithTranscript({
+			silences: [
+				{ start: 1, end: 1.6 },
+				{ start: 8, end: 8.6 },
+			],
+			words: null,
+			minSeconds: 0.6,
+		}),
+	).toEqual([
+		{ start: 1, end: 1.6 },
+		{ start: 8, end: 8.6 },
+	]);
+});
+
+test("reads whether FFmpeg lists an audio stream in the input", () => {
+	expect(parseHasAudio({ output: silencedetectOutput })).toBe(true);
+	expect(
+		parseHasAudio({
+			output: `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'screen.mp4':
+  Duration: 00:00:01.00, start: 0.000000, bitrate: 18 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 128x72, 25 fps (default)
+Output #0, ffmetadata, to 'pipe:':
+  Stream #0:0: Audio: pcm_s16le`,
+		}),
+	).toBe(false);
+});
+
 function silentWav({ seconds }: { seconds: Array<[number, boolean]> }) {
 	const rate = 8000;
 	const samples = seconds.flatMap(([length, loud]) =>
@@ -266,6 +349,87 @@ test.skipIf(!Bun.which("ffmpeg"))(
 	},
 );
 
+function ffmpeg(args: string[]) {
+	const result = Bun.spawnSync([
+		"ffmpeg",
+		"-nostdin",
+		"-loglevel",
+		"error",
+		"-y",
+		...args,
+	]);
+	if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+}
+
+test.skipIf(!Bun.which("ffmpeg"))(
+	"finds equal pauses at any offset and skips a video without an audio track",
+	async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-pauses-"));
+		const detector = createPauseDetector({
+			root,
+			readTranscript: async () => null,
+		});
+		try {
+			await mkdir(join(root, "Footage"));
+			await Bun.write(
+				join(root, "Footage", "threshold.wav"),
+				silentWav({
+					seconds: [
+						[1, true],
+						[0.6, false],
+						[6.4, true],
+						[0.6, false],
+						[1.4, true],
+					],
+				}),
+			);
+			expect((await detector.detect({ path: "threshold.wav" })).pauses).toEqual(
+				[
+					{ start: 1, end: 1.6 },
+					{ start: 8, end: 8.6 },
+				],
+			);
+
+			const video = join(root, "Footage", "screen.mp4");
+			ffmpeg([
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=black:s=128x72:d=1",
+				"-c:v",
+				"mpeg4",
+				video,
+			]);
+			expect(await detector.detect({ path: "screen.mp4" })).toMatchObject({
+				cached: false,
+				hasAudio: false,
+				durationSeconds: 1,
+				pauses: [],
+				pauseSeconds: 0,
+			});
+			// The scan is cached like any other.
+			expect(await detector.detect({ path: "screen.mp4" })).toMatchObject({
+				cached: true,
+				hasAudio: false,
+			});
+			expect(
+				await detector.fillerCuts({ path: "screen.mp4", paddingSeconds: 0.2 }),
+			).toEqual([]);
+			await expect(
+				extractAudio({
+					root,
+					source: video,
+					wav: join(root, "audio.wav"),
+					signal: new AbortController().signal,
+				}),
+			).rejects.toThrow("screen.mp4 has no audio track");
+		} finally {
+			detector.stop();
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
 const request = {
 	expectedRevision: 3,
 	sections: [],
@@ -301,6 +465,7 @@ test("resolves automatic pauses and filler words for every recording on the sour
 				noiseDb: -40,
 				minSeconds: 0.6,
 				cached: true,
+				hasAudio: true,
 				transcribed: true,
 				pauses: [{ start: 4, end: 5 }],
 				pauseSeconds: 1,

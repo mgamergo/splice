@@ -240,8 +240,6 @@ function takeWindows({
 	markerId?: string;
 	complete?: boolean;
 }): TakeWindow[] {
-	const [first, ...rest] = take;
-	if (!first) return [];
 	const forRange = (range: ResolvedRange) => {
 		const candidates =
 			range.item.type === "video"
@@ -256,10 +254,15 @@ function takeWindows({
 	};
 	// Count routes per candidate (capped at 2) instead of listing every path:
 	// duplicated cuts on parallel tracks would otherwise grow 2^ranges paths.
-	let nodes: PathNode[] = forRange(first).map((part) => ({ part, routes: 1 }));
-	for (const range of rest) {
+	let nodes: PathNode[] | undefined;
+	for (const range of take) {
+		const parts = forRange(range);
+		// A range that shows nowhere was cut whole, say as a false start by
+		// Tighten. The surviving ranges still form the take.
+		if (!complete && !parts.length) continue;
 		const previous = nodes;
-		nodes = forRange(range).flatMap((part) => {
+		nodes = parts.flatMap((part) => {
+			if (!previous) return [{ part, routes: 1 }];
 			const joins = previous.filter((node) => node.part.end === part.start);
 			if (!joins.length) return [];
 			const routes = Math.min(
@@ -269,7 +272,7 @@ function takeWindows({
 			return [{ part, routes, previous: joins[0] }];
 		});
 	}
-	return nodes.flatMap((node) => {
+	return (nodes ?? []).flatMap((node) => {
 		const parts: RangeWindow[] = [];
 		for (let step: PathNode | undefined = node; step; step = step.previous)
 			parts.unshift(step.part);

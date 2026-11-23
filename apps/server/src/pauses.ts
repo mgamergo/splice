@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
-import { ffmpegInputArgs, findFfmpeg, run } from "./transcription-tools";
+import {
+	ffmpegInputArgs,
+	findFfmpeg,
+	parseHasAudio,
+	probeRecording,
+	run,
+} from "./transcription-tools";
 
 /** Speech on a laptop mic sits well above this; room noise well below it. */
 export const DEFAULT_NOISE_DB = -35;
@@ -15,7 +21,7 @@ const SCAN_MIN_SILENCE_SECONDS = 0.1;
 /** A sound between two silences that is shorter than this and holds no word is a click, not speech. */
 const BRIDGE_SECONDS = 0.12;
 /** Bump when cached pause semantics change. */
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 export const FILLER_WORDS: ReadonlySet<string> = new Set([
 	"um",
@@ -59,6 +65,8 @@ export interface TimeRange {
 
 const scanSchema = z.object({
 	durationSeconds: z.number().nonnegative().nullable(),
+	/** A video without an audio track has no pauses and is never cut. */
+	hasAudio: z.boolean(),
 	silences: z.array(z.object({ start: z.number(), end: z.number() })),
 });
 type Scan = z.infer<typeof scanSchema>;
@@ -86,7 +94,11 @@ export function silencedetectArgs({
 }
 
 /** Reads FFmpeg's stderr. A silence still open at the end runs to the input's duration. */
-export function parseSilencedetect({ output }: { output: string }): Scan {
+export function parseSilencedetect({
+	output,
+}: {
+	output: string;
+}): Omit<Scan, "hasAudio"> {
 	const silences: TimeRange[] = [];
 	let durationSeconds: number | null = null;
 	let open: number | null = null;
@@ -114,6 +126,14 @@ export function parseSilencedetect({ output }: { output: string }): Scan {
 	if (open !== null && durationSeconds !== null && durationSeconds > open)
 		silences.push({ start: open, end: durationSeconds });
 	return { durationSeconds, silences };
+}
+
+/**
+ * Compared in whole milliseconds: subtracting float timestamps makes an exact
+ * 600 ms silence at 8.0–8.6 s measure just under 0.6.
+ */
+export function lastsAtLeast({ start, end }: TimeRange, seconds: number) {
+	return Math.round((end - start) * 1000) >= Math.round(seconds * 1000);
 }
 
 function transcriptWords(transcript: Transcript): TranscriptWord[] {
@@ -152,7 +172,7 @@ export function combineSilencesWithTranscript({
 			merged.push({ ...silence });
 		}
 	}
-	return merged.filter(({ start, end }) => end - start >= minSeconds);
+	return merged.filter((silence) => lastsAtLeast(silence, minSeconds));
 }
 
 export function normalizeWord(text: string): string {
@@ -173,11 +193,17 @@ export type FillerWord = TimeRange & {
 	silenceAfter?: TimeRange;
 };
 
+const overlaps = (a: TimeRange, b: TimeRange) =>
+	Math.min(a.end, b.end) > Math.max(a.start, b.start);
+
 /**
  * English filler words, moved from Whisper's drifting times to their sound:
- * the nearest short sound between two silences that doesn't hold the middle
- * of the words before or after the filler. A filler with no such sound
- * within reach keeps its transcript times and `aligned: false`.
+ * the nearest short sound between two silences. Alignment is conservative,
+ * because cutting the wrong sound deletes a real word. A filler stays at its
+ * transcript times with `aligned: false` when no such sound is within reach,
+ * when every sound in reach overlaps a non-filler word, or when the filler's
+ * own times overlap any other sound, which means Whisper heard it inside
+ * continuous speech.
  */
 export function findFillerWords({
 	transcript,
@@ -189,38 +215,45 @@ export function findFillerWords({
 	if (!transcript.language.startsWith("en")) return [];
 	const words = transcriptWords(transcript);
 	const isFiller = (text: string) => FILLER_WORDS.has(normalizeWord(text));
+	const spoken = words.filter(({ text }) => !isFiller(text));
 	const sorted = [...silences].sort((a, b) => a.start - b.start);
-	const sounds = sorted.slice(1).flatMap((after, index) => {
-		const before = sorted[index];
-		return after.start > before.end &&
-			after.start - before.end <= FILLER_MAX_SECONDS
-			? [{ start: before.end, end: after.start, before, after }]
-			: [];
-	});
-	return words.flatMap((word, index) => {
+	const audible: Array<TimeRange & { before?: TimeRange; after?: TimeRange }> =
+		[
+			{ start: Number.NEGATIVE_INFINITY, end: sorted[0]?.start ?? Infinity },
+			...sorted.slice(1).map((after, index) => ({
+				start: sorted[index].end,
+				end: after.start,
+				before: sorted[index],
+				after,
+			})),
+			{ start: sorted.at(-1)?.end ?? Infinity, end: Infinity },
+		].filter(({ start, end }) => end > start);
+	const holdsWord = (sound: TimeRange) =>
+		spoken.some((word) => {
+			const middle = (word.start + word.end) / 2;
+			return (
+				overlaps(word, sound) || (sound.start <= middle && middle <= sound.end)
+			);
+		});
+	return words.flatMap((word) => {
 		if (!isFiller(word.text)) return [];
-		const neighbors = [
-			words
-				.slice(0, index)
-				.reverse()
-				.find(({ text }) => !isFiller(text)),
-			words.slice(index + 1).find(({ text }) => !isFiller(text)),
-		].flatMap((neighbor) =>
-			neighbor ? [(neighbor.start + neighbor.end) / 2] : [],
-		);
 		const distance = ({ start, end }: TimeRange) =>
 			Math.max(0, start - word.end, word.start - end);
-		const sound = sounds
+		const sound = audible
 			.filter(
 				(candidate) =>
+					candidate.before &&
+					candidate.after &&
+					candidate.end - candidate.start <= FILLER_MAX_SECONDS &&
 					distance(candidate) <= FILLER_REACH_SECONDS &&
-					!neighbors.some(
-						(middle) => candidate.start <= middle && middle <= candidate.end,
-					),
+					!holdsWord(candidate),
 			)
 			.sort((a, b) => distance(a) - distance(b))[0];
+		const heardElsewhere = audible.some(
+			(other) => other !== sound && overlaps(other, word),
+		);
 		return [
-			sound
+			sound && !heardElsewhere
 				? {
 						start: sound.start,
 						end: sound.end,
@@ -289,14 +322,29 @@ export function createPauseDetector({
 		let pending = scans.get(key);
 		if (!pending) {
 			pending = (async () => {
-				const lines: string[] = [];
-				await run({
-					command: await findFfmpeg({ root }),
-					args: silencedetectArgs({ source, noiseDb }),
+				const command = await findFfmpeg({ root });
+				const probe = await probeRecording({
+					command,
+					source,
 					signal: stop.signal,
-					onLine: (line) => lines.push(line),
 				});
-				const result = parseSilencedetect({ output: lines.join("\n") });
+				let result: Scan;
+				if (parseHasAudio({ output: probe })) {
+					const lines: string[] = [];
+					await run({
+						command,
+						args: silencedetectArgs({ source, noiseDb }),
+						signal: stop.signal,
+						onLine: (line) => lines.push(line),
+					});
+					result = {
+						...parseSilencedetect({ output: lines.join("\n") }),
+						hasAudio: true,
+					};
+				} else {
+					const { durationSeconds } = parseSilencedetect({ output: probe });
+					result = { durationSeconds, hasAudio: false, silences: [] };
+				}
 				await mkdir(cacheDir, { recursive: true });
 				const temporary = await mkdtemp(join(cacheDir, ".scan-"));
 				try {
@@ -337,9 +385,10 @@ export function createPauseDetector({
 			minSeconds,
 			cached,
 			durationSeconds: result.durationSeconds,
+			hasAudio: result.hasAudio,
 			transcript,
 			silences,
-			pauses: silences.filter(({ start, end }) => end - start >= minSeconds),
+			pauses: silences.filter((silence) => lastsAtLeast(silence, minSeconds)),
 		};
 	}
 
@@ -369,7 +418,10 @@ export function createPauseDetector({
 			};
 		},
 
-		/** Source ranges that remove the aligned fillers, or null before transcription. */
+		/**
+		 * Source ranges that remove the aligned fillers: none for a recording
+		 * without audio, and null before transcription.
+		 */
 		async fillerCuts({
 			paddingSeconds,
 			...params
@@ -378,7 +430,8 @@ export function createPauseDetector({
 			noiseDb?: number;
 			paddingSeconds: number;
 		}): Promise<TimeRange[] | null> {
-			const { transcript, silences } = await analyze(params);
+			const { hasAudio, transcript, silences } = await analyze(params);
+			if (!hasAudio) return [];
 			if (!transcript) return null;
 			return findFillerWords({ transcript, silences }).flatMap((filler) => {
 				const cut = fillerCut({ filler, paddingSeconds });
