@@ -130,6 +130,39 @@ describe("splice mcp tools", () => {
 		expect(calls.at(-1)?.[1]).toEqual({ ...roughCutArgs, captions: undefined });
 	});
 
+	test("captions_add asks for transcripts in batches of 200 paths", async () => {
+		const batches: number[] = [];
+		const items = Array.from({ length: 450 }, (_, index) => ({
+			id: `rec-${index}`,
+			type: "video",
+			path: `rec-${index}.mp4`,
+			missing: false,
+		}));
+		const client = await connect(async ({ method, params }) => {
+			if (method === "editor.listItems") return items;
+			if (method === "transcript.words") {
+				const { paths } = params as { paths: string[] };
+				batches.push(paths.length);
+				return {
+					transcripts: paths
+						.filter((path) => path === "rec-449.mp4")
+						.map((path) => ({
+							path,
+							words: [{ start: 0, end: 1, text: "last" }],
+						})),
+					missing: [],
+				};
+			}
+			return { ok: true, captionCount: 1 };
+		});
+		const result = await client.callTool({
+			name: "captions_add",
+			arguments: { expectedRevision: 1 },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(batches).toEqual([200, 200, 50]);
+	});
+
 	test("captions_add fails clearly when nothing is transcribed", async () => {
 		const client = await connect(async ({ method }) => {
 			if (method === "editor.listItems")

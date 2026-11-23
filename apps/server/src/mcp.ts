@@ -101,15 +101,21 @@ async function captionSources({
 		throw new Error(
 			"No available recordings in this project reference Footage. Import them with items_import first.",
 		);
-	const { transcripts } = transcriptWordsSchema.parse(
-		await rpc({
-			method: "transcript.words",
-			params: { paths: items.map(({ path }) => path) },
-		}),
-	);
-	const wordsByPath = new Map(
-		transcripts.map(({ path, words }) => [path, words]),
-	);
+	const paths = [...new Set(items.map(({ path }) => path))];
+	const wordsByPath = new Map<
+		string,
+		Array<{ start: number; end: number; text: string }>
+	>();
+	// transcript.words takes at most 200 paths per call.
+	for (let offset = 0; offset < paths.length; offset += 200) {
+		const { transcripts } = transcriptWordsSchema.parse(
+			await rpc({
+				method: "transcript.words",
+				params: { paths: paths.slice(offset, offset + 200) },
+			}),
+		);
+		for (const { path, words } of transcripts) wordsByPath.set(path, words);
+	}
 	const sources = items.flatMap(({ id, path }) => {
 		const words = wordsByPath.get(path);
 		return words?.length ? [{ projectItemId: id, words }] : [];

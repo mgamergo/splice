@@ -73,6 +73,6 @@ SPLICE_WHISPER_BIN="$PWD/whisper.cpp/build/bin/whisper-cli" bun run splice
 
 ### Formats and captions
 
-When you create a project, choose its format: **Horizontal** (1920×1080) or **Short** (1080×1920), both at 30 fps. `sequence_get` and `editor_status` report the format.
+When you create a project, choose its format: **Horizontal** (1920×1080) or **Short** (1080×1920), both at 30 fps. `sequence_get` reports the format.
 
 In a Short project, `rough_cut` also burns in word-by-word captions from the recordings' cached transcripts, in the same undo step. Pass `captionStyle` to change the defaults: up to 3 words at a time, bold white text on a black box, near the bottom and clear of the Shorts controls. To caption any sequence, or to restyle existing captions, call `captions_add`. It replaces the sequence's Captions track. The captions are ordinary text clips, so you can also edit them in the timeline.
