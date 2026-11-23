@@ -100,3 +100,13 @@ The creator can reposition and magnify a generated zoom in the preview and trim 
 Caption corrections can apply to one cue, across the project, or to a reusable spelling chosen by the creator for future projects. Time the corrected SRT against the final reviewed sequence.
 
 Export is the creator's explicit final approval. Show unresolved issues and let the creator fix or dismiss each one. Produce the MP4 and SRT from the same approved sequence revision.
+
+### Recuts, recovery, music and export retries
+
+After a take changes, check both adjacent transitions for gaze continuity. Adjust agent-generated framing where needed. Preserve manual framing and flag it for review if the transition no longer works. Track creator adjustments per property. A rewritten card title stays intact as its cue moves. Flag a possible mismatch if the narration changes its meaning.
+
+On reopen, retain completed edits and offer Resume for an interrupted pass. Resume from the current sequence, reuse completed analysis whose inputs still match, and avoid duplicating graphics. Selecting a review issue plays the surrounding edit. Keep a dismissal until the evidence behind that issue changes.
+
+Music is opt-in for the first horizontal workflow. The creator selects a track. The agent fits it to the sequence, fades its ends and ducks it under speech. The creator can audition and adjust the mix.
+
+Publish the MP4 and SRT together only after both succeed. Preserve the previous complete pair on failure, identify the failed step and offer a retry. Edits during rendering create a newer revision. Finish rendering the approved revision and tell the creator when a newer edit is available.
