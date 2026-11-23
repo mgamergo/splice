@@ -9,6 +9,7 @@ import { audioClip, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { buildDefaultSequence } from "@/timeline/sequences";
 import type { SequenceTracks, TextClip } from "@/timeline";
 
+// eslint-disable-next-line opencut/prefer-object-params -- terse test data
 const word = (start: number, end: number, text: string) => ({
 	start,
 	end,

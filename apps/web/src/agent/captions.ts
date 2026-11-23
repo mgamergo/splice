@@ -13,7 +13,11 @@ import type {
 	VideoClip,
 } from "@/timeline/types";
 import { generateUUID } from "@/utils/id";
-import { mediaTimeFromSeconds, mediaTimeToSeconds } from "@/wasm";
+import {
+	mediaTimeFromSeconds,
+	mediaTimeToSeconds,
+	roundMediaTime,
+} from "@/wasm";
 
 /** The text track that holds burned-in captions. Adding captions replaces it. */
 export const CAPTION_TRACK_NAME = "Captions";
@@ -86,19 +90,23 @@ export function mapWordsToTimeline({
 			const sourceOut =
 				trimStart +
 				mediaTimeToSeconds({
-					time: getSourceSpanAtClipTime({
-						clipTime: clip.duration,
-						retime: clip.retime,
+					time: roundMediaTime({
+						time: getSourceSpanAtClipTime({
+							clipTime: clip.duration,
+							retime: clip.retime,
+						}),
 					}),
 				});
 			const toTimeline = (sourceSeconds: number) =>
 				clipStart +
 				mediaTimeToSeconds({
-					time: getClipTimeAtSourceTime({
-						sourceTime: mediaTimeFromSeconds({
-							seconds: sourceSeconds - trimStart,
+					time: roundMediaTime({
+						time: getClipTimeAtSourceTime({
+							sourceTime: mediaTimeFromSeconds({
+								seconds: sourceSeconds - trimStart,
+							}),
+							retime: clip.retime,
 						}),
-						retime: clip.retime,
 					}),
 				});
 			for (const word of sourceWords) {
