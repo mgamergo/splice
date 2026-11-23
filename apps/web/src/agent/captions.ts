@@ -285,17 +285,21 @@ function captionClips({
 	canvasSize,
 	from = 0,
 	until = Number.POSITIVE_INFINITY,
+	wordsUntil = until,
 }: {
 	content: SequenceTracks;
 	captions: CaptionsRequest;
 	canvasSize: { width: number; height: number };
 	from?: number;
+	/** Captions end by here. */
 	until?: number;
+	/** Only words starting before here are captioned. */
+	wordsUntil?: number;
 }): TextTrack["clips"] {
 	const words = mapWordsToTimeline({
 		tracks: content,
 		sources: captions.sources,
-	}).filter(({ start }) => start >= from && start < until);
+	}).filter(({ start }) => start >= from && start < wordsUntil);
 	const end = Math.min(
 		until,
 		mediaTimeToSeconds({ time: calculateTotalDuration({ tracks: content }) }),
@@ -456,8 +460,10 @@ export function rebuildCaptions({
 		...clip,
 		startTime: roundMediaTime({ time: clip.startTime + window.delta }),
 	}));
-	// Fresh captions fill the gap between the kept ones, including any that
-	// straddled the window's edges, from only the words heard in the gap.
+	// Fresh captions fill the gap between the kept ones. They caption the
+	// words heard from the last kept caption to the end of the edit, or of the
+	// last caption it replaced if that ran later. Later words keep theirs,
+	// even one the creator moved off its word.
 	const from = Math.max(
 		0,
 		...before.map((clip) => seconds(clip.startTime + clip.duration)),
@@ -466,7 +472,25 @@ export function rebuildCaptions({
 		Number.POSITIVE_INFINITY,
 		...after.map((clip) => seconds(clip.startTime)),
 	);
-	const between = captionClips({ content, captions, canvasSize, from, until });
+	const replacedEnd = Math.max(
+		seconds(window.end + window.delta),
+		...previous.clips
+			.filter(
+				(clip) =>
+					!before.includes(clip) &&
+					!kept.includes(clip) &&
+					clip.startTime + clip.duration > window.end,
+			)
+			.map((clip) => seconds(clip.startTime + clip.duration + window.delta)),
+	);
+	const between = captionClips({
+		content,
+		captions,
+		canvasSize,
+		from,
+		until,
+		wordsUntil: Math.min(until, replacedEnd),
+	});
 	return {
 		...content,
 		overlay: [
