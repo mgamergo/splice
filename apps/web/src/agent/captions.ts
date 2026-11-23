@@ -26,6 +26,8 @@ const DEFAULT_WORDS_PER_CAPTION = 3;
 const DEFAULT_FONT_SIZE = 8;
 /** A caption stays up this long after its last word unless the next one starts. */
 const CAPTION_HOLD_SECONDS = 0.3;
+/** How long a caption stays up when the next one starts at the same time. */
+const STACKED_CAPTION_SECONDS = 0.2;
 /** A silence this long between words starts a new caption. */
 const CAPTION_BREAK_GAP_SECONDS = 0.5;
 /** whisper.cpp sometimes gives a word no duration; it still gets shown. */
@@ -155,21 +157,29 @@ export function buildCaptionCues({
 	if (current.length) groups.push(current);
 
 	const overrides = styleOverrides({ style });
-	return groups.flatMap((group, index) => {
-		const startTime = group[0].start;
+	const cues: SubtitleCue[] = [];
+	let previousEnd = 0;
+	for (const [index, group] of groups.entries()) {
+		// Words whisper.cpp stacks on one time still get a readable moment each.
+		const startTime = Math.max(group[0].start, previousEnd);
 		const nextStart = groups[index + 1]?.[0].start ?? Number.POSITIVE_INFINITY;
-		const end = Math.min(nextStart, group.at(-1)!.end + CAPTION_HOLD_SECONDS);
-		if (end <= startTime) return [];
+		const natural = Math.min(
+			nextStart,
+			group.at(-1)!.end + CAPTION_HOLD_SECONDS,
+		);
+		// Only stacked captions are pushed back, so normal speech never drifts.
+		const end =
+			natural > startTime ? natural : startTime + STACKED_CAPTION_SECONDS;
 		const text = group.map(({ text }) => text).join(" ");
-		return [
-			{
-				text: style.uppercase ? text.toUpperCase() : text,
-				startTime,
-				duration: end - startTime,
-				style: overrides,
-			},
-		];
-	});
+		cues.push({
+			text: style.uppercase ? text.toUpperCase() : text,
+			startTime,
+			duration: end - startTime,
+			style: overrides,
+		});
+		previousEnd = end;
+	}
+	return cues;
 }
 
 function styleOverrides({

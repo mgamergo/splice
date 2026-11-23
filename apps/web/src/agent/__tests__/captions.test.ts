@@ -172,6 +172,29 @@ describe("buildCaptionCues", () => {
 		]);
 	});
 
+	test("staggers captions whose words share one time instead of dropping them", () => {
+		const cues = buildCaptionCues({
+			words: [
+				word(2, 2.08, "Welcome"),
+				word(2, 2.08, "to"),
+				word(2, 2.08, "the"),
+				word(2, 2.15, "Editing"),
+				word(3.5, 4, "Workshop."),
+			],
+		});
+		expect(
+			cues.map(({ text, startTime, duration }) => [
+				text,
+				Math.round(startTime * 1000) / 1000,
+				Math.round(duration * 1000) / 1000,
+			]),
+		).toEqual([
+			["Welcome to the", 2, 0.2],
+			["Editing", 2.2, 0.25],
+			["Workshop.", 3.5, 0.8],
+		]);
+	});
+
 	test("applies the style", () => {
 		const [cue] = buildCaptionCues({
 			words: [word(0, 0.5, "hello"), word(0.5, 1, "there")],
