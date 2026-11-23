@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { EditorApi } from "@/agent/editor-api";
 import type { EditorCore } from "@/core";
 import { importDiskItems, summarizeItem } from "@/media/import-disk";
+import { projectFormat } from "@/project/format";
 
 export type TabHandlers = Record<TabMethod, (params: unknown) => unknown>;
 
@@ -38,7 +39,11 @@ export function createTabHandlers({
 			return {
 				revision: api.getRevision(),
 				project: project
-					? { id: project.metadata.id, name: project.metadata.name }
+					? {
+							id: project.metadata.id,
+							name: project.metadata.name,
+							format: projectFormat({ project }),
+						}
 					: null,
 				sequenceId: editor.sequences.getActiveSequenceOrNull()?.id ?? null,
 				digest: api.getDigest(),
@@ -57,6 +62,10 @@ export function createTabHandlers({
 		"editor.roughCut": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.roughCut(params);
+		},
+		"editor.addCaptions": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.addCaptions(params);
 		},
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),

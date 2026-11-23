@@ -139,6 +139,7 @@ export function startServer({
 	const serverJobs = new Map<string, (params: unknown) => Promise<unknown>>([
 		["transcribe.start", (params) => transcription.start(params)],
 		["transcribe.status", (params) => transcription.status(params)],
+		["transcript.words", (params) => transcription.words(params)],
 		["loudness.measure", (params) => loudness.measure(params)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,

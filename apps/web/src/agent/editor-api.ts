@@ -5,6 +5,8 @@ import {
 	sequenceDurationSeconds,
 } from "@/agent/rough-cut";
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
+import { CaptionError, withCaptionTrack } from "@/agent/captions";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	applySourceGains,
 	collectAudioSources,
@@ -18,6 +20,7 @@ import { buildSequenceDigest } from "@/agent/digest";
 import {
 	type ApplyRequest,
 	applyRequestSchema,
+	addCaptionsRequestSchema,
 	audioSourcesRequestSchema,
 	type EditOp,
 	rawSequenceRequestSchema,
@@ -155,6 +158,7 @@ export class EditorApi {
 		const {
 			sequenceId,
 			sections,
+			captions,
 			label = "Agent: rough cut",
 			plan,
 			sourceGains,
@@ -194,26 +198,83 @@ export class EditorApi {
 						projectItems,
 					}),
 				};
-			const sequence = sourceGains
-				? {
-						...cut.sequence,
-						tracks: applySourceGains({
-							tracks: cut.sequence.tracks,
-							projectItems,
-							gains: sourceGains,
-						}),
-					}
-				: cut.sequence;
+			const tracks = sourceGains
+				? applySourceGains({
+						tracks: cut.sequence.tracks,
+						projectItems,
+						gains: sourceGains,
+					})
+				: cut.sequence.tracks;
+			const captioned = captions
+				? withCaptionTrack({
+						tracks,
+						captions,
+						canvasSize: this.editor.project.getActive().settings.canvasSize,
+					})
+				: null;
+			const sequence = captioned
+				? { ...cut.sequence, tracks: captioned.tracks, captions }
+				: sourceGains
+					? { ...cut.sequence, tracks }
+					: cut.sequence;
 			return {
 				...this.addPreparedSequence({ sequence, label }),
 				sections: cut.sections,
+				...(captioned && {
+					captionCount: captioned.captionCount,
+					uncaptionedItemIds: captioned.uncaptionedItemIds,
+				}),
 			};
 		} catch (error) {
 			if (
 				!(error instanceof RemovalTakeError) &&
-				!(error instanceof LoudnessError)
+				!(error instanceof LoudnessError) &&
+				!(error instanceof CaptionError)
 			)
 				throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	/** Replaces the sequence's Captions track with word-by-word captions. */
+	addCaptions(request: unknown) {
+		const parsed = addCaptionsRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const { sequenceId, sources, style } = parsed.data;
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			);
+		try {
+			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
+				tracks: sequence.tracks,
+				captions: { sources, style },
+				canvasSize: this.editor.project.getActive().settings.canvasSize,
+			});
+			const label = "Agent: captions";
+			this.editor.command.execute({
+				command: new UpdateSequenceCommand({
+					editor: this.editor,
+					sequenceId: sequence.id,
+					updates: { tracks, captions: { sources, style } },
+					label,
+				}),
+			});
+			return {
+				ok: true as const,
+				sequenceId: sequence.id,
+				revision: this.getRevision(),
+				label,
+				captionCount,
+				uncaptionedItemIds,
+			};
+		} catch (error) {
+			if (!(error instanceof CaptionError)) throw error;
 			return this.invalidOp(error.message);
 		}
 	}
