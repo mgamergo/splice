@@ -305,7 +305,7 @@ function TimelineMarker({
 				</button>
 			</PopoverAnchor>
 			<PopoverContent
-				className="w-64 flex flex-col gap-3 p-3"
+				className="w-64 flex flex-col gap-3 p-3 max-h-[min(28rem,var(--radix-popover-content-available-height))] overflow-y-auto"
 				align="start"
 				side="bottom"
 				sideOffset={8}
