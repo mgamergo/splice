@@ -23,6 +23,7 @@ import {
 } from "./footage";
 import { createToken, tokensMatch } from "./session";
 import { BridgeError, TabBridge } from "./tab-bridge";
+import { createTranscriptionJobs } from "./transcription";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
 const MAX_RPC_BODY_BYTES = 4 * 1024 * 1024;
@@ -56,7 +57,7 @@ export interface RunningServer {
 	bridge: TabBridge;
 	/** `http://127.0.0.1:<port>` */
 	origin: string;
-	stop(): void;
+	stop(): Promise<void>;
 }
 
 function rpcResult({
@@ -132,6 +133,7 @@ export function startServer({
 	isUpstreamReady = () => true,
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
+	const transcription = createTranscriptionJobs({ root });
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
 	const mediaKey = createToken();
@@ -183,6 +185,24 @@ export function startServer({
 						id,
 						code: RPC_ERRORS.INTERNAL,
 						message: `Couldn't list ${root}/${FOOTAGE_FOLDER}: ${error instanceof Error ? error.message : String(error)}`,
+					}),
+				);
+			}
+		}
+		if (method === "transcribe.start" || method === "transcribe.status") {
+			try {
+				const result =
+					method === "transcribe.start"
+						? await transcription.start(params)
+						: await transcription.status(params);
+				return Response.json(rpcResult({ id, result }));
+			} catch (error) {
+				return Response.json(
+					rpcError({
+						id,
+						code:
+							error instanceof BridgeError ? error.code : RPC_ERRORS.INTERNAL,
+						message: error instanceof Error ? error.message : String(error),
 					}),
 				);
 			}
@@ -549,9 +569,10 @@ export function startServer({
 		server,
 		bridge,
 		origin: `http://127.0.0.1:${server.port}`,
-		stop() {
+		async stop() {
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
+			await transcription.stop();
 		},
 	};
 }
