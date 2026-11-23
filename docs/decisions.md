@@ -76,3 +76,9 @@ The settled outcome of the design grilling that ended on 2026-11-22. Terms follo
 4. **Phase 3a**: transcription (whisper.cpp), take removal and removal markers.
 5. **Phase 3b**: pauses, false starts, filler words, loudness, and the Short format with captions.
 6. **Later**: the profile agent and the Profile panel, transitions and effects, GIF/WebP stickers, ducking, evaluations.
+
+## End-to-end editing workflow
+
+The first complete workflow targets a Horizontal YouTube video built from screen recordings with voiceover. Keep important on-screen actions visible when placing graphics and captions. Each project keeps its original format and references its recordings on disk. The video style is chosen within that format.
+
+Preview, later edits and export use the editable sequence (ADR 0003). Keep whisper.cpp for now and assess graphics tools such as HyperFrames against the finished workflow. Revisit tool choices after testing with actual recordings.

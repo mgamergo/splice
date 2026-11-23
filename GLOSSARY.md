@@ -128,3 +128,6 @@ The first assembled version of a sequence, produced by the agent from raw record
 **Finishing Pass**:
 The creator's manual editing after the rough cut, which adds memes, graphics, text and polish.
 _Avoid_: Final cut, polish pass
+
+**Video style**:
+The presentation chosen within a project's format. Horizontal projects use the YouTube style. Short projects can use Explainer or Raw.
