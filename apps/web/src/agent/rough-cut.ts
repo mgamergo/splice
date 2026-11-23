@@ -1,5 +1,10 @@
 import type { RoughCutPlan, SourceRange } from "@splice/bridge/ops";
-import { closeSlivers, measureSpans, planTightenCuts } from "@/agent/tighten";
+import {
+	closeSlivers,
+	countOverlapping,
+	measureSpans,
+	planTightenCuts,
+} from "@/agent/tighten";
 import type { ProjectItem } from "@/media/types";
 import {
 	calculateTotalDuration,
@@ -284,8 +289,7 @@ export function buildRoughCut({
 		without: Window[];
 		within?: Window[];
 	}) => ({
-		count: found.filter((spans) => measureSpans({ spans, within, without }) > 0)
-			.length,
+		count: countOverlapping({ groups: found, within, without }),
 		removedSeconds: seconds(
 			measureSpans({ spans: found.flat(), within, without }),
 		),

@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import type { EditOp } from "@splice/bridge/ops";
 import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor } from "@/agent/__tests__/fixtures";
-import { closeSlivers, measureSpans, planTightenCuts } from "@/agent/tighten";
+import {
+	closeSlivers,
+	countOverlapping,
+	measureSpans,
+	planTightenCuts,
+} from "@/agent/tighten";
 import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import type { EditorCore } from "@/core";
 import type { TimelineClip } from "@/timeline";
@@ -74,6 +79,23 @@ describe("planTightenCuts", () => {
 			}),
 		).toEqual([[second, 8.7, 9.3]]);
 	});
+
+	test("keeps breath only from each pause, so padding never swallows the speech between two", () => {
+		expect(
+			plan({
+				pauses: [at([first, 2, 2.6]), at([first, 2.9, 3.5])],
+				falseStarts: [at([first, 2.5, 3])],
+				paddingSeconds: 1,
+			}),
+		).toEqual([[first, 2.6, 2.9]]);
+		// A pause shorter than the padding is kept whole beside a false start.
+		expect(
+			plan({
+				pauses: [at([first, 2, 2.15])],
+				falseStarts: [at([first, 2.1, 4])],
+			}),
+		).toEqual([[first, 2.15, 4]]);
+	});
 });
 
 describe("closeSlivers", () => {
@@ -111,6 +133,144 @@ describe("closeSlivers", () => {
 		).toBe(4);
 	});
 });
+
+describe("span measures match a direct count", () => {
+	// A small deterministic generator, so a failure reproduces.
+	let seed = 7;
+	const random = () => {
+		seed = (seed * 48271) % 2147483647;
+		return seed / 2147483647;
+	};
+	const spans = (count: number) =>
+		Array.from({ length: count }, () => {
+			const start = Math.round(random() * 1000) / 10;
+			return { start, end: start + Math.round(random() * 50) / 10 };
+		});
+	const inside = ({
+		at,
+		list,
+	}: {
+		at: number;
+		list: Array<{ start: number; end: number }>;
+	}) => list.some(({ start, end }) => start <= at && at < end);
+	/** Length on a 0.01 s grid, which every generated edge lies on. */
+	const direct = ({
+		measured,
+		within,
+		without,
+	}: Record<
+		"measured" | "within" | "without",
+		Array<{ start: number; end: number }>
+	>) => {
+		let total = 0;
+		for (let step = 0; step < 11000; step++) {
+			const at = step / 100 + 0.005;
+			if (
+				inside({ at, list: measured }) &&
+				inside({ at, list: within }) &&
+				!inside({ at, list: without })
+			)
+				total += 0.01;
+		}
+		return total;
+	};
+
+	test.each(Array.from({ length: 20 }, (_, index) => index))(
+		"random case %i",
+		() => {
+			const measured = spans(6);
+			const within = spans(4);
+			const without = spans(4);
+			expect(measureSpans({ spans: measured, within, without })).toBeCloseTo(
+				direct({ measured, within, without }),
+				6,
+			);
+			const groups = [spans(1), spans(2), spans(1), spans(3)];
+			expect(countOverlapping({ groups, within, without })).toBe(
+				groups.filter(
+					(group) => direct({ measured: group, within, without }) > 0,
+				).length,
+			);
+			const edges = spans(5).map(({ start }) => start);
+			const cuts = spans(5);
+			const naive = cuts
+				.sort((a, b) => a.start - b.start)
+				.map((cut) => ({ ...cut }));
+			expect(closeSlivers({ cuts, edges, minimum: 0.5 })).toEqual(
+				closeSliversDirect({ cuts: naive, edges, minimum: 0.5 }),
+			);
+		},
+	);
+
+	test("counts 10,000 pauses in well under a second", () => {
+		const pauses = Array.from({ length: 10_000 }, (_, index) => ({
+			start: index * 3,
+			end: index * 3 + 1,
+		}));
+		const started = performance.now();
+		expect(
+			countOverlapping({
+				groups: pauses.map((pause) => [pause]),
+				within: pauses,
+				without: pauses.filter((_, index) => index % 2),
+			}),
+		).toBe(5_000);
+		expect(measureSpans({ spans: pauses, within: pauses })).toBe(10_000);
+		expect(
+			closeSlivers({
+				cuts: pauses,
+				edges: pauses.map(({ end }) => end + 0.01),
+				minimum: 0.05,
+			}),
+		).toHaveLength(10_000);
+		expect(performance.now() - started).toBeLessThan(500);
+	});
+});
+
+/** closeSlivers as first written: a linear search for each cut's neighboring edges. */
+function closeSliversDirect({
+	cuts,
+	edges,
+	minimum,
+}: {
+	cuts: Array<{ start: number; end: number }>;
+	edges: number[];
+	minimum: number;
+}) {
+	const sorted = [...new Set(edges)].sort((a, b) => a - b);
+	const union: Array<{ start: number; end: number }> = [];
+	for (const cut of cuts) {
+		const last = union.at(-1);
+		if (last && cut.start <= last.end) last.end = Math.max(last.end, cut.end);
+		else if (cut.end > cut.start) union.push({ ...cut });
+	}
+	const widened = union
+		.map((cut) => {
+			const previous = sorted.findLast((edge) => edge < cut.start);
+			const next = sorted.find((edge) => edge > cut.end);
+			return {
+				start:
+					previous !== undefined && cut.start - previous < minimum
+						? previous
+						: cut.start,
+				end: next !== undefined && next - cut.end < minimum ? next : cut.end,
+			};
+		})
+		.sort((a, b) => a.start - b.start);
+	const joined: Array<{ start: number; end: number }> = [];
+	for (const cut of widened) {
+		const last = joined.at(-1);
+		if (last && cut.start <= last.end) last.end = Math.max(last.end, cut.end);
+		else joined.push({ ...cut });
+	}
+	const closed: Array<{ start: number; end: number }> = [];
+	for (const cut of joined) {
+		const last = closed.at(-1);
+		if (last && cut.start - last.end < minimum) last.end = cut.end;
+		else closed.push(cut);
+	}
+	return closed;
+}
 
 let editor: EditorCore;
 let api: EditorApi;
@@ -294,6 +454,94 @@ test("Restore and Swap still work on a tightened Rough Cut", () => {
 	expect(api.takesList({})).toMatchObject({
 		markers: [{ bestTake, badTakes: [badTake] }],
 	});
+});
+
+test("swaps a best take spanning two recordings after Tighten cuts one recording's part whole", () => {
+	const crossTake = { ranges: [at([first, 9, 12]), at([second, 0, 1])] };
+	const result = api.roughCut({
+		expectedRevision: api.getRevision(),
+		sections: [
+			{
+				name: "Across files",
+				takes: [at([first, 2, 6]), crossTake],
+				bestTakeIndex: 1,
+			},
+		],
+		pauses: [],
+		falseStarts: [at([second, 0, 1])],
+	});
+	expect(result).toMatchObject({ ok: true, durationSeconds: 19 });
+	const markerId = active().markers[0]?.id;
+	if (!markerId) throw new Error("No removal marker");
+	expect(layout(active().tracks.main.clips)).toEqual([
+		[first, 0, 2, 0],
+		[first, 2, 6, 6],
+		[second, 8, 11, 1],
+	]);
+
+	// Only first 9–12 survives of the best take; take 1 replaces it.
+	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
+		ok: true,
+	});
+	expect(layout(active().tracks.main.clips)).toEqual([
+		[first, 0, 2, 0],
+		[first, 2, 3, 6],
+		[first, 5, 4, 2],
+		[second, 9, 11, 1],
+	]);
+	expect(api.takesList({})).toMatchObject({
+		markers: [{ bestTake: at([first, 2, 6]), badTakes: [crossTake] }],
+	});
+	// Swapping back brings the whole stored take, both recordings.
+	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
+		ok: true,
+	});
+	expect(layout(active().tracks.main.clips)).toEqual([
+		[first, 0, 2, 0],
+		[first, 2, 3, 6],
+		[first, 5, 3, 9],
+		[second, 8, 1, 0],
+		[second, 9, 11, 1],
+	]);
+});
+
+test("tightens and summarizes 10,000 pauses without stalling", () => {
+	const long = setUpEditor({ tracks: {} });
+	long.media.setProjectItems({
+		projectItems: [
+			{
+				id: first,
+				name: first,
+				type: "audio",
+				duration: 30_000,
+				file: new File([], first),
+			},
+		],
+	});
+	const longApi = new EditorApi(long);
+	expect(
+		longApi.rawSequence({
+			projectItemIds: [first],
+			expectedRevision: longApi.getRevision(),
+		}),
+	).toMatchObject({ ok: true });
+	const pauses = Array.from({ length: 10_000 }, (_, index) =>
+		at([first, index * 3, index * 3 + 1]),
+	);
+	const started = performance.now();
+	const result = longApi.roughCut({
+		expectedRevision: longApi.getRevision(),
+		pauses,
+		pausePaddingSeconds: 0,
+	});
+	const elapsed = performance.now() - started;
+	expect(result).toMatchObject({
+		ok: true,
+		durationSeconds: 20_000,
+		tightening: { pauses: { count: 10_000, removedSeconds: 10_000 } },
+	});
+	console.log(`Tighten with 10,000 pauses: ${Math.round(elapsed)} ms`);
+	expect(elapsed).toBeLessThan(3_000);
 });
 
 test("rejects a false start that isn't on the source sequence and reports sources", () => {
