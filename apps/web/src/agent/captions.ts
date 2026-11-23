@@ -507,13 +507,18 @@ export function rebuildCaptions({
 			)
 			.map((clip) => seconds(clip.startTime + clip.duration + window.delta)),
 	);
-	// The first kept caption still shows its own word, even if the creator
-	// moved it later than the word: that word and later ones stay its.
-	const keptWordStart = Number.isFinite(until)
-		? (mapWordsToTimeline({ tracks: content, sources: captions.sources })
+	// The first kept caption may have been moved later than its own word, so
+	// the latest word before it, when the edit spans that word, stays its.
+	const lastWordBeforeKept = Number.isFinite(until)
+		? mapWordsToTimeline({ tracks: content, sources: captions.sources })
 				.filter(({ start }) => start <= until + SAME_TIME_SECONDS)
-				.at(-1)?.start ?? until)
-		: until;
+				.at(-1)?.start
+		: undefined;
+	const keptWordStart =
+		lastWordBeforeKept !== undefined &&
+		lastWordBeforeKept >= seconds(window.start) - SAME_TIME_SECONDS
+			? lastWordBeforeKept
+			: until;
 	const between = captionClips({
 		content,
 		captions,
