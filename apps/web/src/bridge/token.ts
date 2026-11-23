@@ -20,7 +20,11 @@ export function captureBridgeToken(): void {
 	params.delete(TOKEN_FRAGMENT_KEY);
 	const hash = params.toString();
 	const { pathname, search } = window.location;
-	window.history.replaceState(window.history.state, "", `${pathname}${search}${hash ? `#${hash}` : ""}`);
+	window.history.replaceState(
+		window.history.state,
+		"",
+		`${pathname}${search}${hash ? `#${hash}` : ""}`,
+	);
 }
 
 export function readBridgeToken(): string | null {

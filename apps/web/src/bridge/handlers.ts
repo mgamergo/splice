@@ -7,7 +7,9 @@ export type TabHandlers = Record<TabMethod, (params: unknown) => unknown>;
 /** Thrown when the creator has pressed Stop; the bridge reports it as AGENT_BLOCKED. */
 export class AgentBlockedError extends Error {
 	constructor() {
-		super("The creator stopped the agent in the editor. Ask them to allow it again before editing.");
+		super(
+			"The creator stopped the agent in the editor. Ask them to allow it again before editing.",
+		);
 	}
 }
 
@@ -25,7 +27,9 @@ export function createTabHandlers({
 			const project = editor.project.getActiveOrNull();
 			return {
 				revision: api.getRevision(),
-				project: project ? { id: project.metadata.id, name: project.metadata.name } : null,
+				project: project
+					? { id: project.metadata.id, name: project.metadata.name }
+					: null,
 				digest: api.getDigest(),
 			};
 		},

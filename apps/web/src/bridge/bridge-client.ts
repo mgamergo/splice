@@ -26,8 +26,14 @@ export interface BridgeSocket {
 	send(data: string): void;
 	close(): void;
 	addEventListener(type: "open", listener: () => void): void;
-	addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
-	addEventListener(type: "close", listener: (event: { code: number }) => void): void;
+	addEventListener(
+		type: "message",
+		listener: (event: { data: unknown }) => void,
+	): void;
+	addEventListener(
+		type: "close",
+		listener: (event: { code: number }) => void,
+	): void;
 }
 
 const HELLO_ID = "hello";
@@ -81,18 +87,38 @@ export class AgentBridgeClient {
 	}
 
 	private sendRevision() {
-		if (!this.authed || this.revision === null || this.socket?.readyState !== OPEN) return;
-		this.socket.send(JSON.stringify({ jsonrpc: "2.0", method: STATE_CHANGED, params: { revision: this.revision } }));
+		if (
+			!this.authed ||
+			this.revision === null ||
+			this.socket?.readyState !== OPEN
+		)
+			return;
+		this.socket.send(
+			JSON.stringify({
+				jsonrpc: "2.0",
+				method: STATE_CHANGED,
+				params: { revision: this.revision },
+			}),
+		);
 	}
 
 	private connect() {
 		this.options.onStatus("connecting");
 		this.authed = false;
-		const createSocket = this.options.createSocket ?? ((url: string): BridgeSocket => new WebSocket(url));
+		const createSocket =
+			this.options.createSocket ??
+			((url: string): BridgeSocket => new WebSocket(url));
 		const socket = createSocket(this.options.url);
 		this.socket = socket;
 		socket.addEventListener("open", () => {
-			socket.send(JSON.stringify({ jsonrpc: "2.0", id: HELLO_ID, method: TAB_HELLO, params: { token: this.options.token } }));
+			socket.send(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: HELLO_ID,
+					method: TAB_HELLO,
+					params: { token: this.options.token },
+				}),
+			);
 		});
 		socket.addEventListener("message", (event) => {
 			if (typeof event.data === "string") {
@@ -118,7 +144,10 @@ export class AgentBridgeClient {
 
 	private scheduleReconnect() {
 		this.options.onStatus("connecting");
-		const delay = RECONNECT_DELAYS_MS[Math.min(this.attempts, RECONNECT_DELAYS_MS.length - 1)];
+		const delay =
+			RECONNECT_DELAYS_MS[
+				Math.min(this.attempts, RECONNECT_DELAYS_MS.length - 1)
+			];
 		this.attempts++;
 		this.reconnectTimer = setTimeout(() => {
 			this.reconnectTimer = null;
@@ -126,7 +155,13 @@ export class AgentBridgeClient {
 		}, delay);
 	}
 
-	private handleMessage({ socket, text }: { socket: BridgeSocket; text: string }) {
+	private handleMessage({
+		socket,
+		text,
+	}: {
+		socket: BridgeSocket;
+		text: string;
+	}) {
 		const message = parseRpcMessage(text);
 		if (!message) return;
 		if (!isRpcRequest(message)) {
@@ -138,24 +173,58 @@ export class AgentBridgeClient {
 			}
 			return;
 		}
-		socket.send(JSON.stringify(this.answer({ id: message.id, method: message.method, params: message.params })));
+		socket.send(
+			JSON.stringify(
+				this.answer({
+					id: message.id,
+					method: message.method,
+					params: message.params,
+				}),
+			),
+		);
 	}
 
-	private answer({ id, method, params }: { id: number | string; method: string; params: unknown }): RpcResponse {
+	private answer({
+		id,
+		method,
+		params,
+	}: {
+		id: number | string;
+		method: string;
+		params: unknown;
+	}): RpcResponse {
 		if (!isTabMethod(method)) {
-			return { jsonrpc: "2.0", id, error: { code: RPC_ERRORS.METHOD_NOT_FOUND, message: `Unknown method ${method}` } };
+			return {
+				jsonrpc: "2.0",
+				id,
+				error: {
+					code: RPC_ERRORS.METHOD_NOT_FOUND,
+					message: `Unknown method ${method}`,
+				},
+			};
 		}
 		this.options.onRequest?.(method);
 		try {
-			return { jsonrpc: "2.0", id, result: this.options.handlers[method](params) ?? null };
+			return {
+				jsonrpc: "2.0",
+				id,
+				result: this.options.handlers[method](params) ?? null,
+			};
 		} catch (error) {
 			if (error instanceof AgentBlockedError) {
-				return { jsonrpc: "2.0", id, error: { code: RPC_ERRORS.AGENT_BLOCKED, message: error.message } };
+				return {
+					jsonrpc: "2.0",
+					id,
+					error: { code: RPC_ERRORS.AGENT_BLOCKED, message: error.message },
+				};
 			}
 			return {
 				jsonrpc: "2.0",
 				id,
-				error: { code: RPC_ERRORS.INTERNAL, message: error instanceof Error ? error.message : String(error) },
+				error: {
+					code: RPC_ERRORS.INTERNAL,
+					message: error instanceof Error ? error.message : String(error),
+				},
 			};
 		}
 	}

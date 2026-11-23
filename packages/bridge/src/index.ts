@@ -128,7 +128,11 @@ export function parseRpcMessage(text: string): RpcMessage | null {
 		return { jsonrpc: "2.0", id: responseId, result: value.result };
 	}
 	const error = value.error;
-	if (isRecord(error) && typeof error.code === "number" && typeof error.message === "string") {
+	if (
+		isRecord(error) &&
+		typeof error.code === "number" &&
+		typeof error.message === "string"
+	) {
 		return {
 			jsonrpc: "2.0",
 			id: responseId,
@@ -142,7 +146,9 @@ export function isRpcRequest(message: RpcMessage): message is RpcRequest {
 	return "method" in message && "id" in message;
 }
 
-export function isRpcNotification(message: RpcMessage): message is RpcNotification {
+export function isRpcNotification(
+	message: RpcMessage,
+): message is RpcNotification {
 	return "method" in message && !("id" in message);
 }
 

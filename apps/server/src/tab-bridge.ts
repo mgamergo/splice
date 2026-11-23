@@ -19,7 +19,15 @@ export class BridgeError extends Error {
 	readonly code: number;
 	readonly data: unknown;
 
-	constructor({ code, message, data }: { code: number; message: string; data?: unknown }) {
+	constructor({
+		code,
+		message,
+		data,
+	}: {
+		code: number;
+		message: string;
+		data?: unknown;
+	}) {
 		super(message);
 		this.code = code;
 		this.data = data;
@@ -57,7 +65,10 @@ export class TabBridge {
 		if (this.tab && this.tab !== socket) {
 			const previous = this.tab;
 			this.detach(previous);
-			previous.close(TAB_CLOSE_CODES.SUPERSEDED, "A newer editor tab connected");
+			previous.close(
+				TAB_CLOSE_CODES.SUPERSEDED,
+				"A newer editor tab connected",
+			);
 		}
 		this.tab = socket;
 	}
@@ -70,7 +81,12 @@ export class TabBridge {
 		this.revision = null;
 		for (const [id, call] of this.pending) {
 			clearTimeout(call.timer);
-			call.reject(new BridgeError({ code: RPC_ERRORS.TAB_DISCONNECTED, message: "The editor tab disconnected before answering" }));
+			call.reject(
+				new BridgeError({
+					code: RPC_ERRORS.TAB_DISCONNECTED,
+					message: "The editor tab disconnected before answering",
+				}),
+			);
 			this.pending.delete(id);
 		}
 	}
@@ -89,7 +105,8 @@ export class TabBridge {
 			return Promise.reject(
 				new BridgeError({
 					code: RPC_ERRORS.TAB_NOT_CONNECTED,
-					message: "No editor tab is connected. Open the Splice link that `splice` printed when it started.",
+					message:
+						"No editor tab is connected. Open the Splice link that `splice` printed when it started.",
 				}),
 			);
 		}
@@ -98,7 +115,12 @@ export class TabBridge {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
-				reject(new BridgeError({ code: RPC_ERRORS.TAB_TIMEOUT, message: `The editor tab didn't answer ${method} within ${timeoutMs} ms` }));
+				reject(
+					new BridgeError({
+						code: RPC_ERRORS.TAB_TIMEOUT,
+						message: `The editor tab didn't answer ${method} within ${timeoutMs} ms`,
+					}),
+				);
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 			tab.send(JSON.stringify(request));
@@ -117,7 +139,12 @@ export class TabBridge {
 		if (isRpcNotification(message)) {
 			if (message.method === STATE_CHANGED) {
 				const params = message.params;
-				if (typeof params === "object" && params !== null && "revision" in params && typeof params.revision === "number") {
+				if (
+					typeof params === "object" &&
+					params !== null &&
+					"revision" in params &&
+					typeof params.revision === "number"
+				) {
 					this.revision = params.revision;
 				}
 			}

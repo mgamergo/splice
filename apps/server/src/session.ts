@@ -17,9 +17,15 @@ export function sessionPath({ root }: { root: string }): string {
 	return join(root, "Cache", "session.json");
 }
 
-export async function readSession({ root }: { root: string }): Promise<SessionInfo | null> {
+export async function readSession({
+	root,
+}: {
+	root: string;
+}): Promise<SessionInfo | null> {
 	try {
-		const value: unknown = JSON.parse(await readFile(sessionPath({ root }), "utf8"));
+		const value: unknown = JSON.parse(
+			await readFile(sessionPath({ root }), "utf8"),
+		);
 		if (
 			typeof value === "object" &&
 			value !== null &&
@@ -32,7 +38,12 @@ export async function readSession({ root }: { root: string }): Promise<SessionIn
 			typeof value.pid === "number" &&
 			typeof value.startedAt === "string"
 		) {
-			return { token: value.token, port: value.port, pid: value.pid, startedAt: value.startedAt };
+			return {
+				token: value.token,
+				port: value.port,
+				pid: value.pid,
+				startedAt: value.startedAt,
+			};
 		}
 		return null;
 	} catch {
@@ -40,8 +51,18 @@ export async function readSession({ root }: { root: string }): Promise<SessionIn
 	}
 }
 
-export async function writeSession({ root, session }: { root: string; session: SessionInfo }): Promise<void> {
-	await writeFile(sessionPath({ root }), `${JSON.stringify(session, null, "\t")}\n`, { mode: 0o600 });
+export async function writeSession({
+	root,
+	session,
+}: {
+	root: string;
+	session: SessionInfo;
+}): Promise<void> {
+	await writeFile(
+		sessionPath({ root }),
+		`${JSON.stringify(session, null, "\t")}\n`,
+		{ mode: 0o600 },
+	);
 }
 
 export function createToken(): string {
@@ -52,11 +73,21 @@ export function createToken(): string {
  * Reuses the previous run's token, so an open editor tab reconnects on its own
  * after `splice` restarts.
  */
-export async function loadOrCreateToken({ root }: { root: string }): Promise<string> {
+export async function loadOrCreateToken({
+	root,
+}: {
+	root: string;
+}): Promise<string> {
 	return (await readSession({ root }))?.token ?? createToken();
 }
 
-export function tokensMatch({ expected, actual }: { expected: string; actual: string | null | undefined }): boolean {
+export function tokensMatch({
+	expected,
+	actual,
+}: {
+	expected: string;
+	actual: string | null | undefined;
+}): boolean {
 	if (typeof actual !== "string") {
 		return false;
 	}

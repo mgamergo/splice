@@ -3,7 +3,14 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 /** The folders `splice` keeps under its root, see docs/decisions.md. */
-export const SPLICE_FOLDERS = ["Footage", "Projects", "Cache", "Profile", "Exports", "Tools"] as const;
+export const SPLICE_FOLDERS = [
+	"Footage",
+	"Projects",
+	"Cache",
+	"Profile",
+	"Exports",
+	"Tools",
+] as const;
 
 export const DEFAULT_PORT = 7420;
 
@@ -16,7 +23,13 @@ export interface SpliceConfig {
 	webDir: string;
 }
 
-export function defaultRoot({ platform, home }: { platform: NodeJS.Platform; home: string }): string {
+export function defaultRoot({
+	platform,
+	home,
+}: {
+	platform: NodeJS.Platform;
+	home: string;
+}): string {
 	return platform === "win32" ? "D:\\Splice" : join(home, "Splice");
 }
 
@@ -26,19 +39,30 @@ function parsePort(value: string | undefined): number {
 	}
 	const port = Number(value);
 	if (!Number.isInteger(port) || port < 1 || port > 65534) {
-		throw new Error(`SPLICE_PORT must be an integer between 1 and 65534, got "${value}"`);
+		throw new Error(
+			`SPLICE_PORT must be an integer between 1 and 65534, got "${value}"`,
+		);
 	}
 	return port;
 }
 
-export function resolveConfig(env: Record<string, string | undefined> = process.env): SpliceConfig {
+export function resolveConfig(
+	env: Record<string, string | undefined> = process.env,
+): SpliceConfig {
 	return {
-		root: resolve(env.SPLICE_ROOT || defaultRoot({ platform: process.platform, home: homedir() })),
+		root: resolve(
+			env.SPLICE_ROOT ||
+				defaultRoot({ platform: process.platform, home: homedir() }),
+		),
 		port: parsePort(env.SPLICE_PORT),
 		webDir: resolve(import.meta.dir, "../../web"),
 	};
 }
 
 export async function ensureFolders({ root }: { root: string }): Promise<void> {
-	await Promise.all(SPLICE_FOLDERS.map((folder) => mkdir(join(root, folder), { recursive: true })));
+	await Promise.all(
+		SPLICE_FOLDERS.map((folder) =>
+			mkdir(join(root, folder), { recursive: true }),
+		),
+	);
 }

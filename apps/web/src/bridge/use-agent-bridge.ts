@@ -25,10 +25,17 @@ export function useAgentBridge(): void {
 		const client = new AgentBridgeClient({
 			url: `${scheme}://${window.location.host}${BRIDGE_PATHS.tab}`,
 			token,
-			handlers: createTabHandlers({ editor, api, isBlocked: () => useAgentBridgeStore.getState().blocked }),
+			handlers: createTabHandlers({
+				editor,
+				api,
+				isBlocked: () => useAgentBridgeStore.getState().blocked,
+			}),
 			onStatus: store.setStatus,
 			onRequest: (method) => {
-				if (method === "editor.apply" && !useAgentBridgeStore.getState().blocked) {
+				if (
+					method === "editor.apply" &&
+					!useAgentBridgeStore.getState().blocked
+				) {
 					store.markEdit();
 				}
 			},
@@ -42,7 +49,10 @@ export function useAgentBridge(): void {
 				client.notifyRevision(revision);
 			}
 		};
-		const unsubscribers = [editor.timeline.subscribe(reportRevision), editor.sequences.subscribe(reportRevision)];
+		const unsubscribers = [
+			editor.timeline.subscribe(reportRevision),
+			editor.sequences.subscribe(reportRevision),
+		];
 		client.start();
 		reportRevision();
 

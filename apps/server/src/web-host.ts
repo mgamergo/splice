@@ -16,9 +16,19 @@ const READY_TIMEOUT_MS = 120_000;
  * Runs the editor's Next.js server on a private loopback port. `splice`
  * proxies it, so the tab, the bridge and project media share one origin.
  */
-export function startWebHost({ webDir, port, dev }: { webDir: string; port: number; dev: boolean }): WebHost {
+export function startWebHost({
+	webDir,
+	port,
+	dev,
+}: {
+	webDir: string;
+	port: number;
+	dev: boolean;
+}): WebHost {
 	if (!dev && !existsSync(join(webDir, ".next", "BUILD_ID"))) {
-		throw new Error("The editor isn't built yet. Run `bun run build:web` once, or start with `splice serve --dev`.");
+		throw new Error(
+			"The editor isn't built yet. Run `bun run build:web` once, or start with `splice serve --dev`.",
+		);
 	}
 	const origin = `http://127.0.0.1:${port}`;
 	const args = [
@@ -45,7 +55,9 @@ export function startWebHost({ webDir, port, dev }: { webDir: string; port: numb
 		const deadline = Date.now() + READY_TIMEOUT_MS;
 		while (Date.now() < deadline) {
 			if (stopped || child.exitCode !== null) {
-				throw new Error(`The editor server exited (code ${child.exitCode ?? "unknown"})`);
+				throw new Error(
+					`The editor server exited (code ${child.exitCode ?? "unknown"})`,
+				);
 			}
 			try {
 				await fetch(`${origin}/`, { redirect: "manual" });
@@ -55,7 +67,9 @@ export function startWebHost({ webDir, port, dev }: { webDir: string; port: numb
 				await Bun.sleep(250);
 			}
 		}
-		throw new Error(`The editor server didn't start within ${READY_TIMEOUT_MS / 1000} s`);
+		throw new Error(
+			`The editor server didn't start within ${READY_TIMEOUT_MS / 1000} s`,
+		);
 	})();
 
 	return {

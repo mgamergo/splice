@@ -8,17 +8,26 @@ function setUp({ blocked = false } = {}) {
 	const sequence = editor.sequences.getActiveSequence();
 	editor.timeline.updateTracks({
 		...sequence.tracks,
-		main: { ...sequence.tracks.main, clips: [videoClip({ id: "a", start: 0, duration: 10 })] },
+		main: {
+			...sequence.tracks.main,
+			clips: [videoClip({ id: "a", start: 0, duration: 10 })],
+		},
 	});
 	const api = new EditorApi(editor);
-	return { editor, handlers: createTabHandlers({ editor, api, isBlocked: () => blocked }) };
+	return {
+		editor,
+		handlers: createTabHandlers({ editor, api, isBlocked: () => blocked }),
+	};
 }
 
 describe("tab handlers", () => {
 	test("getState reports the project, revision and digest", () => {
 		const { handlers } = setUp();
 		const state = handlers["editor.getState"](undefined);
-		expect(state).toMatchObject({ revision: 0, project: { id: "project-1", name: "Test" } });
+		expect(state).toMatchObject({
+			revision: 0,
+			project: { id: "project-1", name: "Test" },
+		});
 		expect(JSON.stringify(state)).toContain("a");
 	});
 
@@ -36,7 +45,11 @@ describe("tab handlers", () => {
 	test("apply is refused while the creator has stopped the agent", () => {
 		const { editor, handlers } = setUp({ blocked: true });
 		expect(() =>
-			handlers["editor.apply"]({ expectedRevision: 0, label: "Mark", ops: [{ op: "add_marker", at: { seconds: 2 } }] }),
+			handlers["editor.apply"]({
+				expectedRevision: 0,
+				label: "Mark",
+				ops: [{ op: "add_marker", at: { seconds: 2 } }],
+			}),
 		).toThrow(AgentBlockedError);
 		expect(editor.sequences.getActiveSequence().markers).toHaveLength(0);
 		expect(editor.command.getRevision()).toBe(0);

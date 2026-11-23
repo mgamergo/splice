@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { RPC_ERRORS, STATE_CHANGED, TAB_CLOSE_CODES, TAB_HELLO } from "@splice/bridge";
-import { AgentBridgeClient, type BridgeSocket, type BridgeStatus } from "../bridge-client";
+import {
+	RPC_ERRORS,
+	STATE_CHANGED,
+	TAB_CLOSE_CODES,
+	TAB_HELLO,
+} from "@splice/bridge";
+import {
+	AgentBridgeClient,
+	type BridgeSocket,
+	type BridgeStatus,
+} from "../bridge-client";
 import { AgentBlockedError, type TabHandlers } from "../handlers";
 
 type Listener = (event: never) => void;
@@ -39,7 +48,8 @@ class FakeSocket implements BridgeSocket {
 	}
 
 	private emit({ type, event }: { type: string; event: object }) {
-		for (const listener of this.listeners.get(type) ?? []) (listener as (event: object) => void)(event);
+		for (const listener of this.listeners.get(type) ?? [])
+			(listener as (event: object) => void)(event);
 	}
 }
 
@@ -71,7 +81,11 @@ function setUp(handlers: Partial<TabHandlers> = {}) {
 	const connect = () => {
 		const socket = sockets[sockets.length - 1];
 		socket.open();
-		socket.receive({ jsonrpc: "2.0", id: "hello", result: { server: "splice" } });
+		socket.receive({
+			jsonrpc: "2.0",
+			id: "hello",
+			result: { server: "splice" },
+		});
 		return socket;
 	};
 	return { client, sockets, statuses, connect };
@@ -82,8 +96,17 @@ describe("AgentBridgeClient", () => {
 		const { client, sockets, statuses, connect } = setUp();
 		client.notifyRevision(5);
 		const socket = connect();
-		expect(sockets[0].sent[0]).toEqual({ jsonrpc: "2.0", id: "hello", method: TAB_HELLO, params: { token: "secret" } });
-		expect(socket.sent[1]).toEqual({ jsonrpc: "2.0", method: STATE_CHANGED, params: { revision: 5 } });
+		expect(sockets[0].sent[0]).toEqual({
+			jsonrpc: "2.0",
+			id: "hello",
+			method: TAB_HELLO,
+			params: { token: "secret" },
+		});
+		expect(socket.sent[1]).toEqual({
+			jsonrpc: "2.0",
+			method: STATE_CHANGED,
+			params: { revision: 5 },
+		});
 		expect(statuses).toEqual(["connecting", "connected"]);
 	});
 
@@ -91,7 +114,11 @@ describe("AgentBridgeClient", () => {
 		const { connect } = setUp();
 		const socket = connect();
 		socket.receive({ jsonrpc: "2.0", id: 9, method: "editor.getState" });
-		expect(socket.sent.at(-1)).toEqual({ jsonrpc: "2.0", id: 9, result: { revision: 3 } });
+		expect(socket.sent.at(-1)).toEqual({
+			jsonrpc: "2.0",
+			id: 9,
+			result: { revision: 3 },
+		});
 	});
 
 	test("reports a stopped agent as AGENT_BLOCKED", () => {
@@ -101,15 +128,26 @@ describe("AgentBridgeClient", () => {
 			},
 		});
 		const socket = connect();
-		socket.receive({ jsonrpc: "2.0", id: 1, method: "editor.apply", params: {} });
-		expect(socket.sent.at(-1)).toMatchObject({ id: 1, error: { code: RPC_ERRORS.AGENT_BLOCKED } });
+		socket.receive({
+			jsonrpc: "2.0",
+			id: 1,
+			method: "editor.apply",
+			params: {},
+		});
+		expect(socket.sent.at(-1)).toMatchObject({
+			id: 1,
+			error: { code: RPC_ERRORS.AGENT_BLOCKED },
+		});
 	});
 
 	test("refuses methods the tab doesn't offer", () => {
 		const { connect } = setUp();
 		const socket = connect();
 		socket.receive({ jsonrpc: "2.0", id: 1, method: "fs.read" });
-		expect(socket.sent.at(-1)).toMatchObject({ id: 1, error: { code: RPC_ERRORS.METHOD_NOT_FOUND } });
+		expect(socket.sent.at(-1)).toMatchObject({
+			id: 1,
+			error: { code: RPC_ERRORS.METHOD_NOT_FOUND },
+		});
 	});
 
 	test("reconnects after splice goes away", async () => {
@@ -120,12 +158,17 @@ describe("AgentBridgeClient", () => {
 	});
 
 	test("stops reconnecting when the token is refused or another tab takes over", async () => {
-		for (const code of [TAB_CLOSE_CODES.UNAUTHORIZED, TAB_CLOSE_CODES.SUPERSEDED]) {
+		for (const code of [
+			TAB_CLOSE_CODES.UNAUTHORIZED,
+			TAB_CLOSE_CODES.SUPERSEDED,
+		]) {
 			const { sockets, statuses, connect } = setUp();
 			connect().emitClose(code);
 			await Bun.sleep(600);
 			expect(sockets).toHaveLength(1);
-			expect(statuses.at(-1)).toBe(code === TAB_CLOSE_CODES.UNAUTHORIZED ? "unauthorized" : "superseded");
+			expect(statuses.at(-1)).toBe(
+				code === TAB_CLOSE_CODES.UNAUTHORIZED ? "unauthorized" : "superseded",
+			);
 		}
 	});
 });

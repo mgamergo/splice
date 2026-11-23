@@ -20,8 +20,17 @@ const TAB_AUTH_TIMEOUT_MS = 5_000;
 const MAX_RPC_BODY_BYTES = 4 * 1024 * 1024;
 
 type SocketData =
-	| { kind: "tab"; authed: boolean; authTimer: ReturnType<typeof setTimeout> | null }
-	| { kind: "proxy"; path: string; upstream: WebSocket | null; queue: Array<string | Buffer> };
+	| {
+			kind: "tab";
+			authed: boolean;
+			authTimer: ReturnType<typeof setTimeout> | null;
+	  }
+	| {
+			kind: "proxy";
+			path: string;
+			upstream: WebSocket | null;
+			queue: Array<string | Buffer>;
+	  };
 
 export interface StartServerOptions {
 	/** 0 picks a free port (tests). */
@@ -42,11 +51,27 @@ export interface RunningServer {
 	stop(): void;
 }
 
-function rpcResult({ id, result }: { id: RpcId | null; result: unknown }): RpcResponse {
+function rpcResult({
+	id,
+	result,
+}: {
+	id: RpcId | null;
+	result: unknown;
+}): RpcResponse {
 	return { jsonrpc: "2.0", id, result };
 }
 
-function rpcError({ id, code, message, data }: { id: RpcId | null; code: number; message: string; data?: unknown }): RpcResponse {
+function rpcError({
+	id,
+	code,
+	message,
+	data,
+}: {
+	id: RpcId | null;
+	code: number;
+	message: string;
+	data?: unknown;
+}): RpcResponse {
 	return { jsonrpc: "2.0", id, error: { code, message, data } };
 }
 
@@ -54,15 +79,36 @@ function rpcError({ id, code, message, data }: { id: RpcId | null; code: number;
  * The browser only ever reaches `splice` through loopback names. Checking Host
  * stops DNS-rebinding pages from talking to it under their own origin.
  */
-export function isAllowedHost({ host, port }: { host: string | null; port: number }): boolean {
+export function isAllowedHost({
+	host,
+	port,
+}: {
+	host: string | null;
+	port: number;
+}): boolean {
 	return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
-export function isAllowedOrigin({ origin, port }: { origin: string | null; port: number }): boolean {
-	return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+export function isAllowedOrigin({
+	origin,
+	port,
+}: {
+	origin: string | null;
+	port: number;
+}): boolean {
+	return (
+		origin === `http://127.0.0.1:${port}` ||
+		origin === `http://localhost:${port}`
+	);
 }
 
-export function startServer({ port, token, root, upstream, isUpstreamReady = () => true }: StartServerOptions): RunningServer {
+export function startServer({
+	port,
+	token,
+	root,
+	upstream,
+	isUpstreamReady = () => true,
+}: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
 
 	async function handleRpc(request: Request): Promise<Response> {
@@ -74,46 +120,89 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 			return new Response("Forbidden", { status: 403 });
 		}
 		const auth = request.headers.get("authorization");
-		const bearer = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+		const bearer = auth?.startsWith("Bearer ")
+			? auth.slice("Bearer ".length)
+			: null;
 		if (!tokensMatch({ expected: token, actual: bearer })) {
 			return new Response("Unauthorized", { status: 401 });
 		}
 		const text = await request.text();
 		if (text.length > MAX_RPC_BODY_BYTES) {
-			return Response.json(rpcError({ id: null, code: RPC_ERRORS.INVALID_REQUEST, message: "Request too large" }));
+			return Response.json(
+				rpcError({
+					id: null,
+					code: RPC_ERRORS.INVALID_REQUEST,
+					message: "Request too large",
+				}),
+			);
 		}
 		const message = parseRpcMessage(text);
 		if (!message || !isRpcRequest(message)) {
-			return Response.json(rpcError({ id: null, code: RPC_ERRORS.INVALID_REQUEST, message: "Expected a JSON-RPC request" }));
+			return Response.json(
+				rpcError({
+					id: null,
+					code: RPC_ERRORS.INVALID_REQUEST,
+					message: "Expected a JSON-RPC request",
+				}),
+			);
 		}
 		const { id, method, params } = message;
 		if (isServerMethod(method)) {
-			const status: ServerStatus = { tabConnected: bridge.isConnected(), revision: bridge.getRevision(), root };
+			const status: ServerStatus = {
+				tabConnected: bridge.isConnected(),
+				revision: bridge.getRevision(),
+				root,
+			};
 			return Response.json(rpcResult({ id, result: status }));
 		}
 		if (!isTabMethod(method)) {
-			return Response.json(rpcError({ id, code: RPC_ERRORS.METHOD_NOT_FOUND, message: `Unknown method ${method}` }));
+			return Response.json(
+				rpcError({
+					id,
+					code: RPC_ERRORS.METHOD_NOT_FOUND,
+					message: `Unknown method ${method}`,
+				}),
+			);
 		}
 		try {
 			const result = await bridge.call({ method, params });
 			return Response.json(rpcResult({ id, result }));
 		} catch (error) {
 			if (error instanceof BridgeError) {
-				return Response.json(rpcError({ id, code: error.code, message: error.message, data: error.data }));
+				return Response.json(
+					rpcError({
+						id,
+						code: error.code,
+						message: error.message,
+						data: error.data,
+					}),
+				);
 			}
 			throw error;
 		}
 	}
 
-	async function proxy({ request, url }: { request: Request; url: URL }): Promise<Response> {
+	async function proxy({
+		request,
+		url,
+	}: {
+		request: Request;
+		url: URL;
+	}): Promise<Response> {
 		if (!upstream) {
 			return new Response("Not found", { status: 404 });
 		}
 		if (!isUpstreamReady()) {
-			return new Response("Splice is starting the editor. Reload in a few seconds.", {
-				status: 503,
-				headers: { "retry-after": "2", "content-type": "text/plain; charset=utf-8" },
-			});
+			return new Response(
+				"Splice is starting the editor. Reload in a few seconds.",
+				{
+					status: 503,
+					headers: {
+						"retry-after": "2",
+						"content-type": "text/plain; charset=utf-8",
+					},
+				},
+			);
 		}
 		const headers = new Headers(request.headers);
 		// Loopback needs no compression, and fetch would decode it without fixing the headers.
@@ -128,10 +217,20 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 		const responseHeaders = new Headers(response.headers);
 		responseHeaders.delete("content-encoding");
 		responseHeaders.delete("content-length");
-		return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
+		return new Response(response.body, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: responseHeaders,
+		});
 	}
 
-	function handleTabMessage({ ws, text }: { ws: ServerWebSocket<SocketData>; text: string }) {
+	function handleTabMessage({
+		ws,
+		text,
+	}: {
+		ws: ServerWebSocket<SocketData>;
+		text: string;
+	}) {
 		const data = ws.data;
 		if (data.kind !== "tab") {
 			return;
@@ -141,12 +240,22 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 			return;
 		}
 		const message = parseRpcMessage(text);
-		const params = message && isRpcRequest(message) && message.method === TAB_HELLO ? message.params : null;
+		const params =
+			message && isRpcRequest(message) && message.method === TAB_HELLO
+				? message.params
+				: null;
 		const offered =
-			typeof params === "object" && params !== null && "token" in params && typeof params.token === "string"
+			typeof params === "object" &&
+			params !== null &&
+			"token" in params &&
+			typeof params.token === "string"
 				? params.token
 				: null;
-		if (!message || !isRpcRequest(message) || !tokensMatch({ expected: token, actual: offered })) {
+		if (
+			!message ||
+			!isRpcRequest(message) ||
+			!tokensMatch({ expected: token, actual: offered })
+		) {
 			ws.close(TAB_CLOSE_CODES.UNAUTHORIZED, "Unauthorized");
 			return;
 		}
@@ -156,7 +265,11 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 			data.authTimer = null;
 		}
 		bridge.attach(ws);
-		ws.send(JSON.stringify(rpcResult({ id: message.id, result: { server: SERVER_NAME } })));
+		ws.send(
+			JSON.stringify(
+				rpcResult({ id: message.id, result: { server: SERVER_NAME } }),
+			),
+		);
 	}
 
 	function openProxySocket(ws: ServerWebSocket<SocketData>) {
@@ -164,7 +277,9 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 		if (data.kind !== "proxy" || !upstream) {
 			return;
 		}
-		const upstreamSocket = new WebSocket(`${upstream.replace(/^http/, "ws")}${data.path}`);
+		const upstreamSocket = new WebSocket(
+			`${upstream.replace(/^http/, "ws")}${data.path}`,
+		);
 		data.upstream = upstreamSocket;
 		upstreamSocket.addEventListener("open", () => {
 			for (const queued of data.queue) {
@@ -189,19 +304,32 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 		async fetch(request, srv) {
 			const url = new URL(request.url);
 			const actualPort = srv.port ?? port;
-			if (!isAllowedHost({ host: request.headers.get("host"), port: actualPort })) {
+			if (
+				!isAllowedHost({ host: request.headers.get("host"), port: actualPort })
+			) {
 				return new Response("Forbidden host", { status: 403 });
 			}
 			if (url.pathname === BRIDGE_PATHS.health) {
 				return Response.json({ name: SERVER_NAME, ok: true });
 			}
-			const isUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+			const isUpgrade =
+				request.headers.get("upgrade")?.toLowerCase() === "websocket";
 			if (url.pathname === BRIDGE_PATHS.tab) {
-				if (!isUpgrade || !isAllowedOrigin({ origin: request.headers.get("origin"), port: actualPort })) {
+				if (
+					!isUpgrade ||
+					!isAllowedOrigin({
+						origin: request.headers.get("origin"),
+						port: actualPort,
+					})
+				) {
 					return new Response("Forbidden", { status: 403 });
 				}
-				const upgraded = srv.upgrade(request, { data: { kind: "tab", authed: false, authTimer: null } });
-				return upgraded ? undefined : new Response("Upgrade failed", { status: 400 });
+				const upgraded = srv.upgrade(request, {
+					data: { kind: "tab", authed: false, authTimer: null },
+				});
+				return upgraded
+					? undefined
+					: new Response("Upgrade failed", { status: 400 });
 			}
 			if (url.pathname === BRIDGE_PATHS.rpc) {
 				return handleRpc(request);
@@ -210,27 +338,47 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 				return new Response("Not found", { status: 404 });
 			}
 			if (isUpgrade) {
-				if (!upstream || !isAllowedOrigin({ origin: request.headers.get("origin"), port: actualPort })) {
+				if (
+					!upstream ||
+					!isAllowedOrigin({
+						origin: request.headers.get("origin"),
+						port: actualPort,
+					})
+				) {
 					return new Response("Forbidden", { status: 403 });
 				}
 				const upgraded = srv.upgrade(request, {
-					data: { kind: "proxy", path: `${url.pathname}${url.search}`, upstream: null, queue: [] },
+					data: {
+						kind: "proxy",
+						path: `${url.pathname}${url.search}`,
+						upstream: null,
+						queue: [],
+					},
 				});
-				return upgraded ? undefined : new Response("Upgrade failed", { status: 400 });
+				return upgraded
+					? undefined
+					: new Response("Upgrade failed", { status: 400 });
 			}
 			return proxy({ request, url });
 		},
 		websocket: {
 			open(ws) {
 				if (ws.data.kind === "tab") {
-					ws.data.authTimer = setTimeout(() => ws.close(TAB_CLOSE_CODES.UNAUTHORIZED, "No hello"), TAB_AUTH_TIMEOUT_MS);
+					ws.data.authTimer = setTimeout(
+						() => ws.close(TAB_CLOSE_CODES.UNAUTHORIZED, "No hello"),
+						TAB_AUTH_TIMEOUT_MS,
+					);
 				} else {
 					openProxySocket(ws);
 				}
 			},
 			message(ws, message) {
 				if (ws.data.kind === "tab") {
-					handleTabMessage({ ws, text: typeof message === "string" ? message : message.toString("utf8") });
+					handleTabMessage({
+						ws,
+						text:
+							typeof message === "string" ? message : message.toString("utf8"),
+					});
 					return;
 				}
 				const upstreamSocket = ws.data.upstream;

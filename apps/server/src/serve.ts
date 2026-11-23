@@ -4,10 +4,20 @@ import { loadOrCreateToken, writeSession } from "./session";
 import { startServer } from "./server";
 import { startWebHost } from "./web-host";
 
-export async function serve({ config, dev }: { config: SpliceConfig; dev: boolean }): Promise<void> {
+export async function serve({
+	config,
+	dev,
+}: {
+	config: SpliceConfig;
+	dev: boolean;
+}): Promise<void> {
 	await ensureFolders({ root: config.root });
 	const token = await loadOrCreateToken({ root: config.root });
-	const webHost = startWebHost({ webDir: config.webDir, port: config.port + 1, dev });
+	const webHost = startWebHost({
+		webDir: config.webDir,
+		port: config.port + 1,
+		dev,
+	});
 	const running = startServer({
 		port: config.port,
 		token,
@@ -17,7 +27,12 @@ export async function serve({ config, dev }: { config: SpliceConfig; dev: boolea
 	});
 	await writeSession({
 		root: config.root,
-		session: { port: config.port, pid: process.pid, token, startedAt: new Date().toISOString() },
+		session: {
+			port: config.port,
+			pid: process.pid,
+			token,
+			startedAt: new Date().toISOString(),
+		},
 	});
 
 	const shutdown = () => {
@@ -36,5 +51,7 @@ export async function serve({ config, dev }: { config: SpliceConfig; dev: boolea
 		process.exit(1);
 	}
 	console.log(`\nSplice is running. Data folder: ${config.root}`);
-	console.log(`Open the editor: ${running.origin}/projects#${TOKEN_FRAGMENT_KEY}=${token}\n`);
+	console.log(
+		`Open the editor: ${running.origin}/projects#${TOKEN_FRAGMENT_KEY}=${token}\n`,
+	);
 }
