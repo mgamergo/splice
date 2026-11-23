@@ -61,7 +61,15 @@ function connectTab({
 	return { socket, authed, closed };
 }
 
-async function rpc(origin: string, body: unknown, headers: Record<string, string> = { authorization: `Bearer ${TOKEN}` }) {
+async function rpc({
+	origin,
+	body,
+	headers = { authorization: `Bearer ${TOKEN}` },
+}: {
+	origin: string;
+	body: unknown;
+	headers?: Record<string, string>;
+}) {
 	return fetch(`${origin}${BRIDGE_PATHS.rpc}`, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
@@ -99,7 +107,7 @@ describe("tab connection", () => {
 		const second = connectTab({ origin: server.origin, answer: () => "second" });
 		await second.authed;
 		expect(await first.closed).toBe(TAB_CLOSE_CODES.SUPERSEDED);
-		const response = await rpc(server.origin, { jsonrpc: "2.0", id: 1, method: "editor.getState" });
+		const response = await rpc({ origin: server.origin, body: { jsonrpc: "2.0", id: 1, method: "editor.getState" } });
 		expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 1, result: "second" });
 	});
 });
@@ -108,23 +116,23 @@ describe("rpc endpoint", () => {
 	test("requires the token", async () => {
 		const server = start();
 		const body = { jsonrpc: "2.0", id: 1, method: "server.status" };
-		expect((await rpc(server.origin, body, {})).status).toBe(401);
-		expect((await rpc(server.origin, body, { authorization: "Bearer wrong" })).status).toBe(401);
+		expect((await rpc({ origin: server.origin, body, headers: {} })).status).toBe(401);
+		expect((await rpc({ origin: server.origin, body, headers: { authorization: "Bearer wrong" } })).status).toBe(401);
 	});
 
 	test("refuses browser requests even with the token", async () => {
 		const server = start();
-		const response = await rpc(
-			server.origin,
-			{ jsonrpc: "2.0", id: 1, method: "server.status" },
-			{ authorization: `Bearer ${TOKEN}`, origin: server.origin },
-		);
+		const response = await rpc({
+			origin: server.origin,
+			body: { jsonrpc: "2.0", id: 1, method: "server.status" },
+			headers: { authorization: `Bearer ${TOKEN}`, origin: server.origin },
+		});
 		expect(response.status).toBe(403);
 	});
 
 	test("reports when no tab is connected", async () => {
 		const server = start();
-		const response = await rpc(server.origin, { jsonrpc: "2.0", id: 7, method: "editor.getState" });
+		const response = await rpc({ origin: server.origin, body: { jsonrpc: "2.0", id: 7, method: "editor.getState" } });
 		const body: unknown = await response.json();
 		expect(body).toMatchObject({ id: 7, error: { code: RPC_ERRORS.TAB_NOT_CONNECTED } });
 	});
@@ -141,7 +149,7 @@ describe("rpc endpoint", () => {
 		});
 		await tab.authed;
 		const params = { expectedRevision: 3, label: "Cut", ops: [] };
-		const response = await rpc(server.origin, { jsonrpc: "2.0", id: 2, method: "editor.apply", params });
+		const response = await rpc({ origin: server.origin, body: { jsonrpc: "2.0", id: 2, method: "editor.apply", params } });
 		expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 2, result: { ok: true, revision: 4 } });
 		expect(seen).toEqual([["editor.apply", params]]);
 	});
@@ -152,13 +160,13 @@ describe("rpc endpoint", () => {
 		await tab.authed;
 		tab.socket.send(JSON.stringify({ jsonrpc: "2.0", method: STATE_CHANGED, params: { revision: 12 } }));
 		await Bun.sleep(50);
-		const response = await rpc(server.origin, { jsonrpc: "2.0", id: 1, method: "server.status" });
+		const response = await rpc({ origin: server.origin, body: { jsonrpc: "2.0", id: 1, method: "server.status" } });
 		expect(await response.json()).toMatchObject({ result: { tabConnected: true, revision: 12 } });
 	});
 
 	test("rejects unknown methods", async () => {
 		const server = start();
-		const response = await rpc(server.origin, { jsonrpc: "2.0", id: 1, method: "fs.delete" });
+		const response = await rpc({ origin: server.origin, body: { jsonrpc: "2.0", id: 1, method: "fs.delete" } });
 		expect(await response.json()).toMatchObject({ error: { code: RPC_ERRORS.METHOD_NOT_FOUND } });
 	});
 });

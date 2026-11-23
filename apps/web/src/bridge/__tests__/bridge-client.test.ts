@@ -10,6 +10,8 @@ class FakeSocket implements BridgeSocket {
 	sent: unknown[] = [];
 	private listeners = new Map<string, Listener[]>();
 
+	// Mirrors the WebSocket API.
+	// eslint-disable-next-line opencut/prefer-object-params
 	addEventListener(type: string, listener: Listener) {
 		this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
 	}
@@ -24,19 +26,19 @@ class FakeSocket implements BridgeSocket {
 
 	open() {
 		this.readyState = 1;
-		this.emit("open", {});
+		this.emit({ type: "open", event: {} });
 	}
 
 	receive(message: unknown) {
-		this.emit("message", { data: JSON.stringify(message) });
+		this.emit({ type: "message", event: { data: JSON.stringify(message) } });
 	}
 
 	emitClose(code: number) {
 		this.readyState = 3;
-		this.emit("close", { code });
+		this.emit({ type: "close", event: { code } });
 	}
 
-	private emit(type: string, event: object) {
+	private emit({ type, event }: { type: string; event: object }) {
 		for (const listener of this.listeners.get(type) ?? []) (listener as (event: object) => void)(event);
 	}
 }

@@ -105,7 +105,7 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 		}
 	}
 
-	async function proxy(request: Request, url: URL): Promise<Response> {
+	async function proxy({ request, url }: { request: Request; url: URL }): Promise<Response> {
 		if (!upstream) {
 			return new Response("Not found", { status: 404 });
 		}
@@ -131,11 +131,7 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 		return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
 	}
 
-	function sendTo(ws: ServerWebSocket<SocketData>, response: RpcResponse) {
-		ws.send(JSON.stringify(response));
-	}
-
-	function handleTabMessage(ws: ServerWebSocket<SocketData>, text: string) {
+	function handleTabMessage({ ws, text }: { ws: ServerWebSocket<SocketData>; text: string }) {
 		const data = ws.data;
 		if (data.kind !== "tab") {
 			return;
@@ -160,7 +156,7 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 			data.authTimer = null;
 		}
 		bridge.attach(ws);
-		sendTo(ws, rpcResult({ id: message.id, result: { server: SERVER_NAME } }));
+		ws.send(JSON.stringify(rpcResult({ id: message.id, result: { server: SERVER_NAME } })));
 	}
 
 	function openProxySocket(ws: ServerWebSocket<SocketData>) {
@@ -222,7 +218,7 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 				});
 				return upgraded ? undefined : new Response("Upgrade failed", { status: 400 });
 			}
-			return proxy(request, url);
+			return proxy({ request, url });
 		},
 		websocket: {
 			open(ws) {
@@ -234,7 +230,7 @@ export function startServer({ port, token, root, upstream, isUpstreamReady = () 
 			},
 			message(ws, message) {
 				if (ws.data.kind === "tab") {
-					handleTabMessage(ws, typeof message === "string" ? message : message.toString("utf8"));
+					handleTabMessage({ ws, text: typeof message === "string" ? message : message.toString("utf8") });
 					return;
 				}
 				const upstreamSocket = ws.data.upstream;

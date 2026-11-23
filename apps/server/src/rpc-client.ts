@@ -11,12 +11,12 @@ export class RpcCallError extends Error {
 	}
 }
 
-export type RpcCall = (method: string, params?: unknown) => Promise<unknown>;
+export type RpcCall = (call: { method: string; params?: unknown }) => Promise<unknown>;
 
 /** Calls `splice` over its loopback JSON-RPC endpoint. */
 export function createRpcClient({ origin, token }: { origin: string; token: string }): RpcCall {
 	let nextId = 1;
-	return async (method, params) => {
+	return async ({ method, params }) => {
 		const response = await fetch(`${origin}${BRIDGE_PATHS.rpc}`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },

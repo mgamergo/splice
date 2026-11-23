@@ -28,7 +28,7 @@ describe("splice mcp tools", () => {
 
 	test("sequence_apply forwards a validated batch", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(async (method, params) => {
+		const client = await connect(async ({ method, params }) => {
 			calls.push([method, params]);
 			return { ok: true, revision: 2, label: "Cut", summary: ["added marker at 1.000s"] };
 		});

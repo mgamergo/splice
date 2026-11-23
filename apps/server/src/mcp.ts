@@ -43,7 +43,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 			description: "Whether an editor tab is connected to Splice, its last known revision, and the data folder.",
 			inputSchema: {},
 		},
-		() => guard(async () => text(await rpc("server.status"))),
+		() => guard(async () => text(await rpc({ method: "server.status" }))),
 	);
 
 	server.registerTool(
@@ -56,7 +56,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		},
 		() =>
 			guard(async () => {
-				const state = await rpc("editor.getState");
+				const state = await rpc({ method: "editor.getState" });
 				return text(state);
 			}),
 	);
@@ -75,7 +75,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		},
 		(args) =>
 			guard(async () => {
-				const result = await rpc("editor.apply", args);
+				const result = await rpc({ method: "editor.apply", params: args });
 				const ok = typeof result === "object" && result !== null && "ok" in result && result.ok === true;
 				return ok ? text(result) : { ...text(result), isError: true };
 			}),
@@ -132,12 +132,12 @@ export async function connectToSplice({ config }: { config: SpliceConfig }): Pro
 export async function runMcp({ config }: { config: SpliceConfig }): Promise<void> {
 	let rpcPromise: Promise<RpcCall> | null = null;
 	// Connect lazily, so the MCP handshake never waits on starting the editor.
-	const rpc: RpcCall = async (method, params) => {
+	const rpc: RpcCall = async (call) => {
 		rpcPromise ??= connectToSplice({ config }).catch((error: unknown) => {
 			rpcPromise = null;
 			throw error;
 		});
-		return (await rpcPromise)(method, params);
+		return (await rpcPromise)(call);
 	};
 	const server = createMcpServer({ rpc });
 	await server.connect(new StdioServerTransport());

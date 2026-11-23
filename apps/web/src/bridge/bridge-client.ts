@@ -88,7 +88,8 @@ export class AgentBridgeClient {
 	private connect() {
 		this.options.onStatus("connecting");
 		this.authed = false;
-		const socket = (this.options.createSocket ?? ((url) => new WebSocket(url)))(this.options.url);
+		const createSocket = this.options.createSocket ?? ((url: string): BridgeSocket => new WebSocket(url));
+		const socket = createSocket(this.options.url);
 		this.socket = socket;
 		socket.addEventListener("open", () => {
 			socket.send(JSON.stringify({ jsonrpc: "2.0", id: HELLO_ID, method: TAB_HELLO, params: { token: this.options.token } }));

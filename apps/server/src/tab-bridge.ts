@@ -16,12 +16,13 @@ export interface TabSocket {
 }
 
 export class BridgeError extends Error {
-	constructor(
-		readonly code: number,
-		message: string,
-		readonly data?: unknown,
-	) {
+	readonly code: number;
+	readonly data: unknown;
+
+	constructor({ code, message, data }: { code: number; message: string; data?: unknown }) {
 		super(message);
+		this.code = code;
+		this.data = data;
 	}
 }
 
@@ -69,7 +70,7 @@ export class TabBridge {
 		this.revision = null;
 		for (const [id, call] of this.pending) {
 			clearTimeout(call.timer);
-			call.reject(new BridgeError(RPC_ERRORS.TAB_DISCONNECTED, "The editor tab disconnected before answering"));
+			call.reject(new BridgeError({ code: RPC_ERRORS.TAB_DISCONNECTED, message: "The editor tab disconnected before answering" }));
 			this.pending.delete(id);
 		}
 	}
@@ -86,10 +87,10 @@ export class TabBridge {
 		const tab = this.tab;
 		if (!tab) {
 			return Promise.reject(
-				new BridgeError(
-					RPC_ERRORS.TAB_NOT_CONNECTED,
-					"No editor tab is connected. Open the Splice link that `splice` printed when it started.",
-				),
+				new BridgeError({
+					code: RPC_ERRORS.TAB_NOT_CONNECTED,
+					message: "No editor tab is connected. Open the Splice link that `splice` printed when it started.",
+				}),
 			);
 		}
 		const id = this.nextId++;
@@ -97,7 +98,7 @@ export class TabBridge {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
-				reject(new BridgeError(RPC_ERRORS.TAB_TIMEOUT, `The editor tab didn't answer ${method} within ${timeoutMs} ms`));
+				reject(new BridgeError({ code: RPC_ERRORS.TAB_TIMEOUT, message: `The editor tab didn't answer ${method} within ${timeoutMs} ms` }));
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 			tab.send(JSON.stringify(request));
@@ -132,7 +133,7 @@ export class TabBridge {
 		this.pending.delete(message.id);
 		clearTimeout(call.timer);
 		if ("error" in message) {
-			call.reject(new BridgeError(message.error.code, message.error.message, message.error.data));
+			call.reject(new BridgeError(message.error));
 		} else {
 			call.resolve(message.result);
 		}
