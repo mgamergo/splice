@@ -93,7 +93,7 @@ async function download({
 		throw new Error(`SHA-256 mismatch: ${url}`);
 }
 
-function run({
+export function run({
 	command,
 	args,
 	signal,
@@ -134,6 +134,27 @@ function run({
 	});
 }
 
+/**
+ * Starts the first audio stream at 0 and fills gaps, so its timestamps are the
+ * source seconds transcripts and Take ranges use.
+ */
+export const SOURCE_TIMELINE_FILTER = "aresample=async=1:first_pts=0";
+
+/** Reads only local files in the formats Footage holds, mapping the first audio stream. */
+export function ffmpegInputArgs({ source }: { source: string }): string[] {
+	return [
+		"-nostats",
+		"-protocol_whitelist",
+		"file",
+		"-format_whitelist",
+		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
+		"-i",
+		source,
+		"-map",
+		"0:a:0",
+	];
+}
+
 export function ffmpegArgs({
 	source,
 	wav,
@@ -146,17 +167,9 @@ export function ffmpegArgs({
 		"-hide_banner",
 		"-loglevel",
 		"error",
-		"-nostats",
-		"-protocol_whitelist",
-		"file",
-		"-format_whitelist",
-		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
-		"-i",
-		source,
-		"-map",
-		"0:a:0",
+		...ffmpegInputArgs({ source }),
 		"-af",
-		"aresample=async=1:first_pts=0",
+		SOURCE_TIMELINE_FILTER,
 		"-ac",
 		"1",
 		"-ar",
@@ -195,6 +208,18 @@ export function whisperArgs({
 	];
 }
 
+/** FFmpeg from the data folder's Tools, else from PATH. */
+export async function findFfmpeg({ root }: { root: string }): Promise<string> {
+	const name = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+	const local = join(root, "Tools", name);
+	const command = (await Bun.file(local).exists()) ? local : Bun.which(name);
+	if (!command)
+		throw new Error(
+			`Install FFmpeg on PATH or put ${name} in ${join(root, "Tools")}.`,
+		);
+	return command;
+}
+
 export async function extractAudio({
 	root,
 	source,
@@ -206,13 +231,7 @@ export async function extractAudio({
 	wav: string;
 	signal: AbortSignal;
 }): Promise<number> {
-	const name = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-	const local = join(root, "Tools", name);
-	const command = (await Bun.file(local).exists()) ? local : Bun.which(name);
-	if (!command)
-		throw new Error(
-			`Install FFmpeg on PATH or put ${name} in ${join(root, "Tools")}.`,
-		);
+	const command = await findFfmpeg({ root });
 	await run({ command, args: ffmpegArgs({ source, wav }), signal });
 	const file = await open(wav, "r");
 	try {

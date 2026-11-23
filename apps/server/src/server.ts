@@ -23,6 +23,7 @@ import {
 } from "./footage";
 import { createToken, tokensMatch } from "./session";
 import { BridgeError, TabBridge } from "./tab-bridge";
+import { createLoudnessMeter } from "./loudness";
 import { createTranscriptionJobs } from "./transcription";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
@@ -134,6 +135,12 @@ export function startServer({
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
 	const transcription = createTranscriptionJobs({ root });
+	const loudness = createLoudnessMeter({ root });
+	const serverJobs = new Map<string, (params: unknown) => Promise<unknown>>([
+		["transcribe.start", (params) => transcription.start(params)],
+		["transcribe.status", (params) => transcription.status(params)],
+		["loudness.measure", (params) => loudness.measure(params)],
+	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
 	const mediaKey = createToken();
@@ -189,12 +196,10 @@ export function startServer({
 				);
 			}
 		}
-		if (method === "transcribe.start" || method === "transcribe.status") {
+		const job = serverJobs.get(method);
+		if (job) {
 			try {
-				const result =
-					method === "transcribe.start"
-						? await transcription.start(params)
-						: await transcription.status(params);
+				const result = await job(params);
 				return Response.json(rpcResult({ id, result }));
 			} catch (error) {
 				return Response.json(
@@ -572,7 +577,7 @@ export function startServer({
 		async stop() {
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
-			await transcription.stop();
+			await Promise.all([transcription.stop(), loudness.stop()]);
 		},
 	};
 }
