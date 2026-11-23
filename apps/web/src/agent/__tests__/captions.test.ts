@@ -540,6 +540,15 @@ describe("rebuildCaptions", () => {
 		]);
 	});
 
+	test("doesn't caption a word again when its moved caption is kept past the window", () => {
+		const { timed } = stackedSequence({ moveZ: 5.1 });
+		expect(timed({ start: s(2), end: s(5.05), delta: 0 })).toEqual([
+			["w1", 1],
+			["w2", 1.2],
+			["Z!", 5.1],
+		]);
+	});
+
 	test("keeps a moved caption right after a run the edit rebuilds", () => {
 		const { timed } = stackedSequence({ moveZ: 1.4 });
 		expect(timed({ start: s(1.2), end: s(1.4), delta: 0 })).toEqual([
