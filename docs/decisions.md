@@ -166,3 +166,11 @@ Cleanup may reclaim temporary renders and rebuildable analysis caches. Preserve 
 Verify a relinked recording against the original before reusing its edits and analysis. Treat changed content as an explicit replacement and flag affected passages for review.
 
 On reopening a project, identify the current edit, the last approved checkpoint, what changed since approval, and which revision the latest export used. Offer playback, comparison with the approved cut and access to the exported files.
+
+### Short styles and delivery
+
+For Explainer, let the vertical recording fill the frame by default. Prefer a top-half card when it adds useful information. Keep the active control legible and preserve gaze continuity, moving or delaying a card if needed.
+
+For Raw, an optional brief hook grounded in the opening narration or footage overlays the opening and clears as the demonstration begins. Skip a redundant hook. Allow zooms and highlights for legibility. Additional explanatory cards require creator direction.
+
+Burn captions into both styles. Start centered for Explainer and lower for Raw. Hold placement through a passage and move the caption block when it would obscure an action. Preserve manual placement. Verify readability, speech sync and clearance from the action in the exported vertical MP4. That MP4 completes delivery. Offer a separate SRT on request using the same corrected words and timing. Thumbnails remain independent.
