@@ -112,6 +112,41 @@ describe("media route", () => {
 		).toBe(416);
 	});
 
+	// Export and playback read long recordings through mediabunny's UrlSource:
+	// an open-ended first read, then ranges near the clips the sequence uses.
+	test("serves the ranges a ranged reader asks for, and only those bytes", async () => {
+		const path = "Day 1/take #1.mp4";
+		const open = await media({ path, headers: { range: "bytes=0-" } });
+		expect(open.status).toBe(206);
+		expect(open.headers.get("content-range")).toBe("bytes 0-99/100");
+
+		const middle = await media({ path, headers: { range: "bytes=60-69" } });
+		expect(middle.status).toBe(206);
+		expect(middle.headers.get("content-length")).toBe("10");
+		expect(new Uint8Array(await middle.arrayBuffer())).toEqual(
+			bytes.slice(60, 70),
+		);
+
+		// An end past the file is cut to the file, as RFC 9110 says.
+		const tail = await media({ path, headers: { range: "bytes=90-500" } });
+		expect(tail.status).toBe(206);
+		expect(tail.headers.get("content-range")).toBe("bytes 90-99/100");
+		expect(new Uint8Array(await tail.arrayBuffer())).toEqual(bytes.slice(90));
+
+		const head = await fetch(`${server.origin}${mediaUrlForPath(path)}`, {
+			method: "HEAD",
+			headers: { authorization: `Bearer ${TOKEN}`, range: "bytes=10-19" },
+		});
+		expect(head.status).toBe(206);
+		expect(head.headers.get("content-length")).toBe("10");
+
+		for (const range of ["bytes=20-10", "bytes=0-1,5-6", "items=0-5"]) {
+			const refused = await media({ path, headers: { range } });
+			expect(refused.status).toBe(416);
+			expect(refused.headers.get("content-range")).toBe("bytes */100");
+		}
+	});
+
 	test("refuses requests without the token or cookie, and paths outside Footage", async () => {
 		const url = `${server.origin}${mediaUrlForPath("Day 1/take #1.mp4")}`;
 		expect((await fetch(url)).status).toBe(401);
