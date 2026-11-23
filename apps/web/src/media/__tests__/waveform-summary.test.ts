@@ -44,6 +44,17 @@ describe("buildStreamedWaveformSummary", () => {
 		expect(summary.sampleRate).toBe(4);
 	});
 
+	test("drops samples before source time zero", async () => {
+		const summary = await buildStreamedWaveformSummary({
+			sourceKey: "media:z",
+			bucketSize: 2,
+			// Starts 0.5 s (2 samples) before zero: the loud priming samples are cut.
+			chunks: chunks([{ values: [1, 1, 0.25, 0.5], timestamp: -0.5 }]),
+		});
+		expect(Array.from(summary.amplitudes)).toEqual([0.5]);
+		expect(summary.totalSamples).toBe(2);
+	});
+
 	test("matches the one-shot summary for contiguous audio", async () => {
 		const summary = await buildStreamedWaveformSummary({
 			sourceKey: "media:y",

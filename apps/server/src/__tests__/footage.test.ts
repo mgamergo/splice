@@ -7,7 +7,7 @@ import {
 	mediaUrlForPath,
 	sessionCookieName,
 } from "@splice/bridge";
-import { listFootage, resolveFootagePath } from "../footage";
+import { listFootage, mediaTypeForPath, resolveFootagePath } from "../footage";
 import { startServer, type RunningServer } from "../server";
 
 const TOKEN = "test-token";
@@ -59,6 +59,18 @@ describe("footage paths", () => {
 		}
 	});
 
+	test("only real media extensions count, not object prototype names", () => {
+		expect(mediaTypeForPath("clip.mp4")).toBe("video/mp4");
+		for (const name of [
+			"payload.__proto__",
+			"clip.constructor",
+			"x.toString",
+			"noext",
+		]) {
+			expect(mediaTypeForPath(name)).toBeNull();
+		}
+	});
+
 	test("listing includes media only, with forward-slash paths", async () => {
 		const files = await listFootage({ root });
 		expect(files.map((file) => file.path)).toEqual(["Day 1/take #1.mp4"]);
@@ -71,6 +83,7 @@ describe("media route", () => {
 		const full = await media({ path: "Day 1/take #1.mp4" });
 		expect(full.status).toBe(200);
 		expect(full.headers.get("accept-ranges")).toBe("bytes");
+		expect(full.headers.get("x-content-type-options")).toBe("nosniff");
 		expect(new Uint8Array(await full.arrayBuffer())).toEqual(bytes);
 
 		const part = await media({

@@ -190,7 +190,7 @@ export async function importDiskItems({
 			result.failed.push({ path, error: PROJECT_CHANGED });
 			continue;
 		}
-		const key = `${projectId}\n${path}`;
+		const key = `${projectId}\n${generation}\n${path}`;
 		// In-flight first: an item still being saved shows in the library already,
 		// and its save can still fail.
 		let pending = inFlight.get(key);

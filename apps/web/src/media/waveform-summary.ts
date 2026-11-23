@@ -95,7 +95,9 @@ export async function buildStreamedWaveformSummary({
 		const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) =>
 			buffer.getChannelData(c),
 		);
-		for (let i = 0; i < buffer.length; i++) {
+		// Samples before source time zero, or overlapping ones already counted, aren't played.
+		const first = Math.min(buffer.length, Math.max(0, -gap));
+		for (let i = first; i < buffer.length; i++) {
 			for (const data of channels) {
 				const abs = Math.abs(data[i]);
 				if (abs > bucketPeak) bucketPeak = abs;
@@ -103,7 +105,7 @@ export async function buildStreamedWaveformSummary({
 			bucketFill++;
 			if (bucketFill === safeBucketSize) pushBucket();
 		}
-		totalSamples += buffer.length;
+		totalSamples += buffer.length - first;
 	}
 	if (bucketFill > 0 || amplitudes.length === 0) {
 		amplitudes.push(bucketPeak);

@@ -5,28 +5,28 @@ import { isAbsolute, join, relative, sep } from "node:path";
 export const FOOTAGE_FOLDER = "Footage";
 
 /** Media types the editor can import, by extension. */
-const MEDIA_TYPES: Record<string, string> = {
-	mp4: "video/mp4",
-	m4v: "video/mp4",
-	mov: "video/quicktime",
-	mkv: "video/x-matroska",
-	webm: "video/webm",
-	wav: "audio/wav",
-	mp3: "audio/mpeg",
-	m4a: "audio/mp4",
-	aac: "audio/aac",
-	flac: "audio/flac",
-	ogg: "audio/ogg",
-	png: "image/png",
-	jpg: "image/jpeg",
-	jpeg: "image/jpeg",
-	webp: "image/webp",
-	gif: "image/gif",
-};
+const MEDIA_TYPES = new Map<string, string>([
+	["mp4", "video/mp4"],
+	["m4v", "video/mp4"],
+	["mov", "video/quicktime"],
+	["mkv", "video/x-matroska"],
+	["webm", "video/webm"],
+	["wav", "audio/wav"],
+	["mp3", "audio/mpeg"],
+	["m4a", "audio/mp4"],
+	["aac", "audio/aac"],
+	["flac", "audio/flac"],
+	["ogg", "audio/ogg"],
+	["png", "image/png"],
+	["jpg", "image/jpeg"],
+	["jpeg", "image/jpeg"],
+	["webp", "image/webp"],
+	["gif", "image/gif"],
+]);
 
 export function mediaTypeForPath(path: string): string | null {
 	const extension = path.split(".").pop()?.toLowerCase() ?? "";
-	return MEDIA_TYPES[extension] ?? null;
+	return MEDIA_TYPES.get(extension) ?? null;
 }
 
 function isInside({
@@ -122,6 +122,7 @@ export function serveFile({
 		"accept-ranges": "bytes",
 		"content-type": contentType,
 		"cache-control": "no-store",
+		"x-content-type-options": "nosniff",
 		"last-modified": new Date(file.lastModified).toUTCString(),
 	});
 	const range = request.headers.get("range");
