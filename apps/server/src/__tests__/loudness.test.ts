@@ -399,6 +399,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 				{
 					projectItemId: "quiet",
 					path: "quiet.wav",
+					noiseReduction: false,
 					missing: false,
 					clipIds: ["a"],
 					ranges: [{ start: 0, end: 1 }],

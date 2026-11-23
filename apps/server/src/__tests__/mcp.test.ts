@@ -409,6 +409,7 @@ describe("loudness tools", () => {
 		expect(JSON.parse(textOf(result)).loudness.sources[1]).toEqual({
 			projectItemId: "rec-2",
 			path: "loud.wav",
+			noiseReduction: false,
 			skipped: "Couldn't be measured: ffmpeg exited with 183.",
 		});
 	});
