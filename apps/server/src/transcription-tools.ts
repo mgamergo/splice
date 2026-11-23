@@ -140,21 +140,37 @@ export function run({
  */
 export const SOURCE_TIMELINE_FILTER = "aresample=async=1:first_pts=0";
 
-/** Opens one input, reading only a local file in a format Footage holds. */
-export function ffmpegInput({ source }: { source: string }): string[] {
+/**
+ * Opens one input, reading only a local file in a format Footage holds. With
+ * `concat`, the source is an ffconcat list of ranges of one such file.
+ */
+export function ffmpegInput({
+	source,
+	concat = false,
+}: {
+	source: string;
+	concat?: boolean;
+}): string[] {
 	return [
 		"-protocol_whitelist",
 		"file",
 		"-format_whitelist",
-		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
+		`${concat ? "concat," : ""}mov,matroska,webm,wav,mp3,aac,flac,ogg`,
+		...(concat ? ["-f", "concat", "-safe", "0"] : []),
 		"-i",
 		source,
 	];
 }
 
 /** Reads only local files in the formats Footage holds. */
-export function ffmpegInputArgs({ source }: { source: string }): string[] {
-	return ["-nostats", ...ffmpegInput({ source })];
+export function ffmpegInputArgs({
+	source,
+	concat,
+}: {
+	source: string;
+	concat?: boolean;
+}): string[] {
+	return ["-nostats", ...ffmpegInput({ source, concat })];
 }
 
 export function ffmpegArgs({

@@ -13,7 +13,7 @@ Output #0, null, to 'pipe:':
     Metadata:
       encoder         : Lavc60.31.102 pcm_s16le
 [out#0/null @ 0x55e39f854680] video:0kB audio:398kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown
-size=N/A time=00:00:05.45 bitrate=N/A speed=  73x    
+size=N/A time=00:00:05.45 bitrate=N/A speed=  73x
 [Parsed_ebur128_3 @ 0x55e39f8850c0] Summary:
 
   Integrated loudness:

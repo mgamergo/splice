@@ -15,7 +15,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { createLoudnessMeter, loudnessCacheKey } from "../loudness";
+import {
+	createLoudnessMeter,
+	loudnessCacheKey,
+	runEbur128,
+} from "../loudness";
 import {
 	createNoiseReducer,
 	denoiseArgs,
@@ -390,6 +394,44 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 						.digest("hex"),
 				).toBe(createHash("sha256").update(before).digest("hex"));
 				await reducer.stop();
+			}),
+		60_000,
+	);
+
+	test(
+		"loudness with noise reduction measures the render's ranges through the same ffconcat meter",
+		() =>
+			withRoot(async (root) => {
+				await writeNoisyRecording(join(root, "Footage", "take.wav"));
+				const reducer = createNoiseReducer({ root });
+				const meter = createLoudnessMeter({ root, noiseReduction: reducer });
+				// Mostly the pause, where noise reduction changes the most.
+				const ranges = [
+					{ start: 3, end: 8 },
+					{ start: 9, end: 10 },
+				];
+				const denoised = await meter.measure({
+					path: "take.wav",
+					ranges,
+					noiseReduction: true,
+				});
+				const source = await meter.measure({ path: "take.wav", ranges });
+				const { file } = await reducer.ensure({ path: "take.wav" });
+				const signal = new AbortController().signal;
+				expect(denoised).toMatchObject(
+					await runEbur128({ root, source: file, ranges, signal }),
+				);
+				expect(source).toMatchObject(
+					await runEbur128({
+						root,
+						source: join(root, "Footage", "take.wav"),
+						ranges,
+						signal,
+					}),
+				);
+				expect(denoised.integratedLufs).not.toBe(source.integratedLufs);
+				await reducer.stop();
+				await meter.stop();
 			}),
 		60_000,
 	);
