@@ -10,7 +10,7 @@ import {
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
 	ffmpegInputArgs,
@@ -56,7 +56,7 @@ export function loudnessCacheKey({
 }): string {
 	// Bump the version when the measurement changes.
 	return createHash("sha256")
-		.update(JSON.stringify([2, path, size, mtimeMs, ranges]))
+		.update(JSON.stringify([3, path, size, mtimeMs, ranges]))
 		.digest("hex");
 }
 
@@ -64,119 +64,56 @@ function seconds(value: number): string {
 	return value.toFixed(6);
 }
 
-/**
- * Longest stretch of repeated audio measured in one piece. FFmpeg holds every
- * copy but the one it's measuring in memory, so long repeats are measured in turns.
- */
-export const MAX_REPEATED_SECONDS = 30;
-
-/** A stretch of source audio, and how many of the ranges play it. */
-export interface PlayedSegment {
-	start: number;
-	end: number;
-	copies: number;
-}
-
-/**
- * Splits the source from 0 to the last range's end into stretches played the
- * same number of times, in source order. Stretches no range plays have 0 copies.
- */
-export function playedSegments(ranges: SourceRange[]): PlayedSegment[] {
-	const edges = new Map<number, number>();
-	for (const { start, end } of ranges) {
-		edges.set(start, (edges.get(start) ?? 0) + 1);
-		edges.set(end, (edges.get(end) ?? 0) - 1);
-	}
-	const segments: PlayedSegment[] = [];
-	let copies = 0;
-	let from = 0;
-	for (const [at, change] of [...edges].sort(([a], [b]) => a - b)) {
-		const last = segments.at(-1);
-		if (at > from) {
-			if (last && last.copies === copies) last.end = at;
-			else segments.push({ start: from, end: at, copies });
-		}
-		copies += change;
-		from = at;
-	}
-	return segments.flatMap((segment) => {
-		if (segment.copies <= 1) return [segment];
-		const pieces: PlayedSegment[] = [];
-		for (let start = segment.start; start < segment.end; ) {
-			const end = Math.min(segment.end, start + MAX_REPEATED_SECONDS);
-			pieces.push({ ...segment, start, end });
-			start = end;
-		}
-		return pieces;
-	});
-}
-
 const METER =
 	// The editor plays mono sources on both stereo channels, so measure them
 	// that way too. Per-frame lines go to the verbose level, below what is read.
-	"ebur128=peak=true:dualmono=true:framelog=verbose[out]";
+	"ebur128=peak=true:dualmono=true:framelog=verbose";
 
 /**
- * The FFmpeg filter graph that measures the ranges played back to back.
- * `asegment` cuts at exact samples and passes each sample on once, so even a
- * thousand ranges cost one decode. Repeated stretches are split into copies.
+ * An ffconcat list that plays the ranges back to back in order, so a range
+ * listed twice plays twice and joins between them are measured as heard.
+ * FFmpeg reads one range at a time, so memory stays flat however many ranges
+ * or repeats, and the list goes in a file to keep the command line short.
+ * PCM is cut at the exact sample; compressed audio can start a packet early,
+ * which errs toward a louder reading.
  */
-export function ebur128Graph(ranges: SourceRange[] | null): string {
-	const source = `[0:a:0]${SOURCE_TIMELINE_FILTER}`;
-	if (!ranges) return `${source},${METER}`;
-	const segments = playedSegments(ranges);
-	// One more output than cut points: the audio after the last range.
-	const labels = [...segments, null].map((_, index) => `[s${index}]`);
-	const statements = [
-		`${source},asegment=timestamps=${segments.map(({ end }) => seconds(end)).join("|")}${labels.join("")}`,
-		`${labels.at(-1)}anullsink`,
-	];
-	const played: string[] = [];
-	for (const [index, { copies }] of segments.entries()) {
-		const label = labels[index];
-		if (copies === 0) statements.push(`${label}anullsink`);
-		else if (copies === 1) played.push(label);
-		else {
-			const copyLabels = Array.from(
-				{ length: copies },
-				(_, copy) => `[s${index}c${copy}]`,
-			);
-			statements.push(`${label}asplit=${copies}${copyLabels.join("")}`);
-			played.push(...copyLabels);
-		}
-	}
-	statements.push(
-		`${played.join("")}concat=n=${played.length}:v=0:a=1,${METER}`,
-	);
-	return statements.join(";\n");
+export function concatList({
+	source,
+	ranges,
+}: {
+	source: string;
+	ranges: SourceRange[];
+}): string {
+	const file = `file '${source.replaceAll("'", "'\\''")}'`;
+	return [
+		"ffconcat version 1.0",
+		...ranges.flatMap(({ start, end }) => [
+			file,
+			`inpoint ${seconds(start)}`,
+			`outpoint ${seconds(end)}`,
+		]),
+		"",
+	].join("\n");
 }
-
-/**
- * FFmpeg 6 reads a filter graph file with -filter_complex_script, which FFmpeg 8
- * dropped for the -/filter_complex form FFmpeg 7 added. A file keeps long range
- * lists under Windows' 32,767-character command-line limit.
- */
-export type GraphFileOption = "-filter_complex_script" | "-/filter_complex";
 
 export function ebur128Args({
 	source,
-	graphFile,
-	graphFileOption,
+	concat = false,
 }: {
+	/** The recording, or with `concat`, an ffconcat list of its ranges. */
 	source: string;
-	graphFile: string;
-	graphFileOption: GraphFileOption;
+	concat?: boolean;
 }): string[] {
 	return [
 		"-nostdin",
 		"-hide_banner",
 		"-loglevel",
 		"info",
-		...ffmpegInputArgs({ source }),
-		graphFileOption,
-		graphFile,
+		...ffmpegInputArgs({ source, concat }),
 		"-map",
-		"[out]",
+		"0:a:0",
+		"-af",
+		`${SOURCE_TIMELINE_FILTER},${METER}`,
 		"-f",
 		"null",
 		"-",
@@ -340,31 +277,6 @@ async function readCache(
 	}
 }
 
-const graphFileOptions = new Map<string, Promise<GraphFileOption>>();
-
-/** Which way this FFmpeg reads a filter graph file, checked once per binary. */
-function graphFileOption(command: string): Promise<GraphFileOption> {
-	let option = graphFileOptions.get(command);
-	if (!option) {
-		option = (async () => {
-			const help = Bun.spawn([command, "-hide_banner", "-h", "long"], {
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "ignore",
-				windowsHide: true,
-			});
-			const text = await new Response(help.stdout).text();
-			await help.exited;
-			return text.includes("-filter_complex_script")
-				? "-filter_complex_script"
-				: "-/filter_complex";
-		})();
-		graphFileOptions.set(command, option);
-		void option.catch(() => graphFileOptions.delete(command));
-	}
-	return option;
-}
-
 export async function runEbur128({
 	root,
 	source,
@@ -376,21 +288,23 @@ export async function runEbur128({
 	ranges: SourceRange[] | null;
 	signal: AbortSignal;
 }): Promise<LoudnessMeasurement> {
+	if (ranges?.length === 0)
+		return { integratedLufs: null, truePeakDbtp: null, lraLu: 0 };
 	const command = await findFfmpeg({ root });
 	const cacheDir = join(root, "Cache", "loudness");
 	await mkdir(cacheDir, { recursive: true });
-	const job = await mkdtemp(join(cacheDir, ".graph-"));
+	const job = await mkdtemp(join(cacheDir, ".ranges-"));
 	try {
-		const graphFile = join(job, "graph.txt");
-		await writeFile(graphFile, ebur128Graph(ranges));
+		let input = source;
+		if (ranges) {
+			input = join(job, "ranges.ffconcat");
+			// The list's paths are relative to the list itself.
+			await writeFile(input, concatList({ source: resolve(source), ranges }));
+		}
 		const log: string[] = [];
 		await run({
 			command,
-			args: ebur128Args({
-				source,
-				graphFile,
-				graphFileOption: await graphFileOption(command),
-			}),
+			args: ebur128Args({ source: input, concat: ranges !== null }),
 			signal,
 			onLine(line) {
 				if (

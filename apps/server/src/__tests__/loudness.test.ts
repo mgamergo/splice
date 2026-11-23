@@ -5,21 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createLoudnessMeter,
+	concatList,
 	ebur128Args,
-	ebur128Graph,
 	loudnessCacheKey,
 	loudnessGain,
-	MAX_REPEATED_SECONDS,
 	MissingFootageError,
 	PEAK_READING_MARGIN_DB,
 	parseEbur128Summary,
 	planSourceGains,
-	playedSegments,
 	runEbur128,
 } from "../loudness";
 
-// The ebur128 fixtures are verbatim FFmpeg logs: the trailing spaces on their
-// `size=` progress lines are FFmpeg's, so keep them.
+// The ebur128 fixtures are FFmpeg logs, with trailing spaces trimmed.
 const fixture = (name: string) =>
 	Bun.file(join(import.meta.dir, "fixtures", name)).text();
 
@@ -52,86 +49,50 @@ test("reports nothing measured when no audio passes the gate", async () => {
 	);
 });
 
-test("splits the source where ranges start and end, counting repeats", () => {
+test("plays the ranges in order from an ffconcat list, as dual mono, on the transcript timeline", () => {
 	expect(
-		playedSegments([
-			{ start: 0.5, end: 2.25 },
-			{ start: 3, end: 5.5 },
-			{ start: 5.5, end: 6 },
-		]),
+		concatList({
+			source: "/Footage/it's take 1.mov",
+			ranges: [
+				{ start: 0.5, end: 2.25 },
+				{ start: 3, end: 4 },
+				{ start: 3, end: 4 },
+			],
+		}).split("\n"),
 	).toEqual([
-		{ start: 0, end: 0.5, copies: 0 },
-		{ start: 0.5, end: 2.25, copies: 1 },
-		{ start: 2.25, end: 3, copies: 0 },
-		{ start: 3, end: 6, copies: 1 },
+		"ffconcat version 1.0",
+		"file '/Footage/it'\\''s take 1.mov'",
+		"inpoint 0.500000",
+		"outpoint 2.250000",
+		"file '/Footage/it'\\''s take 1.mov'",
+		"inpoint 3.000000",
+		"outpoint 4.000000",
+		"file '/Footage/it'\\''s take 1.mov'",
+		"inpoint 3.000000",
+		"outpoint 4.000000",
+		"",
 	]);
-	expect(
-		playedSegments([
-			{ start: 0, end: 2 },
-			{ start: 1, end: 3 },
-			{ start: 1, end: 3 },
-		]),
-	).toEqual([
-		{ start: 0, end: 1, copies: 1 },
-		{ start: 1, end: 2, copies: 3 },
-		{ start: 2, end: 3, copies: 2 },
-	]);
-	// Long repeats are measured in turns, so FFmpeg never holds much of a copy.
-	const long = 2.5 * MAX_REPEATED_SECONDS;
-	expect(
-		playedSegments([
-			{ start: 0, end: long },
-			{ start: 0, end: long },
-		]),
-	).toEqual([
-		{ start: 0, end: MAX_REPEATED_SECONDS, copies: 2 },
-		{ start: MAX_REPEATED_SECONDS, end: 2 * MAX_REPEATED_SECONDS, copies: 2 },
-		{ start: 2 * MAX_REPEATED_SECONDS, end: long, copies: 2 },
-	]);
-});
-
-test("measures the ranges back to back, as dual mono, on the transcript timeline", () => {
-	expect(
-		ebur128Graph([
-			{ start: 0.5, end: 2.25 },
-			{ start: 3, end: 4 },
-			{ start: 3, end: 4 },
-		]).split("\n"),
-	).toEqual([
-		"[0:a:0]aresample=async=1:first_pts=0,asegment=timestamps=0.500000|2.250000|3.000000|4.000000[s0][s1][s2][s3][s4];",
-		"[s4]anullsink;",
-		"[s0]anullsink;",
-		"[s2]anullsink;",
-		"[s3]asplit=2[s3c0][s3c1];",
-		"[s1][s3c0][s3c1]concat=n=3:v=0:a=1,ebur128=peak=true:dualmono=true:framelog=verbose[out]",
-	]);
-	expect(ebur128Graph(null)).toBe(
-		"[0:a:0]aresample=async=1:first_pts=0,ebur128=peak=true:dualmono=true:framelog=verbose[out]",
-	);
-	// The graph goes in a file, so the command stays short however many ranges.
-	const args = ebur128Args({
-		source: "Footage/take 1.mov",
-		graphFile: "Cache/loudness/graph.txt",
-		graphFileOption: "-/filter_complex",
-	});
-	expect(args.slice(args.indexOf("-i"))).toEqual([
+	const args = ebur128Args({ source: "Cache/loudness/ranges.ffconcat", concat: true });
+	expect(args.slice(args.indexOf("-format_whitelist"))).toEqual([
+		"-format_whitelist",
+		"concat,mov,matroska,webm,wav,mp3,aac,flac,ogg",
+		"-f",
+		"concat",
+		"-safe",
+		"0",
 		"-i",
-		"Footage/take 1.mov",
-		"-/filter_complex",
-		"Cache/loudness/graph.txt",
+		"Cache/loudness/ranges.ffconcat",
 		"-map",
-		"[out]",
+		"0:a:0",
+		"-af",
+		"aresample=async=1:first_pts=0,ebur128=peak=true:dualmono=true:framelog=verbose",
 		"-f",
 		"null",
 		"-",
 	]);
-	// A thousand ranges make a graph past Windows' 32,767-character command line.
-	const thousand = Array.from({ length: 1000 }, (_, i) => ({
-		start: i * 3.25,
-		end: i * 3.25 + 2.5,
-	}));
-	expect(ebur128Graph(thousand).length).toBeGreaterThan(32_767);
+	// The list goes in a file, so the command stays short however many ranges.
 	expect(args.join(" ").length).toBeLessThan(1000);
+	expect(ebur128Args({ source: "Footage/a.wav" })).not.toContain("concat");
 });
 
 test("gains reach the target loudness", () => {
@@ -515,6 +476,48 @@ test.skipIf(!ffmpeg)("counts audio once for every clip that plays it", () =>
 			(once.integratedLufs ?? 0) + 1,
 		);
 	}),
+);
+
+test.skipIf(!ffmpeg)(
+	"measures the join between back-to-back copies of a long clip",
+	() =>
+		ffmpegMeter(async ({ generate, measure, reference }) => {
+			// A quiet 31 s clip that ends on a loud burst, played twice in a row:
+			// the burst runs straight into the clip's quiet start.
+			const source = await generate(
+				"long-repeat.wav",
+				"0.05*sin(2*PI*440*t)+0.85*sin(2*PI*997*t)*gte(t\\,30.99)",
+				31,
+			);
+			const measured = await measure(source, [
+				{ start: 0, end: 31 },
+				{ start: 0, end: 31 },
+			]);
+			const played = await reference(
+				source,
+				"[0:a:0]asplit=2[a][b];[a][b]concat=n=2:v=0:a=1,",
+			);
+			expect(measured.truePeakDbtp).toBe(played.peak);
+			expect(measured.integratedLufs).toBe(played.lufs);
+		}),
+	60_000,
+);
+
+test.skipIf(!ffmpeg)(
+	"measures many nested ranges in time linear in the ranges",
+	() =>
+		ffmpegMeter(async ({ generate, measure }) => {
+			const source = await generate("nested.wav", "0.1*sin(2*PI*400*t)", 31);
+			const ranges = Array.from({ length: 200 }, (_, i) => ({
+				start: i / 100,
+				end: 31 - i / 100,
+			}));
+			const started = performance.now();
+			const measured = await measure(source, ranges);
+			expect(measured.integratedLufs).not.toBeNull();
+			expect(performance.now() - started).toBeLessThan(30_000);
+		}),
+	60_000,
 );
 
 test.skipIf(!ffmpeg)("reports the true peak of audio too short to gate", () =>

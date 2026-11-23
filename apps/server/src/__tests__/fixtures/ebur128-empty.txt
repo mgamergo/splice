@@ -1,6 +1,6 @@
 [out#0/null @ 0x55db7053a680] video:0kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown
 [out#0/null @ 0x55db7053a680] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)
-size=N/A time=N/A bitrate=N/A speed=N/A    
+size=N/A time=N/A bitrate=N/A speed=N/A
 [Parsed_ebur128_2 @ 0x55db7056ac80] Summary:
 
   Integrated loudness:
