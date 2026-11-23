@@ -1,8 +1,16 @@
 import type { Take, TakePlacement, TakeSourceRange } from "@splice/bridge/ops";
 import type { ProjectItem } from "@/media/types";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
-import { buildSeparatedAudioClip } from "@/timeline/audio-separation";
-import { buildClipFromMedia } from "@/timeline/clip-utils";
+import {
+	buildSeparatedAudioClip,
+	doesClipHaveEnabledAudio,
+} from "@/timeline/audio-separation";
+import { getClipVolume, hasAnimatedVolume } from "@/timeline/audio-state";
+import {
+	buildClipFromMedia,
+	canClipHaveAudio,
+	hasMediaId,
+} from "@/timeline/clip-utils";
 import { razorClip } from "@/timeline/razor";
 import type {
 	AudioClip,
@@ -68,12 +76,55 @@ export function resolveTake({
 type ResolvedRange = ReturnType<typeof resolveSourceRange>;
 type ResolvedTake = ResolvedRange[];
 
+/**
+ * The clip volume each take's project item mostly plays at in the sequence, so
+ * restored and swapped takes keep a recording's gain, such as the one loudness
+ * normalization set, instead of jumping back to the source level.
+ */
+function takeVolumes({
+	tracks,
+	takes,
+}: {
+	tracks: SequenceTracks;
+	takes: ResolvedRange[];
+}): Map<string, number> {
+	const items = new Map(takes.map(({ item }) => [item.id, item]));
+	const counts = new Map<string, Map<number, number>>();
+	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
+		for (const clip of track.clips) {
+			if (
+				!canClipHaveAudio(clip) ||
+				!hasMediaId(clip) ||
+				hasAnimatedVolume({ clip })
+			)
+				continue;
+			const item = items.get(clip.mediaId);
+			if (!item || !doesClipHaveEnabledAudio({ clip, projectItem: item }))
+				continue;
+			const volumes = counts.get(item.id) ?? new Map<number, number>();
+			const volume = getClipVolume({ clip });
+			volumes.set(volume, (volumes.get(volume) ?? 0) + 1);
+			counts.set(item.id, volumes);
+		}
+	}
+	return new Map(
+		Array.from(counts, ([id, volumes]) => [
+			id,
+			[...volumes].reduce((most, entry) =>
+				entry[1] > most[1] ? entry : most,
+			)[0],
+		]),
+	);
+}
+
 function createTakeClip({
 	take,
 	at,
+	volumes,
 }: {
 	take: ResolvedRange;
 	at: MediaTime;
+	volumes: Map<string, number>;
 }): VideoClip | AudioClip {
 	const sourceDuration = mediaTimeFromSeconds({
 		seconds: take.item.duration ?? 0,
@@ -88,8 +139,10 @@ function createTakeClip({
 	if (clip.type !== "video" && clip.type !== "audio") {
 		throw new RemovalTakeError("Takes require a video or audio source.");
 	}
+	const volume = volumes.get(take.item.id);
 	return {
 		...clip,
+		...(volume !== undefined && { params: { ...clip.params, volume } }),
 		id: generateUUID(),
 		duration: roundMediaTime({ time: take.sourceOut - take.sourceIn }),
 		trimStart: take.sourceIn,
@@ -481,11 +534,15 @@ export function restoreTakeClips({
 		)?.id;
 	const audioTrack = (id?: string) =>
 		tracks.audio.find((track) => track.id === id)?.id;
+	const volumes = takeVolumes({
+		tracks,
+		takes: takes.flatMap(({ take }) => take),
+	});
 	let end = at;
 	for (const { take, placements } of takes) {
 		for (const [index, range] of take.entries()) {
 			const placement = placements?.[index];
-			const clip = createTakeClip({ take: range, at: end });
+			const clip = createTakeClip({ take: range, at: end, volumes });
 			end = roundMediaTime({ time: end + clip.duration });
 			if (clip.type === "audio") {
 				audio.push({
@@ -678,13 +735,14 @@ export function swapTakeClips({
 
 	const video: PlacedClip<VideoClip>[] = [];
 	const audio: PlacedClip<AudioClip>[] = [];
+	const volumes = takeVolumes({ tracks, takes: chosen });
 	let replacementEnd = start;
 	let videoIndex = 0;
 	let audioIndex = 0;
 	for (const [index, range] of chosen.entries()) {
 		const placement = chosenPlacements?.[index];
 		const clip = {
-			...createTakeClip({ take: range, at: replacementEnd }),
+			...createTakeClip({ take: range, at: replacementEnd, volumes }),
 			bestTakeMarkerIds: [marker.id],
 		};
 		replacementEnd = roundMediaTime({ time: replacementEnd + clip.duration });
