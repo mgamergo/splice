@@ -73,6 +73,7 @@ function setUp(handlers: Partial<TabHandlers> = {}) {
 			"editor.addCaptions": () => ({ ok: true }),
 			"editor.roughCut": () => ({ ok: true }),
 			"editor.takesList": () => ({ ok: true, markers: [] }),
+			"editor.audioSources": () => ({ ok: true, audioSources: [] }),
 			...handlers,
 		},
 		onStatus: (status) => statuses.push(status),

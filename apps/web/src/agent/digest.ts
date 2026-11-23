@@ -1,8 +1,9 @@
+import { formatGain } from "@/agent/loudness";
 import { formatSeconds } from "@/agent/time";
 import { projectFormat } from "@/project/format";
 import type { TProject } from "@/project/types";
 import { getSourceSpanAtClipTime } from "@/retime";
-import { isRetimableClip } from "@/timeline";
+import { canClipHaveAudio, isRetimableClip } from "@/timeline";
 import type { TimelineClip, TSequence } from "@/timeline";
 import { addMediaTime, roundMediaTime } from "@/wasm";
 
@@ -19,6 +20,9 @@ function describeClip({ clip }: { clip: TimelineClip }): string {
 		const sourceEnd = addMediaTime({ a: clip.trimStart, b: sourceSpan });
 		text += ` (src ${formatSeconds({ time: clip.trimStart })}–${formatSeconds({ time: sourceEnd })})`;
 	}
+	const volume = canClipHaveAudio(clip) ? clip.params.volume : undefined;
+	if (typeof volume === "number" && volume !== 0)
+		text += ` gain ${formatGain(volume)}`;
 	if (clip.type === "text") {
 		const content = String(clip.params.content ?? "").replace(/\s+/g, " ");
 		text += ` ${JSON.stringify(content.length > 40 ? `${content.slice(0, 39)}…` : content)}`;

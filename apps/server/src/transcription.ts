@@ -13,7 +13,7 @@ import {
 	type Model,
 } from "./transcription-tools";
 
-const footagePath = z
+export const footagePath = z
 	.string()
 	.refine(isFootagePath, "Use a relative path from footage_list");
 export const transcriptPageInput = {
@@ -87,8 +87,32 @@ async function readCache({
 	}
 }
 
-function invalidParams(message: string): BridgeError {
+export function invalidParams(message: string): BridgeError {
 	return new BridgeError({ code: RPC_ERRORS.INVALID_PARAMS, message });
+}
+
+/** Error data for a recording that isn't in Footage, so callers can skip it. */
+export const MISSING_FOOTAGE = { missingFootage: true } as const;
+
+/** A video or audio file under Footage, with what identifies its contents. */
+export async function resolveRecording({
+	root,
+	path,
+}: {
+	root: string;
+	path: string;
+}) {
+	const type = mediaTypeForPath(path);
+	const isRecording = type?.startsWith("audio/") || type?.startsWith("video/");
+	const source = await resolveFootagePath({ root, path });
+	if (!source || !isRecording) {
+		throw new BridgeError({
+			code: RPC_ERRORS.INVALID_PARAMS,
+			message: `Expected an existing video or audio file under Footage: ${path}`,
+			data: isRecording ? MISSING_FOOTAGE : undefined,
+		});
+	}
+	return { source, info: await stat(source) };
 }
 
 async function waitFor({
@@ -128,17 +152,7 @@ export function createTranscriptionJobs({
 	const active = new Map<string, Job>();
 
 	async function identifySource({ path }: { path: string }) {
-		const type = mediaTypeForPath(path);
-		const source = await resolveFootagePath({ root, path });
-		if (
-			!source ||
-			!(type?.startsWith("audio/") || type?.startsWith("video/"))
-		) {
-			throw invalidParams(
-				`Expected an existing video or audio file under Footage: ${path}`,
-			);
-		}
-		const info = await stat(source);
+		const { source, info } = await resolveRecording({ root, path });
 		const model = await identifyModel({ root });
 		const key = transcriptCacheKey({
 			path,

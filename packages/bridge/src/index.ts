@@ -30,6 +30,7 @@ export const TAB_METHODS = [
 	"editor.rawSequence",
 	"editor.roughCut",
 	"editor.takesList",
+	"editor.audioSources",
 	"editor.addCaptions",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
@@ -44,6 +45,7 @@ export const SERVER_METHODS = [
 	"footage.list",
 	"transcribe.start",
 	"transcribe.status",
+	"loudness.measure",
 	"transcript.words",
 ] as const;
 export type ServerMethod = (typeof SERVER_METHODS)[number];
