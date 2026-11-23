@@ -93,7 +93,7 @@ async function download({
 		throw new Error(`SHA-256 mismatch: ${url}`);
 }
 
-function run({
+export function run({
 	command,
 	args,
 	signal,
@@ -134,6 +134,20 @@ function run({
 	});
 }
 
+/** Reads only local files in the container formats Footage allows, and maps the first audio stream. */
+export function ffmpegInputArgs({ source }: { source: string }): string[] {
+	return [
+		"-protocol_whitelist",
+		"file",
+		"-format_whitelist",
+		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
+		"-i",
+		source,
+		"-map",
+		"0:a:0",
+	];
+}
+
 export function ffmpegArgs({
 	source,
 	wav,
@@ -147,14 +161,7 @@ export function ffmpegArgs({
 		"-loglevel",
 		"error",
 		"-nostats",
-		"-protocol_whitelist",
-		"file",
-		"-format_whitelist",
-		"mov,matroska,webm,wav,mp3,aac,flac,ogg",
-		"-i",
-		source,
-		"-map",
-		"0:a:0",
+		...ffmpegInputArgs({ source }),
 		"-af",
 		"aresample=async=1:first_pts=0",
 		"-ac",
@@ -168,6 +175,13 @@ export function ffmpegArgs({
 		wav,
 	];
 }
+
+/**
+ * Whisper leaves out disfluencies unless its context already has some. A
+ * prompt written with them keeps "um" and "uh" in the transcript, so filler
+ * words and false starts can be found and cut.
+ */
+export const DISFLUENCY_PROMPT = "Um, uh, so, erm, I mean, like, ah, okay.";
 
 export function whisperArgs({
 	wav,
@@ -191,8 +205,21 @@ export function whisperArgs({
 		"-of",
 		output,
 		"-pp",
+		"--prompt",
+		DISFLUENCY_PROMPT,
 		...(cpu ? ["-ng"] : []),
 	];
+}
+
+export async function findFfmpeg({ root }: { root: string }): Promise<string> {
+	const name = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+	const local = join(root, "Tools", name);
+	const command = (await Bun.file(local).exists()) ? local : Bun.which(name);
+	if (!command)
+		throw new Error(
+			`Install FFmpeg on PATH or put ${name} in ${join(root, "Tools")}.`,
+		);
+	return command;
 }
 
 export async function extractAudio({
@@ -206,13 +233,7 @@ export async function extractAudio({
 	wav: string;
 	signal: AbortSignal;
 }): Promise<number> {
-	const name = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-	const local = join(root, "Tools", name);
-	const command = (await Bun.file(local).exists()) ? local : Bun.which(name);
-	if (!command)
-		throw new Error(
-			`Install FFmpeg on PATH or put ${name} in ${join(root, "Tools")}.`,
-		);
+	const command = await findFfmpeg({ root });
 	await run({ command, args: ffmpegArgs({ source, wav }), signal });
 	const file = await open(wav, "r");
 	try {

@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcClient } from "../rpc-client";
 import { startServer } from "../server";
-import { extractAudio, ffmpegArgs, whisperArgs } from "../transcription-tools";
+import {
+	DISFLUENCY_PROMPT,
+	extractAudio,
+	ffmpegArgs,
+	whisperArgs,
+} from "../transcription-tools";
 import { createTranscriptionJobs, transcriptCacheKey } from "../transcription";
 import { normalizeTranscript } from "../transcript";
 import whisperOutput from "./fixtures/whisper-base-en.json";
@@ -58,6 +63,8 @@ test("builds shell-free FFmpeg and whisper.cpp arguments", () => {
 		"-of",
 		"working dir/whisper",
 		"-pp",
+		"--prompt",
+		DISFLUENCY_PROMPT,
 	]);
 	expect(
 		whisperArgs({ wav, output: "working dir/whisper", model, cpu: true }),

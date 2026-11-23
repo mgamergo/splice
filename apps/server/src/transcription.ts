@@ -13,7 +13,7 @@ import {
 	type Model,
 } from "./transcription-tools";
 
-const footagePath = z
+export const footagePath = z
 	.string()
 	.refine(isFootagePath, "Use a relative path from footage_list");
 export const transcriptPageInput = {
@@ -64,7 +64,7 @@ export function transcriptCacheKey({
 }): string {
 	// Bump the version when cached transcript semantics change.
 	return createHash("sha256")
-		.update(JSON.stringify([3, path, size, mtimeMs, model]))
+		.update(JSON.stringify([4, path, size, mtimeMs, model]))
 		.digest("hex");
 }
 
@@ -82,8 +82,26 @@ async function readCache({
 	}
 }
 
-function invalidParams(message: string): BridgeError {
+export function invalidParams(message: string): BridgeError {
 	return new BridgeError({ code: RPC_ERRORS.INVALID_PARAMS, message });
+}
+
+/** The file behind a Footage path, if it is a video or audio recording. */
+export async function resolveRecording({
+	root,
+	path,
+}: {
+	root: string;
+	path: string;
+}) {
+	const type = mediaTypeForPath(path);
+	const source = await resolveFootagePath({ root, path });
+	if (!source || !(type?.startsWith("audio/") || type?.startsWith("video/"))) {
+		throw invalidParams(
+			`Expected an existing video or audio file under Footage: ${path}`,
+		);
+	}
+	return { source, info: await stat(source) };
 }
 
 async function waitFor({
@@ -123,17 +141,7 @@ export function createTranscriptionJobs({
 	const active = new Map<string, Job>();
 
 	async function identifySource({ path }: { path: string }) {
-		const type = mediaTypeForPath(path);
-		const source = await resolveFootagePath({ root, path });
-		if (
-			!source ||
-			!(type?.startsWith("audio/") || type?.startsWith("video/"))
-		) {
-			throw invalidParams(
-				`Expected an existing video or audio file under Footage: ${path}`,
-			);
-		}
-		const info = await stat(source);
+		const { source, info } = await resolveRecording({ root, path });
 		const model = await identifyModel({ root });
 		const key = transcriptCacheKey({
 			path,
@@ -236,6 +244,12 @@ export function createTranscriptionJobs({
 	}
 
 	return {
+		/** The cached transcript for a Footage path, or null if it hasn't been transcribed. */
+		async cached({ path }: { path: string }): Promise<Transcript | null> {
+			const { cachePath } = await identifySource({ path });
+			return readCache({ cachePath });
+		},
+
 		async start(params: unknown) {
 			const parsed = startSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
