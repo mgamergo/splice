@@ -90,3 +90,13 @@ Inspect recorded frames before placing graphics. For a UI demonstration, zoom to
 The agent applies its first graphics pass as undoable sequence edits. Creator-adjusted graphics follow their referenced action through cuts and retain their timing offset. Flag a graphic for review if a take swap removes its action. Preserve explicit deletions across reruns.
 
 The creator finishes the edit in Splice. The workflow has no Premiere handoff. Horizontal delivery includes the reviewed 1080p30 MP4 and corrected SRT captions for YouTube. Thumbnails are independent of video delivery. Music is optional.
+
+### Framing, corrections and final review
+
+Infer the viewer's point of attention from the last meaningful action, narration and preceding crop. An idle cursor does not redirect attention. Cut directly to a known target when the destination matters. Preserve navigation when the viewer needs to reproduce the route. Keep a search field and its results in a stable frame while the creator types. Keep labels and the resulting UI state readable even when this requires a small shift in attention.
+
+The creator can reposition and magnify a generated zoom in the preview and trim its duration on the timeline. Preserve those adjustments on later graphics passes. During screen analysis, flag any action missing from the selected take, even if its spoken delivery is strong. The creator decides whether to substitute picture from another take.
+
+Caption corrections can apply to one cue, across the project, or to a reusable spelling chosen by the creator for future projects. Time the corrected SRT against the final reviewed sequence.
+
+Export is the creator's explicit final approval. Show unresolved issues and let the creator fix or dismiss each one. Produce the MP4 and SRT from the same approved sequence revision.
