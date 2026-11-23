@@ -140,3 +140,11 @@ Support manual picture-only repair during the first horizontal milestone. The cr
 The recordings alone are enough to start. An optional project brief guides this edit without changing future project defaults. Preserve the teaching order through take selection and tightening. Moving the payoff or removing an entire section to meet a duration requires an explicit instruction to restructure.
 
 The creator can select a passage in Splice and direct the editing agent in T3 Code. MCP supplies the selected sequence and range. Show the consequences for adjacent transitions and preserve unrelated edits.
+
+### Finalizing the cut and adding richer graphics
+
+Finalizing the cut from T3 Code or Splice saves the exact version the creator reviewed. The creator can return to it, compare a passage with embellishments off, or export the approved basic edit.
+
+HyperFrames may choose passages to embellish within the approved timing. Ask the creator before extending a shot or moving narration. Each graphic is individually selectable in Splice. Support moving, trimming, hiding, deleting and requesting a revision to one graphic in place. Manual editing of its internal shapes and keyframes can wait.
+
+The basic graphics pass can track a visibly identifiable UI control through movement. A highlight follows its target and disappears when the target leaves view.
