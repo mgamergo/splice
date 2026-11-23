@@ -859,19 +859,19 @@ test("captions follow a Swap and back instead of blocking it", () => {
 						tracks: {
 							...sequence.tracks,
 							overlay: sequence.tracks.overlay.map((track) =>
-								track.name !== "Captions"
-									? track
-									: {
+								track.type === "text" && track.name === "Captions"
+									? {
 											...track,
 											clips: track.clips.map((clip) =>
-												clip.type === "text" && clip.params.content === "later"
+												clip.params.content === "later"
 													? {
 															...clip,
 															params: { ...clip.params, content: "Later!" },
 														}
 													: clip,
 											),
-										},
+										}
+									: track,
 							),
 						},
 					},
