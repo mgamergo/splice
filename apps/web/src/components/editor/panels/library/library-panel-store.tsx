@@ -39,7 +39,7 @@ const createHugeiconsIcon = ({ icon }: { icon: IconSvgElement }) => {
 export const tabs = {
 	media: {
 		icon: createHugeiconsIcon({ icon: Folder03Icon }),
-		label: "Media",
+		label: "Project items",
 	},
 	sounds: {
 		icon: createHugeiconsIcon({ icon: HeadphonesIcon }),
