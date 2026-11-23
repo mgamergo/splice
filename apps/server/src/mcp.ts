@@ -7,6 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { SpliceConfig } from "./config";
 import { createRpcClient, RpcCallError, type RpcCall } from "./rpc-client";
 import { readSession } from "./session";
+import { startDetached } from "./background";
 
 const START_TIMEOUT_MS = 150_000;
 
@@ -180,14 +181,11 @@ export async function connectToSplice({
 }): Promise<RpcCall> {
 	const origin = `http://127.0.0.1:${config.port}`;
 	if (!(await isSpliceRunning({ origin }))) {
-		const child = Bun.spawn(["bun", `${import.meta.dir}/cli.ts`, "serve"], {
-			stdin: "ignore",
-			// stdout belongs to the MCP protocol.
-			stdout: "ignore",
-			stderr: "ignore",
-			env: process.env,
+		// The same Bun that runs this, so nothing depends on `bun` being on PATH.
+		startDetached({
+			command: process.execPath,
+			args: [`${import.meta.dir}/cli.ts`, "serve"],
 		});
-		child.unref();
 		const deadline = Date.now() + START_TIMEOUT_MS;
 		while (!(await isSpliceRunning({ origin }))) {
 			if (Date.now() > deadline) {

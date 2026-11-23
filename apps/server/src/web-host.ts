@@ -52,7 +52,7 @@ export function startWebHost({
 	}
 	const origin = `http://127.0.0.1:${port}`;
 	const args = [
-		"bun",
+		process.execPath,
 		"run",
 		"next",
 		dev ? "dev" : "start",

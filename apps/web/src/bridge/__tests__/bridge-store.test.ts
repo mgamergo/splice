@@ -22,21 +22,22 @@ function fakeStorage({ writable }: { writable: boolean }) {
 	};
 }
 
-const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
+/** Stands in for `window.localStorage`, the only storage the store reads. */
 function installStorage(storage: ReturnType<typeof fakeStorage>) {
-	Object.defineProperty(globalThis, "localStorage", {
-		value: storage,
+	Object.defineProperty(globalThis, "window", {
+		value: { localStorage: storage },
 		configurable: true,
 	});
 }
 
 afterEach(() => {
 	useAgentBridgeStore.getState().setBlocked(false);
-	if (original) {
-		Object.defineProperty(globalThis, "localStorage", original);
+	if (originalWindow) {
+		Object.defineProperty(globalThis, "window", originalWindow);
 	} else {
-		Reflect.deleteProperty(globalThis, "localStorage");
+		Reflect.deleteProperty(globalThis, "window");
 	}
 });
 
