@@ -124,3 +124,13 @@ First review an exported passage with a search, a menu transition and a visible 
 By default, Splice inspects recording frames locally. The editing agent can receive timestamps, target rectangles and short observations, including relevant visible UI text. A hosted model can therefore receive these observations even when screenshots stay on the laptop.
 
 The creator can enable access to selected frames for an individual project. With this enabled, the editing agent can request a screenshot to resolve an uncertain observation. Choose the local vision model after comparing candidates on real laptop footage.
+
+### Local vision evaluation and creator review
+
+Compare Qwen and Moondream on the same recorded passages. Include a clearly labeled control, adjacent similar controls, and a take that ends before the click. Evaluate correct target selection, recognition of the resulting state, and whether the model recognizes insufficient evidence. Measure response time and playback smoothness on the laptop.
+
+Enabling screenshot access for a project covers individual frame and crop requests during the editing session. Let the creator inspect which frames were shared and disable future requests.
+
+Ground explanatory cards in the recording or creator-supplied notes. When evidence supports only a label, use the label or let the demonstration play.
+
+Support manual picture-only repair during the first horizontal milestone. The creator can keep narration from one take, overlay screen footage from another, and preview their timing together. The agent may flag the missing action and suggest a replacement take. The creator decides whether to use it.
