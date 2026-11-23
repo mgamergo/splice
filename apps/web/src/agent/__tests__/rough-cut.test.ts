@@ -792,6 +792,7 @@ test("rejects a take duplicated across tracks quickly instead of listing every p
 		}),
 	).toThrow("multiple places");
 	expect(performance.now() - started).toBeLessThan(1_000);
+});
 
 test("burns in captions for the kept words inside the same undo step", () => {
 	raw();
