@@ -55,6 +55,18 @@ export const removalMarkerDataSchema = z.strictObject({
 		.optional(),
 });
 
+/** Clip volume bounds in dB, matching the editor's volume control. */
+export const CLIP_GAIN_DB = { min: -60, max: 20 } as const;
+export const DEFAULT_TARGET_LUFS = -14;
+/** Normalization never pushes the measured true peak above this. */
+export const MAX_TRUE_PEAK_DBTP = -1;
+
+const gainDbSchema = z
+	.number()
+	.min(CLIP_GAIN_DB.min)
+	.max(CLIP_GAIN_DB.max)
+	.describe("Clip volume in dB; 0 plays the source at its own level");
+
 export const editOpSchema = z.discriminatedUnion("op", [
 	z.strictObject({
 		op: z.literal("ripple_delete"),
@@ -92,6 +104,11 @@ export const editOpSchema = z.discriminatedUnion("op", [
 		markerId: z.string().min(1),
 		takeIndex: z.number().int().nonnegative(),
 	}),
+	z.strictObject({
+		op: z.literal("set_gain"),
+		clipIds: z.array(z.string().min(1)).min(1),
+		gainDb: gainDbSchema,
+	}),
 ]);
 
 export const applyRequestSchema = z.strictObject({
@@ -125,6 +142,13 @@ export const rawSequenceRequestSchema = z.strictObject({
 		.describe("Project item IDs in recording order, earliest first"),
 });
 
+const targetLufs = z
+	.number()
+	.min(-40)
+	.max(-5)
+	.optional()
+	.describe(`Integrated loudness target in LUFS. Defaults to ${DEFAULT_TARGET_LUFS}.`);
+
 export const roughCutRequestSchema = z.strictObject({
 	sequenceId: z
 		.string()
@@ -146,7 +170,54 @@ export const roughCutRequestSchema = z.strictObject({
 			}),
 		)
 		.min(1),
+	loudness: z
+		.strictObject({ targetLufs })
+		.optional()
+		.describe(
+			"Normalize each recording's kept audio to the target loudness in the same undo step",
+		),
 });
+
+const sourceGainSchema = z.strictObject({
+	projectItemId: z.string().min(1),
+	gainDb: gainDbSchema,
+});
+
+/**
+ * What `splice` sends the tab for `rough_cut`. With `plan`, the tab builds the
+ * cut without applying it and returns its audio sources, so `splice` can
+ * measure them and send `sourceGains` with the same request.
+ */
+export const roughCutTabRequestSchema = roughCutRequestSchema
+	.omit({ loudness: true })
+	.extend({
+		plan: z.boolean().optional(),
+		sourceGains: z.array(sourceGainSchema).optional(),
+	});
+
+export const audioSourcesRequestSchema = z.strictObject({
+	sequenceId: z
+		.string()
+		.min(1)
+		.optional()
+		.describe("Sequence to inspect. Defaults to the active sequence."),
+});
+
+export const normalizeLoudnessRequestSchema = z.strictObject({
+	expectedRevision,
+	targetLufs,
+	label: applyRequestSchema.shape.label.optional(),
+});
+
+/** The audible audio of one project item in a sequence, in source seconds. */
+export interface AudioSource {
+	projectItemId: string;
+	/** The Footage path, or null for items stored in the browser. */
+	path: string | null;
+	clipIds: string[];
+	/** Sorted, merged source ranges. */
+	ranges: Array<{ start: number; end: number }>;
+}
 
 export const takesListRequestSchema = z.strictObject({
 	sequenceId: z
@@ -159,6 +230,7 @@ export const takesListRequestSchema = z.strictObject({
 export type TakePlacement = z.infer<typeof takePlacementSchema>;
 export type Take = z.infer<typeof takeSchema>;
 export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
+export type SourceGain = z.infer<typeof sourceGainSchema>;
 
 export type TakeSourceRange = z.infer<typeof takeSourceRangeSchema>;
 export type RemovalMarkerData = z.infer<typeof removalMarkerDataSchema>;
