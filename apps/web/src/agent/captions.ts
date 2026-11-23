@@ -28,8 +28,6 @@ const DEFAULT_WORDS_PER_CAPTION = 3;
 const DEFAULT_FONT_SIZE = 8;
 /** A caption stays up this long after its last word unless the next one starts. */
 const CAPTION_HOLD_SECONDS = 0.3;
-/** How long a caption stays up when the next one starts at the same time. */
-const STACKED_CAPTION_SECONDS = 0.2;
 /** A silence this long between words starts a new caption. */
 const CAPTION_BREAK_GAP_SECONDS = 0.5;
 /** whisper.cpp sometimes gives a word no duration; it still gets shown. */
@@ -55,6 +53,8 @@ type SourceClip = VideoClip | AudioClip;
 function sourceClips({ tracks }: { tracks: SequenceTracks }) {
 	const byItem = new Map<string, SourceClip[]>();
 	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
+		// Words nobody hears aren't captioned.
+		if ("muted" in track && track.muted) continue;
 		for (const clip of track.clips) {
 			if (
 				(clip.type !== "video" && clip.type !== "audio") ||
@@ -114,7 +114,8 @@ export function mapWordsToTimeline({
 				});
 			for (const [index, word] of sourceWords.entries()) {
 				const text = word.text.trim();
-				const wordEnd = Math.max(word.end, word.start + MIN_WORD_SECONDS);
+				const wordEnd =
+					word.end > word.start ? word.end : word.start + MIN_WORD_SECONDS;
 				const middle = (word.start + wordEnd) / 2;
 				if (!text || middle < trimStart || middle >= sourceOut) continue;
 				const start = Math.max(
@@ -161,26 +162,30 @@ export function buildCaptionCues({
 
 	const overrides = styleOverrides({ style });
 	const cues: SubtitleCue[] = [];
-	let previousEnd = 0;
-	for (const [index, group] of groups.entries()) {
-		// Words whisper.cpp stacks on one time still get a readable moment each.
-		const startTime = Math.max(group[0].start, previousEnd);
-		const nextStart = groups[index + 1]?.[0].start ?? Number.POSITIVE_INFINITY;
-		const natural = Math.min(
+	let index = 0;
+	while (index < groups.length) {
+		// whisper.cpp can stack several words on one time. Captions starting
+		// together share the time until the next caption, so nothing drifts.
+		const start = groups[index][0].start;
+		let runEnd = index + 1;
+		while (runEnd < groups.length && groups[runEnd][0].start <= start) runEnd++;
+		const run = groups.slice(index, runEnd);
+		const nextStart = groups[runEnd]?.[0].start ?? Number.POSITIVE_INFINITY;
+		const end = Math.min(
 			nextStart,
-			group.at(-1)!.end + CAPTION_HOLD_SECONDS,
+			Math.max(...run.map((group) => group.at(-1)!.end)) + CAPTION_HOLD_SECONDS,
 		);
-		// Only stacked captions are pushed back, so normal speech never drifts.
-		const end =
-			natural > startTime ? natural : startTime + STACKED_CAPTION_SECONDS;
-		const text = group.map(({ text }) => text).join(" ");
-		cues.push({
-			text: style.uppercase ? text.toUpperCase() : text,
-			startTime,
-			duration: end - startTime,
-			style: overrides,
-		});
-		previousEnd = end;
+		const share = (end - start) / run.length;
+		for (const [offset, group] of run.entries()) {
+			const text = group.map(({ text }) => text).join(" ");
+			cues.push({
+				text: style.uppercase ? text.toUpperCase() : text,
+				startTime: start + offset * share,
+				duration: share,
+				style: overrides,
+			});
+		}
+		index = runEnd;
 	}
 	return cues;
 }
@@ -274,24 +279,79 @@ export function withCaptionTrack({
 }
 
 /**
- * Captions are derived from the sequence's stored transcript words, so edits
- * that move takes rebuild them instead of rippling stale words around.
+ * Captions are derived from the sequence's stored transcript words. An edit
+ * that moves takes rebuilds just the captions in the window it changed and
+ * shifts the rest, so hand corrections elsewhere survive.
  */
 export function rebuildCaptions({
 	sequence,
 	tracks,
 	canvasSize,
+	window,
 }: {
 	sequence: TSequence;
 	tracks: SequenceTracks;
 	canvasSize: { width: number; height: number };
+	/** The edited range in the old timeline, and how much later content moved. */
+	window: { start: number; end: number; delta: number };
 }): SequenceTracks {
 	if (!sequence.captions) return tracks;
+	let fresh: TextTrack | undefined;
 	try {
-		return withCaptionTrack({ tracks, captions: sequence.captions, canvasSize })
-			.tracks;
+		fresh = withCaptionTrack({
+			tracks,
+			captions: sequence.captions,
+			canvasSize,
+		}).tracks.overlay[0] as TextTrack;
 	} catch (error) {
 		if (!(error instanceof CaptionError)) throw error;
-		return withoutCaptionTrack({ tracks });
 	}
+	const content = withoutCaptionTrack({ tracks });
+	const previous = sequence.tracks.overlay.find(
+		(track): track is TextTrack =>
+			track.type === "text" && track.name === CAPTION_TRACK_NAME,
+	);
+	if (!previous)
+		return fresh
+			? { ...content, overlay: [fresh, ...content.overlay] }
+			: content;
+
+	const before = previous.clips.filter(
+		(clip) => clip.startTime + clip.duration <= window.start,
+	);
+	const after = previous.clips
+		.filter((clip) => clip.startTime >= window.end)
+		.map((clip) => ({
+			...clip,
+			startTime: roundMediaTime({ time: clip.startTime + window.delta }),
+		}));
+	// Fresh captions fill the gap between the kept ones, including any that
+	// straddled the window's edges.
+	const from = Math.max(
+		0,
+		...before.map((clip) => clip.startTime + clip.duration),
+	);
+	const until = Math.min(
+		Number.POSITIVE_INFINITY,
+		...after.map((clip) => clip.startTime),
+	);
+	const between = (fresh?.clips ?? []).flatMap((clip) =>
+		clip.startTime >= from && clip.startTime < until
+			? [
+					{
+						...clip,
+						duration: roundMediaTime({
+							time: Math.min(clip.duration, until - clip.startTime),
+						}),
+					},
+				]
+			: [],
+	);
+	return {
+		...content,
+		overlay: [
+			{ ...previous, clips: [...before, ...between, ...after] },
+			...content.overlay,
+		],
+	};
 }

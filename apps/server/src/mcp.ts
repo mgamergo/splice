@@ -85,11 +85,11 @@ const stateSchema = z.object({
 });
 
 /** Word timings for every project item whose recording has a cached transcript. */
-async function captionSources({
-	rpc,
-}: {
-	rpc: RpcCall;
-}): Promise<CaptionsRequest["sources"]> {
+async function captionSources({ rpc }: { rpc: RpcCall }): Promise<{
+	sources: CaptionsRequest["sources"];
+	/** Recordings with no cached transcript, so no captions. */
+	uncaptioned: string[];
+}> {
 	const items = itemsSchema
 		.parse(await rpc({ method: "editor.listItems" }))
 		.flatMap(({ id, type, path, missing }) =>
@@ -124,7 +124,33 @@ async function captionSources({
 		throw new Error(
 			"No recording in this project has a transcript. Run transcribe on them first.",
 		);
-	return sources;
+	return {
+		sources,
+		uncaptioned: [
+			...new Set(
+				items.flatMap(({ path }) =>
+					wordsByPath.get(path)?.length ? [] : [path],
+				),
+			),
+		],
+	};
+}
+
+/** Tells the agent which recordings got no captions, so it can transcribe them and run captions_add. */
+function withCaptionWarning({
+	result,
+	uncaptioned,
+}: {
+	result: unknown;
+	uncaptioned: string[];
+}): unknown {
+	if (!uncaptioned.length || typeof result !== "object" || result === null)
+		return result;
+	return {
+		...result,
+		uncaptionedRecordings: uncaptioned,
+		warning: `No captions for ${uncaptioned.length} recording(s) without a transcript. Transcribe them, then run captions_add.`,
+	};
 }
 
 /** The MCP tools, over any way of reaching `splice`. Kept separate from stdio for tests. */
@@ -284,14 +310,21 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 				const { project } = stateSchema.parse(
 					await rpc({ method: "editor.getState" }),
 				);
-				const captions =
+				const found =
 					project?.format === "short"
-						? { sources: await captionSources({ rpc }), style: captionStyle }
+						? await captionSources({ rpc })
 						: undefined;
+				const captions = found && {
+					sources: found.sources,
+					style: captionStyle,
+				};
 				return editorResult(
-					await rpc({
-						method: "editor.roughCut",
-						params: { ...args, captions },
+					withCaptionWarning({
+						result: await rpc({
+							method: "editor.roughCut",
+							params: { ...args, captions },
+						}),
+						uncaptioned: found?.uncaptioned ?? [],
 					}),
 				);
 			}),
@@ -306,14 +339,18 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 			inputSchema: addCaptionsRequestSchema.omit({ sources: true }).shape,
 		},
 		(args) =>
-			guard(async () =>
-				editorResult(
-					await rpc({
-						method: "editor.addCaptions",
-						params: { ...args, sources: await captionSources({ rpc }) },
+			guard(async () => {
+				const { sources, uncaptioned } = await captionSources({ rpc });
+				return editorResult(
+					withCaptionWarning({
+						result: await rpc({
+							method: "editor.addCaptions",
+							params: { ...args, sources },
+						}),
+						uncaptioned,
 					}),
-				),
-			),
+				);
+			}),
 	);
 
 	server.registerTool(

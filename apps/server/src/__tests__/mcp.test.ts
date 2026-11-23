@@ -99,6 +99,10 @@ describe("splice mcp tools", () => {
 			arguments: { ...roughCutArgs, captionStyle: { uppercase: true } },
 		});
 		expect(result.isError).toBeFalsy();
+		expect(JSON.parse(textOf(result))).toMatchObject({
+			uncaptionedRecordings: ["other.mp4"],
+			warning: expect.stringContaining("captions_add"),
+		});
 		expect(
 			calls.find(([method]) => method === "transcript.words")?.[1],
 		).toEqual({ paths: ["rec.mp4", "other.mp4"] });

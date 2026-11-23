@@ -197,6 +197,33 @@ describe("mapWordsToTimeline follows the audio", () => {
 	});
 });
 
+describe("mapWordsToTimeline edge cases", () => {
+	test("skips muted tracks and keeps a short word at a clip's end", () => {
+		const tracks = tracksWith({});
+		tracks.main = {
+			...tracks.main,
+			clips: [videoClip({ id: "v", start: 0, duration: 5 })],
+		};
+		tracks.audio = [
+			{
+				id: "a1",
+				name: "A1",
+				type: "audio",
+				muted: true,
+				clips: [audioClip({ id: "silent", start: 0, duration: 5 })],
+			} as SequenceTracks["audio"][number],
+		];
+		const words = mapWordsToTimeline({
+			tracks,
+			sources: [
+				{ projectItemId: "rec", words: [word(4.97, 4.989, "ok")] },
+				{ projectItemId: "music", words: [word(1, 1.5, "muted")] },
+			],
+		});
+		expect(rounded(words)).toEqual([[4.97, 4.989, "ok"]]);
+	});
+});
+
 describe("buildCaptionCues", () => {
 	test("groups up to three words, breaks at punctuation and pauses, and holds until the next caption", () => {
 		const cues = buildCaptionCues({
@@ -223,6 +250,19 @@ describe("buildCaptionCues", () => {
 		]);
 	});
 
+	test("many words on one time share their gap without delaying the next caption", () => {
+		const stacked = Array.from({ length: 8 }, (_, index) =>
+			word(1, 1, `w${index}`),
+		);
+		const cues = buildCaptionCues({
+			words: [...stacked, word(1.3, 1.6, "next")],
+			style: { wordsPerCaption: 1 },
+		});
+		expect(cues).toHaveLength(9);
+		expect(cues.at(-1)).toMatchObject({ text: "next", startTime: 1.3 });
+		expect(cues[7].startTime + cues[7].duration).toBeCloseTo(1.3);
+	});
+
 	test("staggers captions whose words share one time instead of dropping them", () => {
 		const cues = buildCaptionCues({
 			words: [
@@ -240,8 +280,8 @@ describe("buildCaptionCues", () => {
 				Math.round(duration * 1000) / 1000,
 			]),
 		).toEqual([
-			["Welcome to the", 2, 0.2],
-			["Editing", 2.2, 0.25],
+			["Welcome to the", 2, 0.225],
+			["Editing", 2.225, 0.225],
 			["Workshop.", 3.5, 0.8],
 		]);
 	});

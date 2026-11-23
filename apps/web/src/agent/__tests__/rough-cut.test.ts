@@ -834,7 +834,10 @@ test("captions follow a Swap and back instead of blocking it", () => {
 			},
 			{
 				projectItemId: second,
-				words: [{ start: 4.5, end: 5, text: "keeper" }],
+				words: [
+					{ start: 4.5, end: 5, text: "keeper" },
+					{ start: 10, end: 10.5, text: "later" },
+				],
 			},
 		],
 	};
@@ -844,12 +847,42 @@ test("captions follow a Swap and back instead of blocking it", () => {
 			expectedRevision: api.getRevision(),
 			captions,
 		}),
-	).toMatchObject({ ok: true, captionCount: 1 });
+	).toMatchObject({ ok: true, captionCount: 2 });
+	// The creator corrects a caption after the marker by hand.
+	const fixed = active();
+	editor.sequences.setSequences({
+		sequences: editor.sequences.getSequences().map((sequence) =>
+			sequence.id !== fixed.id
+				? sequence
+				: {
+						...sequence,
+						tracks: {
+							...sequence.tracks,
+							overlay: sequence.tracks.overlay.map((track) =>
+								track.name !== "Captions"
+									? track
+									: {
+											...track,
+											clips: track.clips.map((clip) =>
+												clip.type === "text" && clip.params.content === "later"
+													? {
+															...clip,
+															params: { ...clip.params, content: "Later!" },
+														}
+													: clip,
+											),
+										},
+							),
+						},
+					},
+		),
+	});
 	const words = () =>
 		active()
 			.tracks.overlay.filter(({ name }) => name === "Captions")
 			.flatMap(({ clips }) => clips.map((clip) => clip.name));
 	const contents = () => api.getDigest().match(/"(retake|keeper)"\]/g);
+	const corrected = () => api.getDigest().includes('"Later!"]');
 	expect(contents()).toEqual(['"keeper"]']);
 	const markerId = active().markers[0]?.id;
 	if (!markerId) throw new Error("No removal marker");
@@ -857,12 +890,15 @@ test("captions follow a Swap and back instead of blocking it", () => {
 		ok: true,
 	});
 	expect(contents()).toEqual(['"retake"]']);
+	expect(corrected()).toBe(true);
 	// Swapping back is the shorter take, with captions rippled out of its way.
 	expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
 		ok: true,
 	});
 	expect(contents()).toEqual(['"keeper"]']);
-	expect(words()).toHaveLength(1);
+	expect(words()).toHaveLength(2);
+	expect(corrected()).toBe(true);
 	expect(apply({ op: "restore_takes", markerId })).toMatchObject({ ok: true });
+	expect(corrected()).toBe(true);
 	expect(contents()?.sort()).toEqual(['"keeper"]', '"retake"]']);
 });

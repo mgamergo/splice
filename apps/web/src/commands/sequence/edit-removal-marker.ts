@@ -151,6 +151,7 @@ export class EditRemovalMarkerCommand extends Command {
 					? clearBestTake({ tracks: update.tracks, markerId: marker.id })
 					: update.tracks,
 			canvasSize: editor.project.getActive().settings.canvasSize,
+			window: update,
 		});
 		this.before = editor.sequences.getSequences();
 		this.after = updateSequenceInArray({
