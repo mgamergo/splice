@@ -83,6 +83,9 @@ export function TimelineMarkersRow({
 	handleRulerMouseDown,
 }: TimelineMarkersRowProps) {
 	const markers = useEditor((e) => e.sequences.getActiveSequence().markers);
+	const ordinaryTimes = new Set(
+		markers.filter((marker) => !marker.data).map(({ time }) => time),
+	);
 
 	return (
 		<div
@@ -108,6 +111,7 @@ export function TimelineMarkersRow({
 				<TimelineMarker
 					key={marker.id ?? `marker-${marker.time}`}
 					marker={marker}
+					overlapsOrdinaryMarker={ordinaryTimes.has(marker.time)}
 					zoomLevel={zoomLevel}
 					dragState={dragState}
 					onMarkerMouseDown={onMarkerMouseDown}
@@ -119,11 +123,13 @@ export function TimelineMarkersRow({
 
 function TimelineMarker({
 	marker,
+	overlapsOrdinaryMarker,
 	zoomLevel,
 	dragState,
 	onMarkerMouseDown,
 }: {
 	marker: Marker;
+	overlapsOrdinaryMarker: boolean;
 	zoomLevel: number;
 	dragState: MarkerDragState;
 	onMarkerMouseDown: (params: {
@@ -149,7 +155,8 @@ function TimelineMarker({
 			? timelineTimeToPixels({ time: markerDuration, zoomLevel })
 			: 0;
 	const hasDurationRange = durationWidth > MIN_MARKER_WIDTH_PX;
-	const markerWidth = MARKER_WIDTH_PX + Math.max(durationWidth, 0);
+	const markerWidth =
+		MARKER_WIDTH_PX + (marker.data ? 0 : Math.max(durationWidth, 0));
 	const left = timelineTimeToSnappedPixels({ time: displayTime, zoomLevel });
 	const markerLeft = left - MARKER_HALF_WIDTH_PX;
 	const rightHalfLeft = MARKER_HALF_WIDTH_PX + Math.max(durationWidth, 0);
@@ -187,7 +194,7 @@ function TimelineMarker({
 		<Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
 			<PopoverAnchor asChild>
 				<button
-					className={`absolute top-0 h-full min-w-0.5 border-0 bg-transparent p-0 ${marker.data ? "z-10" : ""}`}
+					className={`absolute top-0 h-full min-w-0.5 border-0 bg-transparent p-0 ${marker.data && overlapsOrdinaryMarker ? "z-10" : ""}`}
 					style={{
 						left: `${markerLeft}px`,
 						width: `${markerWidth}px`,
@@ -208,7 +215,7 @@ function TimelineMarker({
 				>
 					{hasDurationRange ? (
 						<div
-							className="absolute opacity-30"
+							className="pointer-events-none absolute opacity-30"
 							style={{
 								top: 1.5,
 								height: MARKER_HEIGHT_PX - 2.5,
@@ -219,7 +226,7 @@ function TimelineMarker({
 						/>
 					) : null}
 					<div
-						className="absolute top-0 overflow-hidden"
+						className="pointer-events-none absolute top-0 overflow-hidden"
 						style={{
 							left: 0,
 							width: MARKER_HALF_WIDTH_PX,
@@ -248,7 +255,7 @@ function TimelineMarker({
 						/>
 					</div>
 					<div
-						className="absolute top-0 overflow-hidden"
+						className="pointer-events-none absolute top-0 overflow-hidden"
 						style={{
 							left: rightHalfLeft,
 							width: MARKER_HALF_WIDTH_PX,

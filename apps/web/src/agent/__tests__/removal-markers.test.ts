@@ -306,6 +306,84 @@ describe("removal markers", () => {
 		).toMatchObject({ ok: true });
 	});
 
+	test("leaves competing nearby source matches unbound at marker creation", () => {
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [videoClip({ id: "near", start: 1, duration: 2, trimStart: 4 })],
+			},
+			overlay: [
+				{
+					id: "b-roll",
+					type: "video",
+					name: "B-roll",
+					hidden: false,
+					muted: false,
+					clips: [
+						videoClip({
+							id: "also-near",
+							start: 1 + 1 / 60,
+							duration: 2,
+							trimStart: 4,
+						}),
+					],
+				},
+			],
+		});
+		expect(
+			apply({ ops: [{ op: "add_marker", at: { seconds: 1 }, data }] }),
+		).toMatchObject({ ok: true });
+		const id = markers()[0]?.id;
+		if (!id) throw new Error("Missing removal marker");
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: false, code: "INVALID_OP" });
+	});
+
+	test("requires each extracted audio group to cover its own best-take segment", () => {
+		expect(apply({ ops: [{ op: "razor", at: { seconds: 5 } }] })).toMatchObject(
+			{ ok: true },
+		);
+		const { main } = editor.sequences.getActiveSequence().tracks;
+		for (const clip of main.clips) {
+			editor.command.execute({
+				command: new ToggleSourceAudioSeparationCommand({
+					trackId: main.id,
+					clipId: clip.id,
+				}),
+			});
+		}
+		const id = cutWithMarker();
+		const { tracks } = editor.sequences.getActiveSequence();
+		const [track] = tracks.audio;
+		editor.timeline.updateTracks({
+			...tracks,
+			audio: [
+				{
+					...track,
+					clips: track.clips.map((clip) => {
+						if (clip.startTime === s(0)) return { ...clip, startTime: s(20) };
+						if (clip.startTime === s(2))
+							return {
+								...clip,
+								startTime: s(1),
+								trimStart: s(4),
+								duration: s(3),
+							};
+						return clip;
+					}),
+				},
+			],
+		});
+		const before = editor.sequences.getActiveSequence();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: false, code: "INVALID_OP" });
+		expect(editor.sequences.getActiveSequence()).toBe(before);
+	});
+
 	test("rejects an unrelated aligned audio clip when extracted audio is elsewhere", () => {
 		const initial = editor.sequences.getActiveSequence().tracks;
 		editor.command.execute({

@@ -80,13 +80,19 @@ function createTakeClip({
 	};
 }
 
+type AudioSegment = {
+	groupId: string | undefined;
+	start: MediaTime;
+	end: MediaTime;
+};
+
 type TakeWindow = {
 	start: MediaTime;
 	end: MediaTime;
 	sourceOut: number;
 	trackId: string;
 	clipIds: string[];
-	audioGroupIds: Set<string>;
+	audioSegments: AudioSegment[];
 	separated: boolean;
 };
 
@@ -154,8 +160,16 @@ function findTakeWindows({
 			previous.end = end;
 			previous.sourceOut = sourceOut;
 			previous.clipIds.push(clip.id);
-			if (clip.sourceAudioGroupId)
-				previous.audioGroupIds.add(clip.sourceAudioGroupId);
+			const lastAudio = previous.audioSegments.at(-1);
+			if (lastAudio && lastAudio.groupId === clip.sourceAudioGroupId) {
+				lastAudio.end = end;
+			} else {
+				previous.audioSegments.push({
+					groupId: clip.sourceAudioGroupId,
+					start,
+					end,
+				});
+			}
 		} else {
 			windows.push({
 				start,
@@ -163,9 +177,7 @@ function findTakeWindows({
 				sourceOut,
 				trackId: track.id,
 				clipIds: [clip.id],
-				audioGroupIds: new Set(
-					clip.sourceAudioGroupId ? [clip.sourceAudioGroupId] : [],
-				),
+				audioSegments: [{ groupId: clip.sourceAudioGroupId, start, end }],
 				separated,
 			});
 		}
@@ -354,20 +366,22 @@ function nearestBestWindow({
 	const takeTracks = best.item.type === "video" ? videoTracks : tracks.audio;
 	const distance = ({ start, end }: TakeWindow) =>
 		Math.max(start - marker.time, marker.time - end, 0);
-	const [nearest, alternative] = takeTracks
-		.flatMap((track) =>
-			findTakeWindows({
-				track,
-				take: best,
-				markerId: initialTolerance === undefined ? marker.id : undefined,
-			}),
-		)
-		.sort((a, b) => distance(a) - distance(b));
-	if (
-		!nearest ||
-		(initialTolerance !== undefined && distance(nearest) > initialTolerance)
-	)
-		return undefined;
+	const windows = takeTracks.flatMap((track) =>
+		findTakeWindows({
+			track,
+			take: best,
+			markerId: initialTolerance === undefined ? marker.id : undefined,
+		}),
+	);
+	if (initialTolerance !== undefined) {
+		const nearby = windows.filter(
+			(window) => distance(window) <= initialTolerance,
+		);
+		return nearby.length === 1 ? nearby[0] : undefined;
+	}
+	const [nearest, alternative] = windows.sort(
+		(a, b) => distance(a) - distance(b),
+	);
 	return alternative && distance(nearest) === distance(alternative)
 		? undefined
 		: nearest;
@@ -382,11 +396,25 @@ function alignedAudioWindow({
 	take: ResolvedTake;
 	window: TakeWindow;
 }): TakeWindow | undefined {
+	const audioGroupIds = new Set<string>();
+	for (const { groupId } of window.audioSegments) {
+		if (!groupId) return undefined;
+		audioGroupIds.add(groupId);
+	}
 	const matches = tracks.audio
-		.flatMap((track) =>
-			findTakeWindows({ track, take, audioGroupIds: window.audioGroupIds }),
-		)
-		.filter(({ start, end }) => start === window.start && end === window.end);
+		.flatMap((track) => findTakeWindows({ track, take, audioGroupIds }))
+		.filter(
+			({ audioSegments }) =>
+				audioSegments.length === window.audioSegments.length &&
+				audioSegments.every(({ groupId, start, end }, index) => {
+					const expected = window.audioSegments[index];
+					return (
+						groupId === expected.groupId &&
+						start === expected.start &&
+						end === expected.end
+					);
+				}),
+		);
 	return matches.length === 1 ? matches[0] : undefined;
 }
 
