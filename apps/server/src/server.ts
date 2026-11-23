@@ -287,6 +287,7 @@ export function startServer({
 			}
 			data.queue = [];
 		});
+		upstreamSocket.binaryType = "arraybuffer";
 		upstreamSocket.addEventListener("message", (event) => {
 			const payload: unknown = event.data;
 			if (typeof payload === "string" || payload instanceof ArrayBuffer) {

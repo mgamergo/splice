@@ -38,9 +38,9 @@ function parsePort(value: string | undefined): number {
 		return DEFAULT_PORT;
 	}
 	const port = Number(value);
-	if (!Number.isInteger(port) || port < 1 || port > 65534) {
+	if (!Number.isInteger(port) || port < 1024 || port > 65534) {
 		throw new Error(
-			`SPLICE_PORT must be an integer between 1 and 65534, got "${value}"`,
+			`SPLICE_PORT must be an integer between 1024 and 65534, got "${value}"`,
 		);
 	}
 	return port;

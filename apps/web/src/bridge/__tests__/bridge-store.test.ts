@@ -47,6 +47,13 @@ describe("agent Stop", () => {
 		expect(isAgentBlocked()).toBe(true);
 	});
 
+	test("an unsaved Stop survives syncing with storage", () => {
+		installStorage(fakeStorage({ writable: false }));
+		useAgentBridgeStore.getState().setBlocked(true);
+		useAgentBridgeStore.getState().syncBlocked();
+		expect(useAgentBridgeStore.getState().blocked).toBe(true);
+	});
+
 	test("Stop pressed in another tab blocks this one before it syncs", () => {
 		const storage = fakeStorage({ writable: true });
 		installStorage(storage);

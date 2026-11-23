@@ -71,6 +71,15 @@ export class EditorApi {
 		if (!this.editor.project.getActive() || !this.editor.sequences.getActiveSequenceOrNull()) {
 			return { ok: false, code: "NO_PROJECT", message: "No project is open", revision };
 		}
+		if (this.editor.timeline.isPreviewActive()) {
+			// Applying now would wipe the creator's uncommitted drag.
+			return {
+				ok: false,
+				code: "REVISION_CONFLICT",
+				message: "The creator is in the middle of an edit. Wait a moment, re-read the sequence and plan again.",
+				revision,
+			};
+		}
 		const activeSequenceId = this.editor.sequences.getActiveSequence().id;
 		if (parsed.data.sequenceId !== activeSequenceId) {
 			return {

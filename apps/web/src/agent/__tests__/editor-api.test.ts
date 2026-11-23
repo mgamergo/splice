@@ -223,6 +223,18 @@ describe("EditorApi preconditions", () => {
 		expect(heard).toEqual([s(4)]);
 	});
 
+	test("refuses to apply during the creator's drag, and the drag still commits", () => {
+		const trackId = editor.sequences.getActiveSequence().tracks.main.id;
+		editor.timeline.previewClips({ updates: [{ trackId, clipId: "rec", updates: { startTime: s(4) } }] });
+
+		const result = api.apply({ sequenceId: sequenceId(), expectedRevision: 0, label: "Mark", ops: [markerOp] });
+		expect(result).toMatchObject({ ok: false, code: "REVISION_CONFLICT" });
+
+		editor.timeline.commitPreview();
+		expect(mainClips()[0].startTime).toBe(s(4));
+		expect(api.getRevision()).toBe(1);
+	});
+
 	test("revision listeners hear the new revision once the change is complete", () => {
 		const heard: Array<[number, number]> = [];
 		editor.command.subscribeRevision((revision) =>

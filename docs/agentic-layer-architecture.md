@@ -141,7 +141,7 @@ A **removal marker** stores the bad takes it replaced, as source ranges. **Resto
 - **Auth:** `splice` mints a token and keeps it in `Cache/session.json`, so it survives restarts. The tab receives it in the URL fragment, which never reaches server logs, and sends it in its first message. Connections from any other `Origin`, and requests with a `Host` other than `127.0.0.1` or `localhost` on its port, are rejected. One tab holds the connection at a time; a newer tab takes over.
 - **`splice mcp` → `splice`:** JSON-RPC over HTTP POST at `/splice/rpc`, with the token as a bearer token read from `Cache/session.json`. Requests that carry an `Origin` header (that is, from a browser) are refused.
 - **Protocol:** JSON-RPC 2.0, mirroring `EditorApi` (`editor.apply`, `editor.getState`, …). Notifications cover `state.changed {revision}`, `export.progress` and `correction.recorded`.
-- **Media:** the tab plays project items over loopback HTTP served by `splice`, with range requests. The tab never copies footage.
+- **Media (planned, next Phase 2 PR):** the tab will play project items over loopback HTTP served by `splice`, with range requests, and never copy footage.
 - **In the editor:**
   - an "Agent connected / editing…" indicator,
   - a Stop button that blocks agent writes,

@@ -25,17 +25,22 @@ export function isAgentBlocked(): boolean {
 	return readStoredBlocked() === true || useAgentBridgeStore.getState().blocked;
 }
 
-function writeBlocked(blocked: boolean): void {
+/** Whether the write succeeded. */
+function writeBlocked(blocked: boolean): boolean {
 	try {
 		if (blocked) {
 			globalThis.localStorage?.setItem(BLOCKED_STORAGE_KEY, "true");
 		} else {
 			globalThis.localStorage?.removeItem(BLOCKED_STORAGE_KEY);
 		}
+		return true;
 	} catch {
-		// Without storage, Stop lasts for this page only.
+		return false;
 	}
 }
+
+/** A Stop pressed in this page that storage refused to keep; it holds until Allow or reload. */
+let unsavedStop = false;
 
 interface AgentBridgeState {
 	/** "unavailable" when the tab wasn't opened from a `splice` link. */
@@ -59,12 +64,12 @@ export const useAgentBridgeStore = create<AgentBridgeState>()((set) => ({
 	agentEditing: false,
 	setStatus: (status) => set({ status }),
 	setBlocked: (blocked) => {
-		writeBlocked(blocked);
+		unsavedStop = !writeBlocked(blocked) && blocked;
 		set({ blocked });
 	},
 	syncBlocked: () => {
 		const stored = readStoredBlocked();
-		if (stored !== null) set({ blocked: stored });
+		if (stored !== null) set({ blocked: stored || unsavedStop });
 	},
 	markEdit: () => {
 		if (editingTimer) clearTimeout(editingTimer);

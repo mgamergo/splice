@@ -100,7 +100,9 @@ export async function isSpliceRunning({
 	origin: string;
 }): Promise<boolean> {
 	try {
-		const response = await fetch(`${origin}${BRIDGE_PATHS.health}`);
+		const response = await fetch(`${origin}${BRIDGE_PATHS.health}`, {
+			signal: AbortSignal.timeout(2_000),
+		});
 		if (!response.ok) {
 			return false;
 		}

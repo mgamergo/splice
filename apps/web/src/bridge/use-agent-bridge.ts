@@ -13,6 +13,27 @@ import {
 import { createTabHandlers } from "./handlers";
 import { captureBridgeToken, readBridgeToken } from "./token";
 
+/** The highest revision any tab of this editor has used, so revisions only grow across reloads. */
+const REVISION_FLOOR_KEY = "splice-revision-floor";
+
+function readRevisionFloor(): number {
+	try {
+		return Number(window.localStorage.getItem(REVISION_FLOOR_KEY)) || 0;
+	} catch {
+		return 0;
+	}
+}
+
+function recordRevisionFloor(revision: number): void {
+	try {
+		if (revision > readRevisionFloor()) {
+			window.localStorage.setItem(REVISION_FLOOR_KEY, String(revision));
+		}
+	} catch {
+		// Without storage, the clock seed alone separates page loads.
+	}
+}
+
 /** Connects this editor tab to `splice` for as long as the editor is mounted. */
 export function useAgentBridge(): void {
 	useEffect(() => {
@@ -48,10 +69,16 @@ export function useAgentBridge(): void {
 				store.syncBlocked();
 		};
 		window.addEventListener("storage", onStorage);
-		editor.command.advanceRevisionTo({ revision: Date.now() });
-		const unsubscribe = editor.command.subscribeRevision((revision) =>
-			client.notifyRevision(revision),
-		);
+		// A revision the agent read before a reload must never match one after it,
+		// even if the clock stepped back in between.
+		editor.command.advanceRevisionTo({
+			revision: Math.max(Date.now(), readRevisionFloor() + 1),
+		});
+		recordRevisionFloor(api.getRevision());
+		const unsubscribe = editor.command.subscribeRevision((revision) => {
+			recordRevisionFloor(revision);
+			client.notifyRevision(revision);
+		});
 		client.start();
 		client.notifyRevision(api.getRevision());
 
