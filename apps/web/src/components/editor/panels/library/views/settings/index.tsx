@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
+import { PanelView } from "@/components/editor/panels/library/views/base-panel";
 import {
 	Select,
 	SelectContent,

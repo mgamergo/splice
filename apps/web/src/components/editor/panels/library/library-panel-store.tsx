@@ -82,7 +82,7 @@ export type MediaViewMode = "grid" | "list";
 export type MediaSortKey = "name" | "type" | "duration" | "size";
 export type MediaSortOrder = "asc" | "desc";
 
-interface AssetsPanelStore {
+interface LibraryPanelStore {
 	activeTab: Tab;
 	setActiveTab: (tab: Tab) => void;
 	highlightMediaId: string | null;
@@ -97,7 +97,7 @@ interface AssetsPanelStore {
 	setMediaSort: (args: { key: MediaSortKey; order: MediaSortOrder }) => void;
 }
 
-export const useAssetsPanelStore = create<AssetsPanelStore>()(
+export const useLibraryPanelStore = create<LibraryPanelStore>()(
 	persist(
 		(set) => ({
 			activeTab: "media",
@@ -114,7 +114,7 @@ export const useAssetsPanelStore = create<AssetsPanelStore>()(
 				set({ mediaSortBy: key, mediaSortOrder: order }),
 		}),
 		{
-			name: "projectItems-panel",
+			name: "library-panel",
 			partialize: (state) => ({
 				mediaViewMode: state.mediaViewMode,
 				mediaSortBy: state.mediaSortBy,

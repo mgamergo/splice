@@ -4,7 +4,7 @@ import Image from "next/image";
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
+import { DraggableItem } from "@/components/editor/panels/library/draggable-item";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";

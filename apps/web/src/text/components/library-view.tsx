@@ -1,5 +1,5 @@
-import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
-import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
+import { DraggableItem } from "@/components/editor/panels/library/draggable-item";
+import { PanelView } from "@/components/editor/panels/library/views/base-panel";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULTS } from "@/timeline/defaults";
 import { buildTextClip } from "@/timeline/clip-utils";

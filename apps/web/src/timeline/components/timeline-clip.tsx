@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react";
 import { useEditor } from "@/editor/use-editor";
-import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+import { useLibraryPanelStore } from "@/components/editor/panels/library/library-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
 import { AudioVolumeLine } from "./audio-volume-line";
 import { useClipPreview } from "@/timeline/hooks/use-clip-preview";
@@ -232,7 +232,7 @@ export function TimelineClip({
 }: TimelineClipProps) {
 	const projectItems = useEditor((e) => e.media.getProjectItems());
 	const { selectedClips } = useClipSelection();
-	const requestRevealMedia = useAssetsPanelStore((s) => s.requestRevealMedia);
+	const requestRevealMedia = useLibraryPanelStore((s) => s.requestRevealMedia);
 	const { renderClip } = useClipPreview({
 		trackId: track.id,
 		clipId: clip.id,
