@@ -150,11 +150,6 @@ export class RendererManager {
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio } = options;
 
-		// The signal cancels whichever stage is running: the audio mix or the frames.
-		let exporter: SequenceExporter | null = null;
-		const cancelFrames = () => exporter?.cancel();
-		signal.addEventListener("abort", cancelFrames, { once: true });
-
 		try {
 			signal.throwIfAborted();
 			const tracks = this.editor.sequences.getActiveSequence().tracks;
@@ -193,7 +188,7 @@ export class RendererManager {
 				background: activeProject.settings.background,
 			});
 
-			exporter = new SequenceExporter({
+			const exporter = new SequenceExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
 				fps: exportFps,
@@ -201,6 +196,7 @@ export class RendererManager {
 				quality,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
+				signal,
 			});
 
 			exporter.on("progress", (progress) => {
@@ -233,8 +229,6 @@ export class RendererManager {
 				success: false,
 				error: error instanceof Error ? error.message : "Unknown export error",
 			};
-		} finally {
-			signal.removeEventListener("abort", cancelFrames);
 		}
 	}
 

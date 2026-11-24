@@ -29,6 +29,8 @@ type ExportParams = {
 	quality: ExportQuality;
 	shouldIncludeAudio?: boolean;
 	audioBuffer?: AudioBuffer;
+	/** Cancels the export, along with any video read it is waiting on. */
+	signal: AbortSignal;
 };
 
 const qualityMap = {
@@ -51,8 +53,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
-
-	private isCancelled = false;
+	private signal: AbortSignal;
 
 	constructor({
 		width,
@@ -62,6 +63,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		quality,
 		shouldIncludeAudio,
 		audioBuffer,
+		signal,
 	}: ExportParams) {
 		super();
 		this.renderer = new CanvasRenderer({
@@ -70,17 +72,14 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			fps,
 			// Its own decoders: the preview, still live during export, would
 			// otherwise move them between the clips export is reading.
-			videoCache: new VideoCache(),
+			videoCache: new VideoCache({ signal }),
 		});
 
 		this.format = format;
 		this.quality = quality;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBuffer = audioBuffer;
-	}
-
-	cancel(): void {
-		this.isCancelled = true;
+		this.signal = signal;
 	}
 
 	async export({
@@ -151,7 +150,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		}
 
 		for (let i = 0; i < frameCount; i++) {
-			if (this.isCancelled) {
+			if (this.signal.aborted) {
 				await output.cancel();
 				this.emit("cancelled");
 				return null;
@@ -165,7 +164,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			this.emit("progress", i / frameCount);
 		}
 
-		if (this.isCancelled) {
+		if (this.signal.aborted) {
 			await output.cancel();
 			this.emit("cancelled");
 			return null;

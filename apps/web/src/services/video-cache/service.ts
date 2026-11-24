@@ -19,10 +19,16 @@ interface VideoSinkData {
 }
 
 export class VideoCache {
+	/** Stops this cache's reads, so a cancelled export isn't held up by one that stalls. */
+	private readonly signal?: AbortSignal;
 	private sinks = new Map<string, VideoSinkData>();
 	private initPromises = new Map<string, Promise<void>>();
 	private frameChain = new Map<string, Promise<unknown>>();
 	private seekGenerations = new Map<string, number>();
+
+	constructor({ signal }: { signal?: AbortSignal } = {}) {
+		this.signal = signal;
+	}
 
 	async getFrameAt({
 		mediaId,
@@ -264,7 +270,7 @@ export class VideoCache {
 		file: MediaData;
 	}): Promise<void> {
 		const input = new Input({
-			source: createMediaSource({ data: file }),
+			source: createMediaSource({ data: file, signal: this.signal }),
 			formats: ALL_FORMATS,
 		});
 
@@ -296,6 +302,7 @@ export class VideoCache {
 			});
 		} catch (error) {
 			input.dispose();
+			if (this.signal?.aborted) throw error;
 			console.error(`Failed to initialize video sink for ${mediaId}:`, error);
 			throw error;
 		}
