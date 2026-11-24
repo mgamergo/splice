@@ -26,6 +26,7 @@ export class CanvasRenderer {
 	height: number;
 	fps: FrameRate;
 	readonly videoCache: VideoCache;
+	private lastRenderedFrame = -1;
 
 	constructor({ width, height, fps, videoCache: cache }: CanvasRendererParams) {
 		this.videoCache = cache ?? videoCache;
@@ -44,6 +45,14 @@ export class CanvasRenderer {
 			height: this.height,
 		});
 		return wasmCompositor.getCanvas();
+	}
+
+	/**
+	 * Whether the shared output canvas still shows this renderer's last frame.
+	 * Export and snapshots draw on the same canvas the preview mounts.
+	 */
+	isOutputCurrent(): boolean {
+		return wasmCompositor.getFramesRendered() === this.lastRenderedFrame;
 	}
 
 	setSize({ width, height }: { width: number; height: number }) {
@@ -76,6 +85,7 @@ export class CanvasRenderer {
 			name: "renderFrame",
 			fn: () => wasmCompositor.render(frame),
 		});
+		this.lastRenderedFrame = wasmCompositor.getFramesRendered();
 	}
 
 	async renderToCanvas({

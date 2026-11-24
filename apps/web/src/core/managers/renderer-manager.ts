@@ -149,6 +149,15 @@ export class RendererManager {
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio } = options;
 
+		// One signal cancels whichever stage is running: the audio mix or the frames.
+		const abort = new AbortController();
+		let exporter: SequenceExporter | null = null;
+		const cancelInterval = setInterval(() => {
+			if (abort.signal.aborted || !onCancel?.()) return;
+			abort.abort();
+			exporter?.cancel();
+		}, 100);
+
 		try {
 			const tracks = this.editor.sequences.getActiveSequence().tracks;
 			const projectItems = this.editor.media.getProjectItems();
@@ -173,8 +182,10 @@ export class RendererManager {
 					tracks,
 					projectItems,
 					duration,
+					signal: abort.signal,
 				});
 			}
+			abort.signal.throwIfAborted();
 
 			const sequence = buildScene({
 				tracks,
@@ -184,7 +195,7 @@ export class RendererManager {
 				background: activeProject.settings.background,
 			});
 
-			const exporter = new SequenceExporter({
+			exporter = new SequenceExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
 				fps: exportFps,
@@ -201,41 +212,31 @@ export class RendererManager {
 				onProgress?.({ progress: adjustedProgress });
 			});
 
-			let cancelled = false;
-			const checkCancel = () => {
-				if (onCancel?.()) {
-					cancelled = true;
-					exporter.cancel();
-				}
-			};
+			const buffer = await exporter.export({ rootNode: sequence });
 
-			const cancelInterval = setInterval(checkCancel, 100);
-
-			try {
-				const buffer = await exporter.export({ rootNode: sequence });
-				clearInterval(cancelInterval);
-
-				if (cancelled) {
-					return { success: false, cancelled: true };
-				}
-
-				if (!buffer) {
-					return { success: false, error: "Export failed to produce buffer" };
-				}
-
-				return {
-					success: true,
-					buffer,
-				};
-			} finally {
-				clearInterval(cancelInterval);
+			if (abort.signal.aborted) {
+				return { success: false, cancelled: true };
 			}
+
+			if (!buffer) {
+				return { success: false, error: "Export failed to produce buffer" };
+			}
+
+			return {
+				success: true,
+				buffer,
+			};
 		} catch (error) {
+			if (abort.signal.aborted) {
+				return { success: false, cancelled: true };
+			}
 			console.error("Export failed:", error);
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : "Unknown export error",
 			};
+		} finally {
+			clearInterval(cancelInterval);
 		}
 	}
 

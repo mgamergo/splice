@@ -119,6 +119,7 @@ describe("media route", () => {
 		const open = await media({ path, headers: { range: "bytes=0-" } });
 		expect(open.status).toBe(206);
 		expect(open.headers.get("content-range")).toBe("bytes 0-99/100");
+		expect(new Uint8Array(await open.arrayBuffer())).toEqual(bytes);
 
 		const middle = await media({ path, headers: { range: "bytes=60-69" } });
 		expect(middle.status).toBe(206);

@@ -13,7 +13,7 @@ import {
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
 import { createMediaSource } from "@/media/media-data";
-import { getClipSourceRange } from "@/media/source-range";
+import { getClipSourceRange, type SourceRange } from "@/media/source-range";
 import {
 	getClipTimeAtSourceTime,
 	getSourceTimeAtClipTime,
@@ -44,6 +44,8 @@ export class AudioManager {
 	>();
 	private queuedSources = new Set<AudioBufferSourceNode>();
 	private preparedClipBuffers = new Map<string, Promise<AudioBuffer | null>>();
+	/** Range decodes in flight, so clips that play the same span decode it once. */
+	private pendingRangeDecodes = new Map<string, Promise<AudioBuffer | null>>();
 	private playbackSessionId = 0;
 	private lastIsPlaying = false;
 	private lastVolume = 1;
@@ -559,17 +561,11 @@ export class AudioManager {
 				duration: clip.duration,
 				retime: clip.retime,
 			});
-			let decodedBuffer: AudioBuffer | null;
-			try {
-				decodedBuffer = await decodeAudioRange({
-					file: clip.file,
-					range,
-					sampleRate: audioContext.sampleRate,
-				});
-			} catch (error) {
-				console.warn("Failed to decode clip audio:", error);
-				return null;
-			}
+			const decodedBuffer = await this.decodeClipRange({
+				clip,
+				range,
+				sampleRate: audioContext.sampleRate,
+			});
 			if (!decodedBuffer) {
 				return null;
 			}
@@ -585,6 +581,37 @@ export class AudioManager {
 		})();
 
 		this.preparedClipBuffers.set(cacheKey, promise);
+		return promise;
+	}
+
+	/**
+	 * Decodes one span of a clip's source, sharing the decode with any clip
+	 * already decoding the same span. Only in-flight decodes are shared: each
+	 * clip keeps its rendered buffer, so holding the decoded range too would
+	 * double what playback keeps in memory.
+	 */
+	private decodeClipRange({
+		clip,
+		range,
+		sampleRate,
+	}: {
+		clip: AudioClipSource;
+		range: SourceRange;
+		sampleRate: number;
+	}): Promise<AudioBuffer | null> {
+		const key = JSON.stringify([clip.sourceKey, range.start, range.end, sampleRate]);
+		const pending = this.pendingRangeDecodes.get(key);
+		if (pending) return pending;
+
+		const promise = decodeAudioRange({ file: clip.file, range, sampleRate })
+			.catch((error: unknown) => {
+				console.warn("Failed to decode clip audio:", error);
+				return null;
+			})
+			.finally(() => {
+				this.pendingRangeDecodes.delete(key);
+			});
+		this.pendingRangeDecodes.set(key, promise);
 		return promise;
 	}
 

@@ -13,6 +13,14 @@ export interface SourceRange {
  */
 const SOURCE_RANGE_TAIL_SECONDS = 0.05;
 
+/**
+ * How far before a range decoding starts. AAC and Opus decoders start every
+ * packet from the state the packets before it left, so samples decoded with
+ * no history come out wrong: AAC needs one frame (about 23 ms) and Opus asks
+ * for 80 ms of pre-roll. The assembler drops what lands before the range.
+ */
+export const DECODER_PREROLL_SECONDS = 0.1;
+
 /** The part of its source a clip plays: its in point through its (retimed) duration. */
 export function getClipSourceRange({
 	trimStart,
@@ -28,7 +36,17 @@ export function getClipSourceRange({
 		0,
 		getSourceTimeAtClipTime({ clipTime: duration, retime }),
 	);
-	return { start, end: trimStart + span + SOURCE_RANGE_TAIL_SECONDS };
+	// A clip that ends before its source starts plays none of it.
+	const end = Math.max(start, trimStart + span + SOURCE_RANGE_TAIL_SECONDS);
+	return { start, end };
+}
+
+/** The span to decode so a range comes out right: the range plus decoder pre-roll. */
+export function getDecodeWindow({ range }: { range: SourceRange }): SourceRange {
+	return {
+		start: Math.max(0, range.start - DECODER_PREROLL_SECONDS),
+		end: range.end,
+	};
 }
 
 /** The slice of AudioBuffer that range assembly reads. */

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createAudioRangeAssembler, getClipSourceRange } from "../source-range";
+import {
+	createAudioRangeAssembler,
+	DECODER_PREROLL_SECONDS,
+	getClipSourceRange,
+	getDecodeWindow,
+} from "../source-range";
 
 /** The slice of AudioBuffer the assembler reads; one value per sample, per channel. */
 function chunk({
@@ -37,6 +42,28 @@ describe("getClipSourceRange", () => {
 
 	test("never starts before the source", () => {
 		expect(getClipSourceRange({ trimStart: -1, duration: 2 }).start).toBe(0);
+	});
+
+	test("is empty, not reversed, when the clip ends before the source starts", () => {
+		expect(getClipSourceRange({ trimStart: -1, duration: 0.25 })).toEqual({
+			start: 0,
+			end: 0,
+		});
+	});
+});
+
+describe("getDecodeWindow", () => {
+	// AAC and Opus decode each packet from the state the packets before it
+	// left, so a range decoded from its first packet starts with a glitch.
+	test("starts the decoder's pre-roll before the range", () => {
+		const window = getDecodeWindow({ range: { start: 600, end: 615 } });
+		expect(DECODER_PREROLL_SECONDS).toBeGreaterThanOrEqual(0.08);
+		expect(window.start).toBeCloseTo(600 - DECODER_PREROLL_SECONDS);
+		expect(window.end).toBe(615);
+	});
+
+	test("never starts before the source", () => {
+		expect(getDecodeWindow({ range: { start: 0.02, end: 1 } }).start).toBe(0);
 	});
 });
 

@@ -24,6 +24,7 @@ import { createMediaSource, isDiskMedia, playableProjectItems } from "@/media/me
 import {
 	createAudioRangeAssembler,
 	getClipSourceRange,
+	getDecodeWindow,
 	type SourceRange,
 } from "@/media/source-range";
 import { TICKS_PER_SECOND } from "@/wasm";
@@ -147,10 +148,12 @@ async function* collectAudioClips({
 	tracks,
 	projectItems,
 	audioContext,
+	signal,
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	audioContext: AudioContext;
+	signal?: AbortSignal;
 }): AsyncGenerator<CollectedAudioClip> {
 	const mediaMap = new Map<string, ProjectItem>(
 		playableProjectItems(projectItems).map((media) => [media.id, media]),
@@ -160,6 +163,7 @@ async function* collectAudioClips({
 		tracks,
 		projectItems,
 	})) {
+		signal?.throwIfAborted();
 		if (isClipMuted({ clip })) continue;
 		if (
 			clip.type === "video" &&
@@ -172,7 +176,12 @@ async function* collectAudioClips({
 		const duration = clip.duration / TICKS_PER_SECOND;
 		const decoded =
 			clip.type === "audio"
-				? await resolveAudioBufferForClip({ clip, mediaMap, audioContext })
+				? await resolveAudioBufferForClip({
+						clip,
+						mediaMap,
+						audioContext,
+						signal,
+					})
 				: projectItem
 					? await resolveAudioBufferForProjectItem({
 							projectItem,
@@ -182,6 +191,7 @@ async function* collectAudioClips({
 								retime: clip.retime,
 							}),
 							audioContext,
+							signal,
 						})
 					: null;
 		if (!decoded) continue;
@@ -212,10 +222,12 @@ async function resolveAudioBufferForClip({
 	clip,
 	mediaMap,
 	audioContext,
+	signal,
 }: {
 	clip: AudioClip;
 	mediaMap: Map<string, ProjectItem>;
 	audioContext: AudioContext;
+	signal?: AbortSignal;
 }): Promise<DecodedClipAudio | null> {
 	try {
 		if (clip.sourceType === "upload") {
@@ -229,13 +241,14 @@ async function resolveAudioBufferForClip({
 					retime: clip.retime,
 				}),
 				audioContext,
+				signal,
 			});
 		}
 
 		if (clip.buffer) return { buffer: clip.buffer, start: 0 };
 
 		// Library sounds are short clips from the sounds API, so they decode whole.
-		const response = await fetch(clip.sourceUrl);
+		const response = await fetch(clip.sourceUrl, { signal });
 		if (!response.ok) {
 			throw new Error(`Library audio fetch failed: ${response.status}`);
 		}
@@ -246,6 +259,8 @@ async function resolveAudioBufferForClip({
 			start: 0,
 		};
 	} catch (error) {
+		// A cancelled export stops here rather than skipping to the next clip.
+		signal?.throwIfAborted();
 		console.warn("Failed to decode audio:", error);
 		return null;
 	}
@@ -255,10 +270,12 @@ async function resolveAudioBufferForProjectItem({
 	projectItem,
 	range,
 	audioContext,
+	signal,
 }: {
 	projectItem: ProjectItem;
 	range: SourceRange;
 	audioContext: AudioContext;
+	signal?: AbortSignal;
 }): Promise<DecodedClipAudio | null> {
 	// An uploaded audio file is already in memory, so it decodes in one go.
 	// Everything else, recordings on disk above all, decodes only the range.
@@ -280,9 +297,11 @@ async function resolveAudioBufferForProjectItem({
 			file: projectItem.file,
 			range,
 			sampleRate: audioContext.sampleRate,
+			signal,
 		});
 		return buffer ? { buffer, start: range.start } : null;
 	} catch (error) {
+		signal?.throwIfAborted();
 		console.warn("Failed to decode projectItem audio:", error);
 		return null;
 	}
@@ -291,18 +310,21 @@ async function resolveAudioBufferForProjectItem({
 /**
  * Decodes one range of a source's primary audio track, resampled to
  * `sampleRate`. Sample 0 is `range.start`. mediabunny reads only the packets
- * the range needs (from the one before it, for decoder lead-in), so a file on
- * disk is fetched in byte ranges, never whole.
+ * the range and its decoder pre-roll need, so a file on disk is fetched in
+ * byte ranges, never whole.
  */
 export async function decodeAudioRange({
 	file,
 	range,
 	sampleRate,
+	signal,
 }: {
 	file: MediaData;
 	range: SourceRange;
 	sampleRate: number;
+	signal?: AbortSignal;
 }): Promise<AudioBuffer | null> {
+	if (range.end <= range.start) return null;
 	const input = new Input({
 		source: createMediaSource(file),
 		formats: ALL_FORMATS,
@@ -317,7 +339,9 @@ export async function decodeAudioRange({
 			maxChannels: MAX_AUDIO_CHANNELS,
 		});
 		const sink = new AudioBufferSink(audioTrack);
-		for await (const chunk of sink.buffers(range.start, range.end)) {
+		const decodeWindow = getDecodeWindow({ range });
+		for await (const chunk of sink.buffers(decodeWindow.start, decodeWindow.end)) {
+			signal?.throwIfAborted();
 			assembler.add(chunk);
 		}
 		const assembled = assembler.finish();
@@ -634,19 +658,23 @@ export async function collectAudioClipSources({
 	return clips;
 }
 
+/** Mixes the sequence's audio for export; rejects with `signal`'s reason once it aborts. */
 export async function createTimelineAudioBuffer({
 	tracks,
 	projectItems,
 	duration,
 	sampleRate = EXPORT_SAMPLE_RATE,
 	audioContext,
+	signal,
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	duration: number;
 	sampleRate?: number;
 	audioContext?: AudioContext;
+	signal?: AbortSignal;
 }): Promise<AudioBuffer | null> {
+	signal?.throwIfAborted();
 	const context = audioContext ?? createAudioContext({ sampleRate });
 
 	const outputChannels = 2;
@@ -658,6 +686,7 @@ export async function createTimelineAudioBuffer({
 		tracks,
 		projectItems,
 		audioContext: context,
+		signal,
 	})) {
 		outputBuffer ??= context.createBuffer(
 			outputChannels,
@@ -690,6 +719,7 @@ export async function createTimelineAudioBuffer({
 		});
 	}
 
+	signal?.throwIfAborted();
 	if (!outputBuffer) return null;
 	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
 }

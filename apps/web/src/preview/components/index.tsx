@@ -184,6 +184,9 @@ function PreviewCanvas({
 
 	const render = useCallback(() => {
 		if (!renderTree || renderingRef.current) return;
+		// Export draws on the canvas the preview mounts; drawing here too would
+		// put preview frames into the export.
+		if (editor.project.getExportState().isExporting) return;
 
 		const renderTime = Math.min(
 			editor.playback.getCurrentTime(),
@@ -196,7 +199,8 @@ function PreviewCanvas({
 
 		if (
 			frame === lastFrameRef.current &&
-			renderTree === lastSequenceRef.current
+			renderTree === lastSequenceRef.current &&
+			renderer.isOutputCurrent()
 		) {
 			return;
 		}
@@ -209,7 +213,7 @@ function PreviewCanvas({
 			.then(() => {
 				renderingRef.current = false;
 			});
-	}, [renderer, renderTree, editor.playback, editor.timeline]);
+	}, [renderer, renderTree, editor.playback, editor.timeline, editor.project]);
 
 	useRafLoop(render);
 
