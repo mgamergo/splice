@@ -206,9 +206,9 @@ export class ProjectManager {
 		onExported?: ({ buffer }: { buffer: ArrayBuffer }) => void;
 	}): Promise<ExportResult> {
 		this.exportState = { isExporting: true, progress: 0, result: null };
-		this.notify();
-
-		const { result, isCurrent } = await this.exportJobs.start({
+		// Register the job before notifying, so a subscriber that cancels on
+		// seeing the export start cancels this one.
+		const job = this.exportJobs.start({
 			run: ({ signal, isCurrent }) =>
 				this.editor.renderer.exportProject({
 					options,
@@ -220,6 +220,8 @@ export class ProjectManager {
 					},
 				}),
 		});
+		this.notify();
+		const { result, isCurrent } = await job;
 		if (!isCurrent()) return { success: false, cancelled: true };
 
 		this.exportState = result.cancelled
