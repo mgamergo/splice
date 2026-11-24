@@ -16,13 +16,15 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { createLoudnessMeter, loudnessCacheKey, runEbur128 } from "../loudness";
+import { createLoudnessMeter, runEbur128 } from "../loudness";
 import {
 	AFFTDN_LATENCY_SAMPLES,
 	createNoiseReducer,
 	denoiseArgs,
 	denoiseCacheKey,
+	extractNoiseProfile,
 	NOISE_WINDOW_SECONDS,
+	noiseProfileArgs,
 	noiseScanArgs,
 	parseNoiseScanLine,
 	pickNoiseWindow,
@@ -112,23 +114,43 @@ test("the scan logs one RMS level per window on the source timeline", () => {
 	);
 });
 
-test("samples the noise profile from the window, then renders the whole recording as WAV", () => {
+test("cuts the noise profile from the scanned timeline, then renders the whole recording after it as WAV", () => {
+	const window = { start: 42, rmsDb: -55 };
+	const profile = noiseProfileArgs({
+		source: "in.mov",
+		window,
+		output: "noise.wav",
+	});
+	// Read from the start through the scan's filters, so a timestamp gap
+	// shifts the window no differently than it shifted the scan's.
+	expect(profile).not.toContain("-ss");
+	expect(profile[profile.indexOf("-af") + 1]).toBe(
+		"aresample=48000:async=1:first_pts=0,atrim=start_sample=2016000:end_sample=2064000,asetpts=PTS-STARTPTS," +
+			"astats=metadata=1:reset=0:measure_perchannel=none:measure_overall=Number_of_samples,ametadata=mode=print",
+	);
+	expect(profile.slice(-6)).toEqual([
+		"-c:a",
+		"pcm_f32le",
+		"-f",
+		"wav",
+		"-y",
+		"noise.wav",
+	]);
+
 	const args = denoiseArgs({
 		source: "in.mov",
 		output: "out.wav",
-		window: { start: 42, rmsDb: -55 },
+		profile: { file: "noise.wav", window },
 	});
-	// The window is read by its own seeked input, so nothing buffers.
-	expect(args.slice(args.indexOf("-ss"), args.indexOf("-ss") + 2)).toEqual([
-		"-ss",
-		"42.000000",
-	]);
-	expect(args.filter((arg) => arg === "-i")).toHaveLength(2);
+	expect(args).not.toContain("-ss");
 	expect(args.filter((arg) => arg === "-protocol_whitelist")).toHaveLength(2);
+	expect(args.filter((arg, index) => args[index - 1] === "-i")).toEqual([
+		"noise.wav",
+		"in.mov",
+	]);
 	expect(args[args.indexOf("-filter_complex") + 1]).toBe(
-		"[0:a:0]aresample=48000,atrim=end_sample=48000,asetpts=PTS-STARTPTS[noise];" +
-			"[1:a:0]aresample=48000:async=1:first_pts=0[recording];" +
-			"[noise][recording]concat=n=2:v=0:a=1,highpass=f=80:poles=2,highpass=f=80:poles=2," +
+		"[1:a:0]aresample=48000:async=1:first_pts=0[recording];" +
+			"[0:a:0][recording]concat=n=2:v=0:a=1,highpass=f=80:poles=2,highpass=f=80:poles=2," +
 			"apad=pad_len=1200,asendcmd=c='0 afftdn sn start;1.000000 afftdn sn stop',afftdn=nr=20:nf=-55," +
 			"atrim=start_sample=49200,asetpts=PTS-STARTPTS[out]",
 	);
@@ -147,7 +169,7 @@ test("samples the noise profile from the window, then renders the whole recordin
 	const tracked = denoiseArgs({
 		source: "in.mov",
 		output: "o.wav",
-		window: null,
+		profile: null,
 	});
 	expect(tracked).not.toContain("-ss");
 	expect(tracked[tracked.indexOf("-af") + 1]).toBe(
@@ -253,6 +275,23 @@ describe("noise reducer", () => {
 				cached: false,
 			});
 		}));
+
+	test("a recording that leaves Footage before FFmpeg opens it is reported missing, not as FFmpeg's error", () =>
+		withRoot(async (root) => {
+			const footage = join(root, "Footage", "take.wav");
+			await writeFile(footage, "audio");
+			const reducer = createNoiseReducer({
+				root,
+				render: async () => {
+					await rm(footage);
+					throw new Error("ffmpeg exited with 1.");
+				},
+			});
+			await expect(reducer.render({ path: "take.wav" })).rejects.toMatchObject({
+				code: RPC_ERRORS.INVALID_PARAMS,
+				data: { missingFootage: true },
+			});
+		}));
 });
 
 test("sets afftdn's noise floor to the sampled stretch's level, within its range", () => {
@@ -267,10 +306,12 @@ test("sets afftdn's noise floor to the sampled stretch's level, within its range
 	);
 });
 
-test("loudness with noise reduction on measures the render, cached apart from the source", () =>
+test("loudness with noise reduction on measures the render, cached apart from the source and by the render", () =>
 	withRoot(async (root) => {
 		await writeFile(join(root, "Footage", "take.wav"), "source");
+		await mkdir(join(root, "Cache", "noise-reduction"), { recursive: true });
 		const rendered = join(root, "Cache", "noise-reduction", "x.wav");
+		await writeFile(rendered, "loud render");
 		const ensured: string[] = [];
 		const measured: string[] = [];
 		const meter = createLoudnessMeter({
@@ -283,35 +324,39 @@ test("loudness with noise reduction on measures the render, cached apart from th
 			},
 			measure: async ({ source }) => {
 				measured.push(source);
-				return source === rendered
-					? { integratedLufs: -21.5, truePeakDbtp: -9, lraLu: 3 }
-					: { integratedLufs: -21, truePeakDbtp: -8, lraLu: 3 };
+				if (source !== rendered)
+					return { integratedLufs: -21, truePeakDbtp: -8, lraLu: 3 };
+				return (await Bun.file(rendered).text()) === "loud render"
+					? { integratedLufs: -18.8, truePeakDbtp: -6, lraLu: 3 }
+					: { integratedLufs: -43.8, truePeakDbtp: -31, lraLu: 3 };
 			},
 		});
 		const ranges = [{ start: 0, end: 4 }];
 		expect(
 			await meter.measure({ path: "take.wav", ranges, noiseReduction: true }),
-		).toMatchObject({ noiseReduction: true, integratedLufs: -21.5 });
+		).toMatchObject({ noiseReduction: true, integratedLufs: -18.8 });
 		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
 			noiseReduction: false,
 			integratedLufs: -21,
 		});
 		expect(
 			await meter.measure({ path: "take.wav", ranges, noiseReduction: true }),
-		).toMatchObject({ cached: true, integratedLufs: -21.5 });
-		expect(ensured).toEqual(["take.wav"]);
+		).toMatchObject({ cached: true, integratedLufs: -18.8 });
+		expect(new Set(ensured)).toEqual(new Set(["take.wav"]));
 		expect(measured).toHaveLength(2);
 		expect(measured[0]).toBe(rendered);
 		expect(measured[1]).toEndWith(join("Footage", "take.wav"));
 
-		const identity = { path: "a.wav", size: 1, mtimeMs: 2, ranges: null };
-		// Keys measured before noise reduction existed stay valid.
-		expect(loudnessCacheKey({ ...identity, noiseReduction: false })).toBe(
-			loudnessCacheKey(identity),
-		);
-		expect(loudnessCacheKey({ ...identity, noiseReduction: true })).not.toBe(
-			loudnessCacheKey(identity),
-		);
+		// The render is refreshed 25 dB quieter, with the same size and times.
+		const { atime, mtime } = await stat(rendered);
+		await Bun.sleep(10);
+		await rm(rendered);
+		await writeFile(rendered, "soft render");
+		await utimes(rendered, atime, mtime);
+		expect(
+			await meter.measure({ path: "take.wav", ranges, noiseReduction: true }),
+		).toMatchObject({ cached: false, integratedLufs: -43.8 });
+		expect(measured).toHaveLength(3);
 		await meter.stop();
 	}));
 
@@ -463,9 +508,18 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 				await writeNoisyRecording({ file: footage, clicks });
 				const source = await decodeSamples(footage);
 				expect(AFFTDN_LATENCY_SAMPLES).toBe(1_200);
-				for (const window of [null, { start: 5, rmsDb: -46 }]) {
-					const output = join(root, `denoised-${window ? "sampled" : "tracked"}.wav`);
-					await ffmpegLog(denoiseArgs({ source: footage, output, window }));
+				const window = { start: 5, rmsDb: -46 };
+				const file = join(root, "noise.wav");
+				await extractNoiseProfile({
+					command: ffmpeg ?? "ffmpeg",
+					source: footage,
+					window,
+					output: file,
+					signal: new AbortController().signal,
+				});
+				for (const profile of [null, { file, window }]) {
+					const output = join(root, `denoised-${profile ? "sampled" : "tracked"}.wav`);
+					await ffmpegLog(denoiseArgs({ source: footage, output, profile }));
 					const denoised = await decodeSamples(output);
 					expect(denoised.length).toBe(source.length);
 					for (const click of clicks)
@@ -473,6 +527,47 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 							peakNear({ samples: source, around: click }),
 						);
 				}
+			}),
+		60_000,
+	);
+
+	test(
+		"a timestamp gap before the quiet stretch keeps the whole recording, and a short profile is refused",
+		() =>
+			withRoot(async (root) => {
+				// 3 s of tone over a faint hiss, with no audio from 2.2 s to 2.9 s.
+				// The scan fills the gap with silence, so the window at 2 s is quietest.
+				const footage = join(root, "Footage", "gap.mkv");
+				await ffmpegLog([
+					"-loglevel",
+					"error",
+					"-f",
+					"lavfi",
+					"-i",
+					"aevalsrc='0.3*sin(2*PI*220*t)*lt(t,2)+0.005*sin(2*PI*3000*t)':s=48000:d=3",
+					"-af",
+					"asetnsamples=480,aselect='lt(t\\,2.2)+gte(t\\,2.9)'",
+					"-c:a",
+					"pcm_s16le",
+					"-y",
+					footage,
+				]);
+				const reducer = createNoiseReducer({ root });
+				const { file, noiseWindow } = await reducer.ensure({ path: "gap.mkv" });
+				expect(noiseWindow?.start).toBe(2);
+				// Seeking to 2 s would find only 0.3 s of audio before the end.
+				expect(await decodeSamples(file)).toHaveLength(3 * 48_000);
+				await reducer.stop();
+
+				await expect(
+					extractNoiseProfile({
+						command: ffmpeg ?? "ffmpeg",
+						source: footage,
+						window: { start: 2.5, rmsDb: -50 },
+						output: join(root, "short.wav"),
+						signal: new AbortController().signal,
+					}),
+				).rejects.toThrow("held 24000 samples, not 48000");
 			}),
 		60_000,
 	);

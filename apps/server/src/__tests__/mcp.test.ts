@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { createMcpServer } from "../mcp";
+import { createNoiseReducer, renderDenoised } from "../noise-reduction";
 import { RpcCallError, type RpcCall } from "../rpc-client";
+import { BridgeError } from "../tab-bridge";
 
 async function connect(rpc: RpcCall) {
 	const server = createMcpServer({ rpc });
@@ -639,13 +644,13 @@ describe("noise reduction tools", () => {
 	function fakeSplice({
 		calls,
 		denoisedNow = [],
-		vanished = [],
+		renderNoiseReduction,
 	}: {
 		calls: Array<[string, unknown]>;
 		/** Recordings whose clips have noise reduction on now. */
 		denoisedNow?: string[];
-		/** Paths that leave Footage before they render. */
-		vanished?: string[];
+		/** Answers `noiseReduction.render` in place of a fixed result. */
+		renderNoiseReduction?: (params: unknown) => Promise<unknown>;
 	}): RpcCall {
 		return async ({ method, params }) => {
 			calls.push([method, params]);
@@ -669,12 +674,7 @@ describe("noise reduction tools", () => {
 				};
 			}
 			if (method === "noiseReduction.render") {
-				if (vanished.includes(path))
-					throw new RpcCallError({
-						code: -32602,
-						message: `Expected an existing video or audio file under Footage: ${path}`,
-						data: { missingFootage: true },
-					});
+				if (renderNoiseReduction) return renderNoiseReduction(params);
 				return {
 					path,
 					cached: false,
@@ -935,14 +935,44 @@ describe("noise reduction tools", () => {
 	});
 
 	test("noise_reduction skips a recording that leaves Footage while rendering and changes the rest", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-mcp-"));
+		await mkdir(join(root, "Footage"));
+		for (const name of ["quiet.wav", "loud.wav"])
+			await writeFile(join(root, "Footage", name), "audio");
+		// loud.wav leaves Footage once identified, before FFmpeg opens it.
+		const reducer = createNoiseReducer({
+			root,
+			render: async (request) => {
+				if (basename(request.source) === "loud.wav") {
+					await rm(request.source);
+					return renderDenoised(request);
+				}
+				await writeFile(request.output, "denoised");
+				return { noiseWindow: null };
+			},
+		});
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(
-			fakeSplice({ calls, vanished: ["loud.wav"] }),
+			fakeSplice({
+				calls,
+				// As splice answers the RPC.
+				renderNoiseReduction: (params) =>
+					reducer.render(params).catch((error: unknown) => {
+						if (!(error instanceof BridgeError)) throw error;
+						throw new RpcCallError({
+							code: error.code,
+							message: error.message,
+							data: error.data,
+						});
+					}),
+			}),
 		);
 		const result = await client.callTool({
 			name: "noise_reduction",
 			arguments: { expectedRevision: 7, enabled: true },
 		});
+		await reducer.stop();
+		await rm(root, { recursive: true, force: true });
 		expect(result.isError).toBeFalsy();
 		expect(
 			calls

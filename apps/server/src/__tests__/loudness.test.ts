@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { RPC_ERRORS } from "@splice/bridge";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -183,24 +183,36 @@ test("audio too short to gate keeps its level unless its peak is over the cap", 
 	});
 });
 
-test("the cache key covers the file's identity and the measured ranges", () => {
+test("the cache key covers the file's identity, the measured ranges and the render", () => {
+	const info = { size: 123, mtimeMs: 456.5, ctimeMs: 456.5, ino: 7 };
 	const input = {
 		path: "Day 1/take.mov",
-		size: 123,
-		mtimeMs: 456.5,
+		info,
 		ranges: [{ start: 1, end: 2 }],
 	};
 	const key = loudnessCacheKey(input);
 	expect(loudnessCacheKey({ ...input })).toBe(key);
+	const render = { name: "a.wav", info: { ...info, ino: 9 } };
+	const denoised = loudnessCacheKey({ ...input, render });
 	for (const modification of [
 		{ path: "Day 1/take 2.mov" },
-		{ size: 124 },
-		{ mtimeMs: 456.6 },
+		{ info: { ...info, size: 124 } },
+		{ info: { ...info, mtimeMs: 456.6 } },
+		// Rewritten with the size and modified time put back.
+		{ info: { ...info, ctimeMs: 500 } },
+		{ info: { ...info, ino: 8 } },
 		{ ranges: [{ start: 1, end: 2.5 }] },
 		{ ranges: null },
+		{ render },
 	]) {
 		expect(loudnessCacheKey({ ...input, ...modification })).not.toBe(key);
 	}
+	for (const changed of [
+		{ ...render, name: "b.wav" },
+		{ ...render, info: { ...render.info, ctimeMs: 500 } },
+		{ ...render, info: { ...render.info, ino: 10 } },
+	])
+		expect(loudnessCacheKey({ ...input, render: changed })).not.toBe(denoised);
 });
 
 test("measures once per file and ordered ranges, and remeasures a changed file", async () => {
@@ -255,6 +267,17 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 			cached: false,
 		});
 		expect(calls).toHaveLength(4);
+
+		// Replaced by a file of the same size, its times put back.
+		const { atime, mtime } = await stat(file);
+		await Bun.sleep(10);
+		await rm(file);
+		await writeFile(file, "AUDIO");
+		await utimes(file, atime, mtime);
+		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
+			cached: false,
+		});
+		expect(calls).toHaveLength(5);
 		await meter.stop();
 	} finally {
 		await rm(root, { recursive: true, force: true });

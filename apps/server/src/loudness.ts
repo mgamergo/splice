@@ -9,7 +9,7 @@ import {
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import {
 	ffmpegInputArgs,
@@ -19,7 +19,11 @@ import {
 } from "./transcription-tools";
 import { mediaTypeForPath } from "./footage";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
-import { NOISE_REDUCTION_VERSION, type NoiseReducer } from "./noise-reduction";
+import {
+	type FileIdentity,
+	fileIdentity,
+	type NoiseReducer,
+} from "./noise-reduction";
 
 export const measureLoudnessInput = {
 	path: footagePath,
@@ -50,22 +54,25 @@ export const loudnessMeasurementSchema = z.object({
 });
 export type LoudnessMeasurement = z.infer<typeof loudnessMeasurementSchema>;
 
+/**
+ * Identifies a measurement by the recording, or with noise reduction on, by
+ * the render measured too: a render replaced in Cache is measured again.
+ */
 export function loudnessCacheKey({
 	path,
-	size,
-	mtimeMs,
+	info,
 	ranges,
-	noiseReduction = false,
+	render,
 }: {
 	path: string;
-	size: number;
-	mtimeMs: number;
+	info: FileIdentity;
 	ranges: SourceRange[] | null;
-	noiseReduction?: boolean;
+	/** The noise-reduced render measured, by its file name and identity. */
+	render?: { name: string; info: FileIdentity };
 }): string {
 	// Bump the version when the measurement changes.
-	const key: unknown[] = [4, path, size, mtimeMs, ranges];
-	if (noiseReduction) key.push({ noiseReduction: NOISE_REDUCTION_VERSION });
+	const key: unknown[] = [5, path, ...fileIdentity(info), ranges];
+	if (render) key.push({ render: [render.name, ...fileIdentity(render.info)] });
 	return createHash("sha256").update(JSON.stringify(key)).digest("hex");
 }
 
@@ -333,9 +340,8 @@ async function audioOnly({
 	signal: AbortSignal;
 }): Promise<string> {
 	if (mediaTypeForPath(source)?.startsWith("audio/")) return source;
-	const { size, mtimeMs } = await stat(source);
 	const key = createHash("sha256")
-		.update(JSON.stringify([resolve(source), size, mtimeMs]))
+		.update(JSON.stringify([resolve(source), ...fileIdentity(await stat(source))]))
 		.digest("hex");
 	const audio = join(cacheDir, `audio-${key}.mka`);
 	if (await access(audio).then(() => true, () => false)) return audio;
@@ -445,32 +451,30 @@ export function createLoudnessMeter({
 		denoised: boolean;
 	};
 
+	/** What to measure: the recording, or with noise reduction on, its render. */
 	async function identify({ path, ranges, denoised }: Target) {
 		const { source, info } = await resolveRecording({ root, path });
-		const key = loudnessCacheKey({
-			path,
-			size: info.size,
-			mtimeMs: info.mtimeMs,
-			ranges,
-			noiseReduction: denoised,
-		});
-		return { source, key, cachePath: join(cacheDir, `${key}.json`) };
+		let input = source;
+		let render: { name: string; info: FileIdentity } | undefined;
+		if (denoised) {
+			input = (await noiseReduction.ensure({ path })).file;
+			render = { name: basename(input), info: await stat(input) };
+		}
+		const key = loudnessCacheKey({ path, info, ranges, render });
+		return { input, key, cachePath: join(cacheDir, `${key}.json`) };
 	}
 
 	async function measureAndCache({
 		target,
-		source,
+		input,
 		key,
 		cachePath,
 	}: {
 		target: Target;
-		source: string;
+		input: string;
 		key: string;
 		cachePath: string;
 	}): Promise<LoudnessMeasurement> {
-		const input = target.denoised
-			? (await noiseReduction.ensure({ path: target.path })).file
-			: source;
 		const measurement = await measure({
 			root,
 			source: input,
@@ -501,7 +505,7 @@ export function createLoudnessMeter({
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
 			const target = { path, ranges, denoised };
-			const { source, key, cachePath } = await identify(target);
+			const { input, key, cachePath } = await identify(target);
 			signal.throwIfAborted();
 			let pending = active.get(key);
 			if (!pending) {
@@ -511,7 +515,7 @@ export function createLoudnessMeter({
 						: {
 								...(await measureAndCache({
 									target,
-									source,
+									input,
 									key,
 									cachePath,
 								})),

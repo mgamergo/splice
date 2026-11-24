@@ -2,7 +2,7 @@ import { DENOISED_AUDIO } from "@splice/bridge";
 import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
 	ffmpegInput,
@@ -16,7 +16,7 @@ export const renderNoiseReductionInput = { path: footagePath };
 const renderSchema = z.object(renderNoiseReductionInput);
 
 /** Bump when the filters change, so earlier renders aren't reused. */
-export const NOISE_REDUCTION_VERSION = 3;
+export const NOISE_REDUCTION_VERSION = 4;
 /** Length of the quiet stretch the noise profile is learned from. */
 export const NOISE_WINDOW_SECONDS = 1;
 /** The quietest window counts as noise only this far below the loud windows. */
@@ -59,29 +59,34 @@ export interface NoiseWindow {
 	rmsDb: number;
 }
 
+/** A file's size, times and inode, which change when it is rewritten. */
+export type FileIdentity = Pick<Stats, "size" | "mtimeMs" | "ctimeMs" | "ino">;
+
 /**
- * Identifies a render by the file's size and times. The inode and change time
+ * The parts of a file's identity cache keys use. The inode and change time
  * also catch rewrites that keep the size and restore the modified time, since
  * nothing can set the change time back.
  */
+export function fileIdentity({
+	size,
+	mtimeMs,
+	ctimeMs,
+	ino,
+}: FileIdentity): number[] {
+	return [size, mtimeMs, ctimeMs, ino];
+}
+
+/** Identifies a render by the source file's path and identity. */
 export function denoiseCacheKey({
 	path,
 	info,
 }: {
 	path: string;
-	info: Pick<Stats, "size" | "mtimeMs" | "ctimeMs" | "ino">;
+	info: FileIdentity;
 }): string {
-	const { size, mtimeMs, ctimeMs, ino } = info;
 	return createHash("sha256")
 		.update(
-			JSON.stringify([
-				NOISE_REDUCTION_VERSION,
-				path,
-				size,
-				mtimeMs,
-				ctimeMs,
-				ino,
-			]),
+			JSON.stringify([NOISE_REDUCTION_VERSION, path, ...fileIdentity(info)]),
 		)
 		.digest("hex");
 }
@@ -160,24 +165,104 @@ export function pickNoiseWindow(scanned: ScannedWindow[]): NoiseWindow | null {
 }
 
 /**
+ * Writes the noise window, cut from the same gap-filled timeline the scan
+ * measured, and logs how many samples it holds so far as it writes them.
+ */
+export function noiseProfileArgs({
+	source,
+	window,
+	output,
+}: {
+	source: string;
+	window: NoiseWindow;
+	output: string;
+}): string[] {
+	const start = Math.round(window.start * SAMPLE_RATE);
+	return [
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel",
+		"info",
+		...ffmpegInputArgs({ source }),
+		"-map",
+		"0:a:0",
+		"-af",
+		[
+			TIMELINE_FILTER,
+			`atrim=start_sample=${start}:end_sample=${start + WINDOW_SAMPLES}`,
+			"asetpts=PTS-STARTPTS",
+			"astats=metadata=1:reset=0:measure_perchannel=none:measure_overall=Number_of_samples",
+			"ametadata=mode=print",
+		].join(","),
+		"-c:a",
+		"pcm_f32le",
+		"-f",
+		"wav",
+		"-y",
+		output,
+	];
+}
+
+/**
+ * Writes the recording's noise window to `output`. The render cuts off exactly
+ * one window's samples after learning from them, so a shorter window would cut
+ * the recording's start instead: it throws rather than render that.
+ */
+export async function extractNoiseProfile({
+	command,
+	source,
+	window,
+	output,
+	signal,
+}: {
+	command: string;
+	source: string;
+	window: NoiseWindow;
+	output: string;
+	signal: AbortSignal;
+}): Promise<void> {
+	let samples = 0;
+	await run({
+		command,
+		args: noiseProfileArgs({ source, window, output }),
+		signal,
+		onLine(line) {
+			const parsed = parseNoiseScanLine(line);
+			// A running count, so the last one is the total.
+			if (parsed && "samples" in parsed) samples = parsed.samples;
+		},
+	});
+	if (samples !== WINDOW_SAMPLES)
+		throw new Error(
+			`The noise profile at ${seconds(window.start)} s held ${samples} samples, not ${WINDOW_SAMPLES}.`,
+		);
+}
+
+/** The noise window, written to its own file by `extractNoiseProfile`. */
+export interface NoiseProfile {
+	file: string;
+	window: NoiseWindow;
+}
+
+/**
  * Renders the recording's first audio stream with noise reduction as WAV, on
- * the source timeline. With a noise window, the window is played in first so
- * afftdn learns its profile there, and is then cut off.
+ * the source timeline. With a noise profile, it is played in first so afftdn
+ * learns from it, and is then cut off.
  */
 export function denoiseArgs({
 	source,
 	output,
-	window,
+	profile,
 }: {
 	source: string;
 	output: string;
-	window: NoiseWindow | null;
+	profile: NoiseProfile | null;
 }): string[] {
 	const head = ["-nostdin", "-hide_banner", "-loglevel", "error", "-nostats"];
 	// RF64 once the render passes WAV's 4 GiB limit.
 	const tail = ["-c:a", "pcm_s16le", "-f", "wav", "-rf64", "auto", "-y", output];
 	const padEnd = `apad=pad_len=${AFFTDN_LATENCY_SAMPLES}`;
-	if (!window)
+	if (!profile)
 		return [
 			...head,
 			...ffmpegInputArgs({ source }),
@@ -197,21 +282,17 @@ export function denoiseArgs({
 	const length = seconds(NOISE_WINDOW_SECONDS);
 	return [
 		...head,
-		// A second demuxer reads the window, so the whole file never buffers.
-		"-ss",
-		seconds(window.start),
-		...ffmpegInput({ source }),
+		...ffmpegInput({ source: profile.file }),
 		...ffmpegInput({ source }),
 		"-filter_complex",
 		[
-			`[0:a:0]aresample=${SAMPLE_RATE},atrim=end_sample=${WINDOW_SAMPLES},asetpts=PTS-STARTPTS[noise]`,
 			`[1:a:0]${TIMELINE_FILTER}[recording]`,
 			[
-				"[noise][recording]concat=n=2:v=0:a=1",
+				"[0:a:0][recording]concat=n=2:v=0:a=1",
 				RUMBLE_FILTER,
 				padEnd,
 				`asendcmd=c='0 afftdn sn start;${length} afftdn sn stop'`,
-				sampledDenoiseFilter(window),
+				sampledDenoiseFilter(profile.window),
 				`atrim=start_sample=${WINDOW_SAMPLES + AFFTDN_LATENCY_SAMPLES}`,
 				"asetpts=PTS-STARTPTS[out]",
 			].join(","),
@@ -225,6 +306,7 @@ export function denoiseArgs({
 export type RenderDenoised = (request: {
 	root: string;
 	source: string;
+	/** In a folder of the render's own, which holds its other files too. */
 	output: string;
 	signal: AbortSignal;
 }) => Promise<{ noiseWindow: NoiseWindow | null }>;
@@ -255,9 +337,23 @@ export const renderDenoised: RenderDenoised = async ({
 			samples: sampleCounts[index] ?? 0,
 		})),
 	);
+	let profile: NoiseProfile | null = null;
+	if (noiseWindow) {
+		profile = {
+			file: join(dirname(output), "noise-profile.wav"),
+			window: noiseWindow,
+		};
+		await extractNoiseProfile({
+			command,
+			source,
+			window: noiseWindow,
+			output: profile.file,
+			signal,
+		});
+	}
 	await run({
 		command,
-		args: denoiseArgs({ source, output, window: noiseWindow }),
+		args: denoiseArgs({ source, output, profile }),
 		signal,
 	});
 	return { noiseWindow };
@@ -311,7 +407,17 @@ export function createNoiseReducer({
 		const temporary = await mkdtemp(join(cacheDir, ".job-"));
 		try {
 			const output = join(temporary, "denoised.wav");
-			const { noiseWindow } = await render({ root, source, output, signal });
+			const { noiseWindow } = await render({
+				root,
+				source,
+				output,
+				signal,
+			}).catch(async (error: unknown) => {
+				// The file can leave Footage after it was identified, before FFmpeg
+				// opens it: report that as missing Footage, not as FFmpeg's error.
+				await resolveRecording({ root, path });
+				throw error;
+			});
 			if ((await identify(path)).key !== key)
 				throw new Error("Footage changed while reducing noise. Try again.");
 			await rename(output, file);
