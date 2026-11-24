@@ -124,21 +124,18 @@ export function CaptionList() {
 	};
 
 	return (
-		<PanelView
-			title="Captions"
-			actions={
-				<Button
-					size="sm"
-					variant="outline"
-					onClick={handleLoad}
-					disabled={loading}
-				>
-					{loading && <Spinner />}
-					{hasWords ? "Reload transcripts" : "Load transcripts"}
-				</Button>
-			}
-			contentClassName="flex flex-col gap-3 pb-4"
-		>
+		<PanelView title="Captions" contentClassName="flex flex-col gap-3 pb-4">
+			{/* In the body, not the header, so it fits a narrow panel. */}
+			<Button
+				size="sm"
+				variant="outline"
+				className="h-auto min-h-7 w-full whitespace-normal"
+				onClick={handleLoad}
+				disabled={loading}
+			>
+				{loading && <Spinner />}
+				{hasWords ? "Reload transcripts" : "Load transcripts"}
+			</Button>
 			<div className="flex flex-wrap items-center justify-between gap-2 px-1">
 				<p className="text-muted-foreground text-xs">
 					{cues.length

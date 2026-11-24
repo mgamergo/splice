@@ -158,7 +158,10 @@ export async function correctCaption({
 
 let stopPassage: (() => void) | null = null;
 
-/** Plays one cue's passage and pauses at its end, unless the creator seeks away. */
+/**
+ * Plays one cue's passage and pauses with the playhead on its end, unless the
+ * creator pauses or seeks first.
+ */
 export function playCue({
 	editor,
 	cue,
@@ -170,16 +173,22 @@ export function playCue({
 	const end = mediaTimeFromSeconds({ seconds: cue.end });
 	editor.playback.seek({ time: mediaTimeFromSeconds({ seconds: cue.start }) });
 	editor.playback.play();
-	const unsubscribeUpdate = editor.playback.onUpdate((time) => {
-		if (time < end) return;
+	const finish = () => {
 		stop();
 		editor.playback.pause();
+		editor.playback.seek({ time: end });
+	};
+	// Frames can come slowly, so a timer ends the passage on time too.
+	const timer = setTimeout(finish, (cue.end - cue.start) * 1000);
+	const unsubscribeUpdate = editor.playback.onUpdate((time) => {
+		if (time >= end) finish();
 	});
 	const unsubscribeSeek = editor.playback.onSeek(() => stop());
 	const unsubscribePause = editor.playback.subscribe(() => {
 		if (!editor.playback.getIsPlaying()) stop();
 	});
 	function stop() {
+		clearTimeout(timer);
 		unsubscribeUpdate();
 		unsubscribeSeek();
 		unsubscribePause();
