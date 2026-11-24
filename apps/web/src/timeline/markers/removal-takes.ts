@@ -4,6 +4,7 @@ import type {
 	TakePlacement,
 	TakeSourceRange,
 } from "@splice/bridge/ops";
+import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import {
@@ -13,6 +14,7 @@ import {
 import {
 	getClipVolume,
 	hasAnimatedVolume,
+	isClipMuted,
 	isNoiseReduced,
 } from "@/timeline/audio-state";
 import {
@@ -21,6 +23,7 @@ import {
 	hasMediaId,
 } from "@/timeline/clip-utils";
 import { razorClip } from "@/timeline/razor";
+import { canTrackHaveAudio } from "@/timeline/track-capabilities";
 import type {
 	AudioClip,
 	RemovalMarker,
@@ -64,7 +67,13 @@ function resolveSourceRange({
 	if (sourceOut <= sourceIn) {
 		throw new RemovalTakeError("Take range is too short.");
 	}
-	return { item, sourceIn, sourceOut };
+	return {
+		item,
+		sourceIn,
+		sourceOut,
+		/** The take's in point as stored, which saved audio offsets start from. */
+		sourceInSeconds: take.sourceIn,
+	};
 }
 
 export function takeRanges(take: Take): TakeSourceRange[] {
@@ -91,6 +100,8 @@ interface TakeAudio {
 	volume?: number;
 	noiseReduction: boolean;
 }
+
+type TrackClip = { clip: TimelineClip; trackId: string };
 
 function mostCommon<T>(values: T[]): T | undefined {
 	const counts = new Map<T, number>();
@@ -153,11 +164,12 @@ function itemAudio({
 	);
 }
 
-const allClips = (tracks: SequenceTracks) =>
-	[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap(
-		(track): TimelineClip[] => track.clips,
+const trackClips = (tracks: SequenceTracks) =>
+	[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+		track.clips.map((clip): TrackClip => ({ clip, trackId: track.id })),
 	);
 
+/** How each take's recording is heard: muted clips and tracks don't count. */
 function takesAudio({
 	tracks,
 	takes,
@@ -166,7 +178,10 @@ function takesAudio({
 	takes: ResolvedRange[];
 }): Map<string, TakeAudio> {
 	return itemAudio({
-		clips: allClips(tracks),
+		clips: [tracks.main, ...tracks.overlay, ...tracks.audio]
+			.filter((track) => !(canTrackHaveAudio(track) && track.muted))
+			.flatMap((track): TimelineClip[] => track.clips)
+			.filter((clip) => !(canClipHaveAudio(clip) && isClipMuted({ clip }))),
 		items: new Map(takes.map(({ item }) => [item.id, item])),
 	});
 }
@@ -196,9 +211,17 @@ function takeAudio({
 	return { noiseReduction, ...(volume !== undefined && { volume }) };
 }
 
+type TakeStretch = {
+	range: ResolvedRange;
+	audio: TakeAudio;
+	/** The track a video take's audio was extracted to, when it was. */
+	audioTrackId?: string;
+};
+
 /**
  * The take's range split where its saved audio changes, each stretch with its
- * own audio. Placements saved before per-stretch audio play as one stretch.
+ * own audio and audio track. Placements saved before per-stretch audio play as
+ * one stretch.
  */
 function takeStretches({
 	take,
@@ -208,13 +231,14 @@ function takeStretches({
 	take: ResolvedRange;
 	audioByItem: Map<string, TakeAudio>;
 	placement?: TakePlacement;
-}): Array<{ range: ResolvedRange; audio: TakeAudio }> {
+}): TakeStretch[] {
 	const segments = placement?.audioSegments;
 	if (!segments)
 		return [
 			{
 				range: take,
 				audio: takeAudio({ take, audioByItem, saved: placement }),
+				audioTrackId: placement?.audioTrackId,
 			},
 		];
 	const starts = segments.map(({ from }, index) => {
@@ -231,6 +255,7 @@ function takeStretches({
 					{
 						range: { ...take, sourceIn, sourceOut },
 						audio: takeAudio({ take, audioByItem, saved: segment }),
+						audioTrackId: segment.audioTrackId,
 					},
 				]
 			: [];
@@ -239,50 +264,61 @@ function takeStretches({
 
 /**
  * Where the take's audio changes partway, as when it was split into a
- * denoised clip and a plain one: each setting in source order. Undefined when
- * the whole take plays one way.
+ * denoised clip and a plain one, or into a clip playing its own audio and one
+ * with extracted audio: each setting in source order. Undefined when the whole
+ * take plays one way.
  */
 function audioSegments({
 	clips,
 	range,
 }: {
-	clips: TimelineClip[];
+	clips: TrackClip[];
 	range: ResolvedRange;
 }): TakeAudioSegment[] | undefined {
 	const heard = clips
-		.flatMap((clip) =>
+		.flatMap(({ clip, trackId }) =>
 			canClipHaveAudio(clip) &&
 			hasMediaId(clip) &&
 			clip.mediaId === range.item.id &&
 			doesClipHaveEnabledAudio({ clip, projectItem: range.item })
 				? [
 						{
-							sourceIn:
-								clip.trimStart > range.sourceIn
-									? clip.trimStart
-									: range.sourceIn,
+							sourceIn: clip.trimStart,
 							volume: hasAnimatedVolume({ clip })
 								? undefined
 								: getClipVolume({ clip }),
 							noiseReduction: isNoiseReduced({ clip }),
+							// A video take's audio clips are its extracted audio.
+							audioTrackId:
+								clip.type === "audio" && range.item.type === "video"
+									? trackId
+									: undefined,
 						},
 					]
 				: [],
 		)
 		.sort((a, b) => a.sourceIn - b.sourceIn);
 	const segments: TakeAudioSegment[] = [];
-	for (const { sourceIn, volume, noiseReduction } of heard) {
+	for (const { sourceIn, volume, noiseReduction, audioTrackId } of heard) {
 		const last = segments.at(-1);
 		if (
 			last &&
 			last.volume === volume &&
-			last.noiseReduction === noiseReduction
+			last.noiseReduction === noiseReduction &&
+			last.audioTrackId === audioTrackId
 		)
 			continue;
+		// The first stretch starts at the take's in point as stored, so the
+		// offsets validate against it; later ones start inside the take.
+		const from = last
+			? mediaTimeToSeconds({ time: sourceIn })
+			: range.sourceInSeconds;
+		if (last && from <= last.from) continue;
 		segments.push({
-			from: mediaTimeToSeconds({ time: sourceIn }),
+			from,
 			...(volume !== undefined && { volume }),
 			noiseReduction,
+			...(audioTrackId && { audioTrackId }),
 		});
 	}
 	return segments.length > 1 ? segments : undefined;
@@ -315,7 +351,9 @@ function createTakeClip({
 		params: {
 			...clip.params,
 			...(audio.volume !== undefined && { volume: audio.volume }),
-			...(audio.noiseReduction && { noiseReduction: true }),
+			// Only Footage has a noise-reduced render, as set_noise_reduction checks.
+			...(audio.noiseReduction &&
+				isDiskMedia(take.item.file) && { noiseReduction: true }),
 		},
 		id: generateUUID(),
 		duration: roundMediaTime({ time: take.sourceOut - take.sourceIn }),
@@ -735,7 +773,7 @@ export function restoreTakeClips({
 					continue;
 				}
 				const trackId = videoTrack(placement?.trackId) ?? tracks.main.id;
-				const audioTrackId = audioTrack(placement?.audioTrackId);
+				const audioTrackId = audioTrack(stretch.audioTrackId);
 				if (!audioTrackId || range.item.hasAudio === false) {
 					video.push({ clip, trackId });
 					continue;
@@ -964,10 +1002,9 @@ export function swapTakeClips({
 				videoPart?.trackId ??
 				(tracks.main.clips.length === 0 ? tracks.main.id : undefined);
 			const audioTrackId =
-				placement && !placement.audioTrackId
+				placement && !stretch.audioTrackId
 					? undefined
-					: (tracks.audio.find(({ id }) => id === placement?.audioTrackId)
-							?.id ??
+					: (tracks.audio.find(({ id }) => id === stretch.audioTrackId)?.id ??
 						(videoPart && audioForVideo.get(videoPart)?.[0]?.trackId) ??
 						linkedAudio[0]?.trackId);
 			if (audioTrackId && range.item.hasAudio !== false) {
@@ -1053,9 +1090,11 @@ export function swapTakeClips({
 			const clipIds = new Set(
 				[part, ...linked].flatMap(({ clipIds }) => clipIds),
 			);
-			const clips = allClips(tracks).filter(({ id }) => clipIds.has(id));
+			const clips = trackClips(tracks).filter(({ clip }) =>
+				clipIds.has(clip.id),
+			);
 			const audio = itemAudio({
-				clips,
+				clips: clips.map(({ clip }) => clip),
 				items: new Map([[part.range.item.id, part.range.item]]),
 			}).get(part.range.item.id);
 			const segments = audioSegments({ clips, range: part.range });
