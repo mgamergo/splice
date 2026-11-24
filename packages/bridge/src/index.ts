@@ -110,6 +110,14 @@ export function mediaUrlForPath(path: string): string {
 	return `${BRIDGE_PATHS.media}${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The `audio` query value that asks `splice` for a file's audio with noise reduction, as WAV. */
+export const DENOISED_AUDIO = "denoised";
+
+/** The URL of a Footage file's noise-reduced audio, rendered by `splice` on first request. */
+export function denoisedAudioUrlForPath(path: string): string {
+	return `${mediaUrlForPath(path)}?audio=${DENOISED_AUDIO}`;
+}
+
 /** A file under the Footage folder, as `footage.list` reports it. */
 export interface FootageFile {
 	/** Relative to the Footage folder, with forward slashes. */

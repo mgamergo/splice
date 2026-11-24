@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { RPC_ERRORS } from "@splice/bridge";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +16,10 @@ import {
 	runEbur128,
 	UnmeasurableError,
 } from "../loudness";
+
+const noRenders = {
+	ensure: () => Promise.reject(new Error("must not reduce noise")),
+};
 
 // The ebur128 fixtures are FFmpeg logs, with trailing spaces trimmed.
 const fixture = (name: string) =>
@@ -179,24 +183,36 @@ test("audio too short to gate keeps its level unless its peak is over the cap", 
 	});
 });
 
-test("the cache key covers the file's identity and the measured ranges", () => {
+test("the cache key covers the file's identity, the measured ranges and the render", () => {
+	const info = { size: 123, mtimeMs: 456.5, ctimeMs: 456.5, ino: 7 };
 	const input = {
 		path: "Day 1/take.mov",
-		size: 123,
-		mtimeMs: 456.5,
+		info,
 		ranges: [{ start: 1, end: 2 }],
 	};
 	const key = loudnessCacheKey(input);
 	expect(loudnessCacheKey({ ...input })).toBe(key);
+	const render = { name: "a.wav", info: { ...info, ino: 9 } };
+	const denoised = loudnessCacheKey({ ...input, render });
 	for (const modification of [
 		{ path: "Day 1/take 2.mov" },
-		{ size: 124 },
-		{ mtimeMs: 456.6 },
+		{ info: { ...info, size: 124 } },
+		{ info: { ...info, mtimeMs: 456.6 } },
+		// Rewritten with the size and modified time put back.
+		{ info: { ...info, ctimeMs: 500 } },
+		{ info: { ...info, ino: 8 } },
 		{ ranges: [{ start: 1, end: 2.5 }] },
 		{ ranges: null },
+		{ render },
 	]) {
 		expect(loudnessCacheKey({ ...input, ...modification })).not.toBe(key);
 	}
+	for (const changed of [
+		{ ...render, name: "b.wav" },
+		{ ...render, info: { ...render.info, ctimeMs: 500 } },
+		{ ...render, info: { ...render.info, ino: 10 } },
+	])
+		expect(loudnessCacheKey({ ...input, render: changed })).not.toBe(denoised);
 });
 
 test("measures once per file and ordered ranges, and remeasures a changed file", async () => {
@@ -208,6 +224,7 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		const calls: unknown[] = [];
 		const meter = createLoudnessMeter({
 			root,
+			noiseReduction: noRenders,
 			measure: async ({ ranges }) => {
 				calls.push(ranges);
 				return { integratedLufs: -20, truePeakDbtp: -6, lraLu: 3 };
@@ -224,6 +241,7 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		]);
 		expect(first).toEqual({
 			path: "take.wav",
+			noiseReduction: false,
 			ranges,
 			integratedLufs: -20,
 			truePeakDbtp: -6,
@@ -249,6 +267,17 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 			cached: false,
 		});
 		expect(calls).toHaveLength(4);
+
+		// Replaced by a file of the same size, its times put back.
+		const { atime, mtime } = await stat(file);
+		await Bun.sleep(10);
+		await rm(file);
+		await writeFile(file, "AUDIO");
+		await utimes(file, atime, mtime);
+		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
+			cached: false,
+		});
+		expect(calls).toHaveLength(5);
 		await meter.stop();
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -262,6 +291,7 @@ test("refuses paths outside Footage and files that aren't audio or video", async
 		await writeFile(join(root, "Footage", "notes.txt"), "text");
 		const meter = createLoudnessMeter({
 			root,
+			noiseReduction: noRenders,
 			measure: () => {
 				throw new Error("must not measure");
 			},
@@ -292,6 +322,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "quiet",
 				path: "quiet.wav",
+				noiseReduction: false,
 				missing: false,
 				clipIds: ["a", "b"],
 				ranges: [{ start: 0, end: 4 }],
@@ -299,6 +330,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "browser",
 				path: null,
+				noiseReduction: false,
 				missing: false,
 				clipIds: ["c"],
 				ranges: [{ start: 0, end: 1 }],
@@ -306,6 +338,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "silent",
 				path: "silent.wav",
+				noiseReduction: false,
 				missing: false,
 				clipIds: ["d"],
 				ranges: [{ start: 0, end: 1 }],
@@ -313,6 +346,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "relink",
 				path: "relink.wav",
+				noiseReduction: false,
 				missing: true,
 				clipIds: ["e"],
 				ranges: [{ start: 0, end: 1 }],
@@ -320,6 +354,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "deleted",
 				path: "deleted.wav",
+				noiseReduction: false,
 				missing: false,
 				clipIds: ["f"],
 				ranges: [{ start: 0, end: 1 }],
@@ -327,6 +362,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 			{
 				projectItemId: "damaged",
 				path: "damaged.mov",
+				noiseReduction: false,
 				missing: false,
 				clipIds: ["g"],
 				ranges: [{ start: 0, end: 1 }],
@@ -344,10 +380,26 @@ test("plans one gain per measurable source and says why others were skipped", as
 		},
 	});
 	expect(measured).toEqual([
-		{ path: "quiet.wav", ranges: [{ start: 0, end: 4 }] },
-		{ path: "silent.wav", ranges: [{ start: 0, end: 1 }] },
-		{ path: "deleted.wav", ranges: [{ start: 0, end: 1 }] },
-		{ path: "damaged.mov", ranges: [{ start: 0, end: 1 }] },
+		{
+			path: "quiet.wav",
+			ranges: [{ start: 0, end: 4 }],
+			noiseReduction: false,
+		},
+		{
+			path: "silent.wav",
+			ranges: [{ start: 0, end: 1 }],
+			noiseReduction: false,
+		},
+		{
+			path: "deleted.wav",
+			ranges: [{ start: 0, end: 1 }],
+			noiseReduction: false,
+		},
+		{
+			path: "damaged.mov",
+			ranges: [{ start: 0, end: 1 }],
+			noiseReduction: false,
+		},
 	]);
 	expect(plan.sourceGains).toEqual([{ projectItemId: "quiet", gainDb: 11.45 }]);
 	expect(
@@ -370,6 +422,7 @@ test("plans one gain per measurable source and says why others were skipped", as
 				{
 					projectItemId: "quiet",
 					path: "quiet.wav",
+					noiseReduction: false,
 					missing: false,
 					clipIds: ["a"],
 					ranges: [{ start: 0, end: 1 }],

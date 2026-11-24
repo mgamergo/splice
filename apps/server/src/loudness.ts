@@ -9,7 +9,7 @@ import {
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import {
 	ffmpegInputArgs,
@@ -19,6 +19,11 @@ import {
 } from "./transcription-tools";
 import { mediaTypeForPath } from "./footage";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import {
+	type FileIdentity,
+	fileIdentity,
+	type NoiseReducer,
+} from "./noise-reduction";
 
 export const measureLoudnessInput = {
 	path: footagePath,
@@ -29,6 +34,12 @@ export const measureLoudnessInput = {
 		.optional()
 		.describe(
 			"Source ranges in seconds to measure together, e.g. what a cut keeps, one per clip: a range listed twice counts twice. Defaults to the whole file.",
+		),
+	noiseReduction: z
+		.boolean()
+		.optional()
+		.describe(
+			"Measure the audio after noise reduction, as clips with it on play and export.",
 		),
 };
 const measureSchema = z.object(measureLoudnessInput);
@@ -43,21 +54,26 @@ export const loudnessMeasurementSchema = z.object({
 });
 export type LoudnessMeasurement = z.infer<typeof loudnessMeasurementSchema>;
 
+/**
+ * Identifies a measurement by the recording, or with noise reduction on, by
+ * the render measured too: a render replaced in Cache is measured again.
+ */
 export function loudnessCacheKey({
 	path,
-	size,
-	mtimeMs,
+	info,
 	ranges,
+	render,
 }: {
 	path: string;
-	size: number;
-	mtimeMs: number;
+	info: FileIdentity;
 	ranges: SourceRange[] | null;
+	/** The noise-reduced render measured, by its file name and identity. */
+	render?: { name: string; info: FileIdentity };
 }): string {
 	// Bump the version when the measurement changes.
-	return createHash("sha256")
-		.update(JSON.stringify([4, path, size, mtimeMs, ranges]))
-		.digest("hex");
+	const key: unknown[] = [5, path, ...fileIdentity(info), ranges];
+	if (render) key.push({ render: [render.name, ...fileIdentity(render.info)] });
+	return createHash("sha256").update(JSON.stringify(key)).digest("hex");
 }
 
 function seconds(value: number): string {
@@ -212,6 +228,7 @@ export class UnmeasurableError extends Error {}
 export type MeasureLoudness = (request: {
 	path: string;
 	ranges: SourceRange[];
+	noiseReduction: boolean;
 }) => Promise<LoudnessMeasurement>;
 
 const MISSING = "Missing from Footage, so playback skips it. Relink it first.";
@@ -219,6 +236,7 @@ const MISSING = "Missing from Footage, so playback skips it. Relink it first.";
 export type SourceLoudness = {
 	projectItemId: string;
 	path: string | null;
+	noiseReduction: boolean;
 } & (
 	| { measured: LoudnessMeasurement; gain: LoudnessGain }
 	| { skipped: string }
@@ -237,23 +255,30 @@ export async function planSourceGains({
 	const sourceGains: SourceGain[] = [];
 	const sources: SourceLoudness[] = [];
 	// One at a time: each measurement already decodes a whole file.
-	for (const { projectItemId, path, missing, ranges } of audioSources) {
+	for (const {
+		projectItemId,
+		path,
+		missing,
+		ranges,
+		noiseReduction,
+	} of audioSources) {
 		if (path === null) {
 			sources.push({
 				projectItemId,
 				path,
+				noiseReduction,
 				skipped:
 					"Stored in the browser, not under Footage, so it can't be measured.",
 			});
 			continue;
 		}
 		if (missing) {
-			sources.push({ projectItemId, path, skipped: MISSING });
+			sources.push({ projectItemId, path, noiseReduction, skipped: MISSING });
 			continue;
 		}
 		let measured: LoudnessMeasurement;
 		try {
-			measured = await measure({ path, ranges });
+			measured = await measure({ path, ranges, noiseReduction });
 		} catch (error) {
 			// One recording that can't be measured keeps its level; the rest
 			// are still normalized.
@@ -261,21 +286,26 @@ export async function planSourceGains({
 				sources.push({
 					projectItemId,
 					path,
+					noiseReduction,
 					skipped: `Couldn't be measured: ${error.message}`,
 				});
 				continue;
 			}
 			if (!(error instanceof MissingFootageError)) throw error;
-			sources.push({ projectItemId, path, skipped: MISSING });
+			sources.push({ projectItemId, path, noiseReduction, skipped: MISSING });
 			continue;
 		}
 		const gain = loudnessGain({ measurement: measured, targetLufs });
 		if (!gain) {
-			sources.push({ projectItemId, path, skipped: "Silent." });
+			sources.push({ projectItemId, path, noiseReduction, skipped: "Silent." });
 			continue;
 		}
-		sourceGains.push({ projectItemId, gainDb: gain.gainDb });
-		sources.push({ projectItemId, path, measured, gain });
+		sourceGains.push({
+			projectItemId,
+			...(noiseReduction && { noiseReduction }),
+			gainDb: gain.gainDb,
+		});
+		sources.push({ projectItemId, path, noiseReduction, measured, gain });
 	}
 	return { sourceGains, sources };
 }
@@ -310,9 +340,8 @@ async function audioOnly({
 	signal: AbortSignal;
 }): Promise<string> {
 	if (mediaTypeForPath(source)?.startsWith("audio/")) return source;
-	const { size, mtimeMs } = await stat(source);
 	const key = createHash("sha256")
-		.update(JSON.stringify([resolve(source), size, mtimeMs]))
+		.update(JSON.stringify([resolve(source), ...fileIdentity(await stat(source))]))
 		.digest("hex");
 	const audio = join(cacheDir, `audio-${key}.mka`);
 	if (await access(audio).then(() => true, () => false)) return audio;
@@ -395,16 +424,17 @@ export async function runEbur128({
 }
 
 /**
- * Measures Footage loudness with FFmpeg, cached under Cache/loudness.
- *
- * Noise reduction (off by default, see docs/decisions.md) isn't built yet.
- * It changes loudness, so when it lands, measure its output, not the source.
+ * Measures Footage loudness with FFmpeg, cached under Cache/loudness. Noise
+ * reduction lowers loudness, so with it on, the noise-reduced render is
+ * measured instead of the source.
  */
 export function createLoudnessMeter({
 	root,
+	noiseReduction,
 	measure = runEbur128,
 }: {
 	root: string;
+	noiseReduction: Pick<NoiseReducer, "ensure">;
 	measure?: typeof runEbur128;
 }) {
 	const stop = new AbortController();
@@ -415,40 +445,70 @@ export function createLoudnessMeter({
 		Promise<LoudnessMeasurement & { cached: boolean }>
 	>();
 
-	async function identify({
-		path,
-		ranges,
-	}: {
+	type Target = {
 		path: string;
 		ranges: SourceRange[] | null;
-	}) {
+		denoised: boolean;
+	};
+
+	/** What to measure: the recording, or with noise reduction on, its render. */
+	async function identify({ path, ranges, denoised }: Target) {
 		const { source, info } = await resolveRecording({ root, path });
-		const key = loudnessCacheKey({
-			path,
-			size: info.size,
-			mtimeMs: info.mtimeMs,
-			ranges,
-		});
-		return { source, key, cachePath: join(cacheDir, `${key}.json`) };
+		let input = source;
+		let render: { name: string; info: FileIdentity } | undefined;
+		if (denoised) {
+			input = (await noiseReduction.ensure({ path })).file;
+			render = { name: basename(input), info: await stat(input) };
+		}
+		const key = loudnessCacheKey({ path, info, ranges, render });
+		return {
+			input,
+			info,
+			render,
+			key,
+			cachePath: join(cacheDir, `${key}.json`),
+		};
+	}
+	type Identified = Awaited<ReturnType<typeof identify>>;
+
+	const sameFile = ({ a, b }: { a: FileIdentity; b: FileIdentity }) =>
+		fileIdentity(a).join() === fileIdentity(b).join();
+
+	/**
+	 * Whether the recording, and the render when one was measured, are still
+	 * the files measured. Checked from their identities alone: rendering again
+	 * here would only spend minutes before a stale result is thrown away.
+	 */
+	async function stillMeasured({
+		target,
+		identified: { input, info, render },
+	}: {
+		target: Target;
+		identified: Identified;
+	}): Promise<boolean> {
+		const current = await resolveRecording({ root, path: target.path });
+		if (!sameFile({ a: current.info, b: info })) return false;
+		if (!render) return true;
+		const rendered = await stat(input).catch(() => null);
+		return rendered !== null && sameFile({ a: rendered, b: render.info });
 	}
 
 	async function measureAndCache({
-		path,
-		ranges,
-		source,
-		key,
-		cachePath,
+		target,
+		identified,
 	}: {
-		path: string;
-		ranges: SourceRange[] | null;
-		source: string;
-		key: string;
-		cachePath: string;
+		target: Target;
+		identified: Identified;
 	}): Promise<LoudnessMeasurement> {
-		const measurement = await measure({ root, source, ranges, signal });
-		const current = await identify({ path, ranges });
-		if (current.key !== key)
+		const measurement = await measure({
+			root,
+			source: identified.input,
+			ranges: target.ranges,
+			signal,
+		});
+		if (!(await stillMeasured({ target, identified })))
 			throw new Error("Footage changed while measuring. Measure it again.");
+		const { cachePath } = identified;
 		await mkdir(cacheDir, { recursive: true });
 		const temporary = await mkdtemp(join(cacheDir, ".job-"));
 		try {
@@ -465,32 +525,28 @@ export function createLoudnessMeter({
 		async measure(params: unknown) {
 			const parsed = measureSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			const { path } = parsed.data;
+			const { path, noiseReduction: denoised = false } = parsed.data;
 			// Order matters: ranges play back to back, as they play in the sequence.
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
-			const { source, key, cachePath } = await identify({ path, ranges });
+			const target = { path, ranges, denoised };
+			const identified = await identify(target);
+			const { key } = identified;
 			signal.throwIfAborted();
 			let pending = active.get(key);
 			if (!pending) {
-				pending = readCache(cachePath).then(async (cached) =>
+				pending = readCache(identified.cachePath).then(async (cached) =>
 					cached
 						? { ...cached, cached: true }
 						: {
-								...(await measureAndCache({
-									path,
-									ranges,
-									source,
-									key,
-									cachePath,
-								})),
+								...(await measureAndCache({ target, identified })),
 								cached: false,
 							},
 				);
 				active.set(key, pending);
 				void pending.catch(() => undefined).finally(() => active.delete(key));
 			}
-			return { path, ranges, ...(await pending) };
+			return { path, ranges, noiseReduction: denoised, ...(await pending) };
 		},
 
 		async stop() {

@@ -58,8 +58,14 @@ export class EditorCore {
 					({ data }) =>
 						data?.badTakePlacements?.flatMap(
 							(placements) =>
-								placements?.flatMap(({ trackId, audioTrackId }) =>
-									audioTrackId ? [trackId, audioTrackId] : [trackId],
+								placements?.flatMap(
+									({ trackId, audioTrackId, audioSegments }) => [
+										trackId,
+										...(audioTrackId ? [audioTrackId] : []),
+										...(audioSegments?.flatMap((segment) =>
+											segment.audioTrackId ? [segment.audioTrackId] : [],
+										) ?? []),
+									],
 								) ?? [],
 						) ?? [],
 				),

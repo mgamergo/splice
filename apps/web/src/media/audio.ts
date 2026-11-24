@@ -20,7 +20,12 @@ import { canTrackHaveAudio } from "@/timeline";
 import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, AudioBufferSink } from "mediabunny";
-import { createMediaSource, isDiskMedia, playableProjectItems } from "@/media/media-data";
+import {
+	clipAudioMedia,
+	createMediaSource,
+	isDiskMedia,
+	playableProjectItems,
+} from "@/media/media-data";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	computeRmsBuckets,
@@ -183,7 +188,8 @@ export async function collectAudioClips({
 
 			pendingClips.push(
 				resolveAudioBufferForProjectItem({
-					projectItem: projectItem,
+					projectItem,
+					file: clipAudioMedia({ clip, projectItem }).file,
 					audioContext,
 				}).then((audioBuffer) => {
 					if (!audioBuffer) return null;
@@ -228,7 +234,11 @@ async function resolveAudioBufferForClip({
 		if (clip.sourceType === "upload") {
 			const projectItem = mediaMap.get(clip.mediaId);
 			if (!projectItem) return null;
-			return await resolveAudioBufferForProjectItem({ projectItem, audioContext });
+			return await resolveAudioBufferForProjectItem({
+				projectItem,
+				file: clipAudioMedia({ clip, projectItem }).file,
+				audioContext,
+			});
 		}
 
 		if (clip.buffer) return clip.buffer;
@@ -248,15 +258,18 @@ async function resolveAudioBufferForClip({
 
 async function resolveAudioBufferForProjectItem({
 	projectItem,
+	file,
 	audioContext,
 }: {
 	projectItem: ProjectItem;
+	/** The item's file, or what `clipAudioMedia` reads the clip's audio from. */
+	file: MediaData;
 	audioContext: AudioContext;
 }): Promise<AudioBuffer | null> {
 	// Uploaded audio decodes in one go; long recordings on disk stream through mediabunny.
-	if (projectItem.type === "audio" && !isDiskMedia(projectItem.file)) {
+	if (projectItem.type === "audio" && !isDiskMedia(file)) {
 		try {
-			const arrayBuffer = await projectItem.file.arrayBuffer();
+			const arrayBuffer = await file.arrayBuffer();
 			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 		} catch (error) {
 			console.warn("Failed to decode audio projectItem:", error);
@@ -265,7 +278,7 @@ async function resolveAudioBufferForProjectItem({
 	}
 
 	const input = new Input({
-		source: createMediaSource(projectItem.file),
+		source: createMediaSource(file),
 		formats: ALL_FORMATS,
 	});
 
@@ -449,7 +462,7 @@ function collectMediaAudioSource({
 }): AudioMixSource {
 	return {
 		timelineClip: clip,
-		file: projectItem.file,
+		file: clipAudioMedia({ clip, projectItem }).file,
 		startTime: clip.startTime / TICKS_PER_SECOND,
 		duration: clip.duration / TICKS_PER_SECOND,
 		trimStart: clip.trimStart / TICKS_PER_SECOND,
@@ -470,11 +483,12 @@ function collectMediaAudioClip({
 	muted: boolean;
 	volume: number;
 }): AudioClipSource {
+	const { file, sourceKey } = clipAudioMedia({ clip, projectItem });
 	return {
 		timelineClip: clip,
 		id: clip.id,
-		sourceKey: projectItem.id,
-		file: projectItem.file,
+		sourceKey,
+		file,
 		startTime: clip.startTime / TICKS_PER_SECOND,
 		duration: clip.duration / TICKS_PER_SECOND,
 		trimStart: clip.trimStart / TICKS_PER_SECOND,
