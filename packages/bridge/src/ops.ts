@@ -309,7 +309,6 @@ export const addCaptionsRequestSchema = z.strictObject({
 });
 
 /** What the agent sends to `rough_cut`. `splice` resolves pauses and fillers before the tab sees it. */
-/** What the agent sends to `rough_cut`. `splice` resolves pauses and fillers before the tab sees it. */
 export const roughCutRequestSchema = roughCutBaseSchema.extend({
 	pauses: z
 		.union([z.literal("auto"), z.array(itemRangeSchema)])
@@ -353,10 +352,21 @@ const roughCutPassFields = {
 	sourceGains: z.array(sourceGainSchema).optional(),
 };
 
+/** The pause and filler ranges `splice` resolved for a rough cut. */
+export const roughCutTighteningSchema = z.strictObject({
+	pauses: z.array(itemRangeSchema),
+	fillerWords: z.array(itemRangeSchema),
+});
+
 /** What `splice mcp` sends `splice` for `editor.roughCut`: loudness is already measured. */
 export const roughCutCallSchema = roughCutRequestSchema
 	.omit({ loudness: true })
-	.extend(roughCutPassFields);
+	.extend({
+		...roughCutPassFields,
+		// A transcript can land between the passes and change what `pauses: "auto"`
+		// resolves to, so the apply pass cuts exactly what the plan pass measured.
+		tightening: roughCutTighteningSchema.optional(),
+	});
 
 /** The cut itself, with every tightening range explicit. */
 export const roughCutPlanSchema = roughCutBaseSchema.extend({
@@ -410,6 +420,8 @@ export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
 export type RoughCutPlan = z.infer<typeof roughCutPlanSchema>;
 export type ItemRange = z.infer<typeof itemRangeSchema>;
 export type RoughCutSources = z.infer<typeof roughCutSourcesSchema>;
+export type RoughCutTightening = z.infer<typeof roughCutTighteningSchema>;
+export type RoughCutCall = z.infer<typeof roughCutCallSchema>;
 export type SourceGain = z.infer<typeof sourceGainSchema>;
 export type SourceRange = z.infer<typeof sourceRangeSchema>;
 export type AudioSource = z.infer<typeof audioSourceSchema>;

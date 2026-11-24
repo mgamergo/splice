@@ -606,20 +606,9 @@ test("resolves automatic pauses and filler words for every recording on the sour
 			listed.push(params);
 			return sources;
 		},
-		detect: async (params) => {
+		pauseRanges: async (params) => {
 			detected.push(params);
-			return {
-				path: "",
-				durationSeconds: 10,
-				noiseDb: -40,
-				minSeconds: 0.6,
-				cached: true,
-				hasAudio: true,
-				transcribed: true,
-				pauses: [{ start: 4, end: 5 }],
-				pauseSeconds: 1,
-				fillerWords: null,
-			};
+			return [{ start: 4, end: 5 }];
 		},
 		fillerCuts: async ({ path, paddingSeconds }) => {
 			expect(paddingSeconds).toBe(0.2);
@@ -653,7 +642,7 @@ test("passes explicit pauses through and refuses fillers without a transcript", 
 		await resolveRoughCutRequest({
 			params: { ...request, pauses },
 			listSources: unused,
-			detect: unused,
+			pauseRanges: unused,
 			fillerCuts: unused,
 		}),
 	).toEqual({
@@ -667,7 +656,7 @@ test("passes explicit pauses through and refuses fillers without a transcript", 
 				sequenceId: "raw",
 				items: [{ id: "a", name: "A", path: "a.mp4" }],
 			}),
-			detect: unused,
+			pauseRanges: unused,
 			fillerCuts: async () => null,
 		}),
 	).toEqual({
@@ -686,7 +675,7 @@ test("passes explicit pauses through and refuses fillers without a transcript", 
 				sequenceId: "raw",
 				items: [{ id: "a", name: "Pasted clip", path: null }],
 			}),
-			detect: unused,
+			pauseRanges: unused,
 			fillerCuts: unused,
 		}),
 	).toMatchObject({
@@ -698,7 +687,7 @@ test("passes explicit pauses through and refuses fillers without a transcript", 
 		await resolveRoughCutRequest({
 			params: invalid,
 			listSources: unused,
-			detect: unused,
+			pauseRanges: unused,
 			fillerCuts: unused,
 		}),
 	).toEqual({ plan: invalid });
@@ -718,18 +707,7 @@ test("the plan and apply passes tighten alike and keep captions and gains for th
 				sequenceId: "raw",
 				items: [{ id: "a", name: "A", path: "a.mp4" }],
 			}),
-			detect: async () => ({
-				path: "a.mp4",
-				durationSeconds: 10,
-				noiseDb: -35,
-				minSeconds: 0.6,
-				cached: true,
-				hasAudio: true,
-				transcribed: true,
-				pauses: [{ start: 4, end: 5 }],
-				pauseSeconds: 1,
-				fillerWords: null,
-			}),
+			pauseRanges: async () => [{ start: 4, end: 5 }],
 			fillerCuts: async () => [],
 		});
 	const sourceGains = [{ projectItemId: "a", gainDb: 3 }];
@@ -742,8 +720,134 @@ test("the plan and apply passes tighten alike and keep captions and gains for th
 		fillerWords: [],
 		captions,
 	};
-	expect(planned).toEqual({ plan: { ...tighten, plan: true } });
+	expect(planned).toEqual({
+		plan: { ...tighten, plan: true },
+		tightening: { pauses: tighten.pauses, fillerWords: [] },
+	});
 	expect(applied).toEqual({ plan: { ...tighten, sourceGains } });
 	if (!("plan" in applied)) throw new Error("expected a plan");
 	expect(roughCutTabRequestSchema.safeParse(applied.plan).success).toBe(true);
 });
+
+test("the apply pass cuts the ranges the plan pass resolved, even after a transcript lands", async () => {
+	let transcribed = false;
+	const resolve = (pass: object) =>
+		resolveRoughCutRequest({
+			params: { ...request, ...pass },
+			listSources: async () => ({
+				ok: true,
+				sequenceId: "raw",
+				items: [{ id: "a", name: "A", path: "a.mp4" }],
+			}),
+			// The transcript joins two short silences around a click into a pause.
+			pauseRanges: async () => (transcribed ? [{ start: 1, end: 1.85 }] : []),
+			fillerCuts: async () => [],
+		});
+	const sourceGains = [{ projectItemId: "a", gainDb: 3 }];
+	const planned = await resolve({ plan: true });
+	if (!("tightening" in planned) || !planned.tightening)
+		throw new Error("expected the plan's tightening");
+	expect(planned.tightening).toEqual({ pauses: [], fillerWords: [] });
+
+	transcribed = true;
+	const applied = await resolve({
+		sourceGains,
+		tightening: planned.tightening,
+	});
+	expect(applied).toEqual({
+		plan: {
+			...request,
+			pausePaddingSeconds: 0.2,
+			pauses: [],
+			fillerWords: [],
+			sourceGains,
+		},
+	});
+	if (!("plan" in applied)) throw new Error("expected a plan");
+	expect(roughCutTabRequestSchema.safeParse(applied.plan).success).toBe(true);
+	// Resolving again would cut a pause the gains weren't measured without.
+	expect(await resolve({ sourceGains })).toMatchObject({
+		plan: { pauses: [{ projectItemId: "a", sourceIn: 1, sourceOut: 1.85 }] },
+	});
+});
+
+test.skipIf(!Bun.which("ffmpeg"))(
+	"keeps the plan's pauses when a transcript lands before apply, and pauses survive an unreadable transcript",
+	async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-pauses-"));
+		let cached: Transcript | null = null;
+		let broken = false;
+		const detector = createPauseDetector({
+			root,
+			readTranscript: async () => {
+				if (broken) throw new Error("SPLICE_WHISPER_MODEL is not a file");
+				return cached;
+			},
+		});
+		const resolve = (pass: object) =>
+			resolveRoughCutRequest({
+				params: { ...request, ...pass },
+				listSources: async () => ({
+					ok: true,
+					sequenceId: "raw",
+					items: [{ id: "a", name: "A", path: "click.wav" }],
+				}),
+				pauseRanges: detector.pauseRanges,
+				fillerCuts: detector.fillerCuts,
+			});
+		try {
+			await mkdir(join(root, "Footage"));
+			// Two 0.4 s silences around a 50 ms click: too short alone, one pause joined.
+			await Bun.write(
+				join(root, "Footage", "click.wav"),
+				silentWav({
+					seconds: [
+						[1, true],
+						[0.4, false],
+						[0.05, true],
+						[0.4, false],
+						[1, true],
+					],
+				}),
+			);
+			const planned = await resolve({ plan: true });
+			expect(planned).toMatchObject({
+				tightening: { pauses: [], fillerWords: [] },
+			});
+			if (!("tightening" in planned) || !planned.tightening)
+				throw new Error("expected the plan's tightening");
+
+			cached = transcript({
+				words: [word(["Hello", 0.2, 0.9]), word(["again", 1.9, 2.5])],
+			});
+			const joined = await detector.pauseRanges({ path: "click.wav" });
+			expect(joined).toHaveLength(1);
+			expect(joined[0].start).toBeCloseTo(1, 1);
+			expect(joined[0].end).toBeCloseTo(1.85, 1);
+			expect((await detector.detect({ path: "click.wav" })).pauses).toEqual(
+				joined,
+			);
+			expect(
+				await resolve({ sourceGains: [], tightening: planned.tightening }),
+			).toMatchObject({ plan: { pauses: [] } });
+
+			broken = true;
+			expect(await detector.detect({ path: "click.wav" })).toMatchObject({
+				hasAudio: true,
+				transcribed: false,
+				transcriptError: expect.stringContaining(
+					"SPLICE_WHISPER_MODEL is not a file",
+				),
+				pauses: [],
+				fillerWords: null,
+			});
+			expect(await resolve({})).toMatchObject({ plan: { pauses: [] } });
+			await expect(
+				detector.fillerCuts({ path: "click.wav", paddingSeconds: 0.2 }),
+			).rejects.toThrow("SPLICE_WHISPER_MODEL is not a file");
+		} finally {
+			detector.stop();
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);

@@ -9,6 +9,7 @@ import {
 	type CaptionsRequest,
 	rawSequenceRequestSchema,
 	roughCutRequestSchema,
+	roughCutTighteningSchema,
 	takesListRequestSchema,
 } from "@splice/bridge/ops";
 import { z } from "zod";
@@ -88,6 +89,16 @@ function parseAudioSources(result: unknown) {
 	if (!parsed.success)
 		throw new Error("The editor sent malformed audio sources.");
 	return parsed.data.audioSources;
+}
+
+/** The pause and filler ranges splice resolved for a rough cut's plan pass. */
+function parseTightening(result: unknown) {
+	const parsed = z
+		.object({ tightening: roughCutTighteningSchema })
+		.safeParse(result);
+	if (!parsed.success)
+		throw new Error("splice sent a rough cut plan without its tightening.");
+	return parsed.data.tightening;
 }
 
 /** What the tools report about loudness, next to the editor's result. */
@@ -419,6 +430,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					params: { ...request, plan: true },
 				});
 				if (!isOk(plan)) return editorResult(plan);
+				const tightening = parseTightening(plan);
 				const targetLufs = loudness?.targetLufs ?? DEFAULT_TARGET_LUFS;
 				const { sourceGains, sources } = await planSourceGains({
 					audioSources: parseAudioSources(plan),
@@ -427,7 +439,11 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 				});
 				const result = await rpc({
 					method: "editor.roughCut",
-					params: { ...request, sourceGains },
+					params: {
+						...request,
+						sourceGains,
+						tightening,
+					},
 				});
 				if (!isOk(result)) return editorResult(result);
 				return text({

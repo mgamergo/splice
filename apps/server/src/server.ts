@@ -13,7 +13,10 @@ import {
 	type RpcResponse,
 	type ServerStatus,
 } from "@splice/bridge";
-import { roughCutSourcesSchema } from "@splice/bridge/ops";
+import {
+	type RoughCutTightening,
+	roughCutSourcesSchema,
+} from "@splice/bridge/ops";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	FOOTAGE_FOLDER,
@@ -241,6 +244,7 @@ export function startServer({
 		}
 		try {
 			let forwarded = params;
+			let tightening: RoughCutTightening | undefined;
 			if (method === "editor.roughCut") {
 				const resolved = await resolveRoughCutRequest({
 					params,
@@ -251,7 +255,7 @@ export function startServer({
 								params: sourceParams,
 							}),
 						),
-					detect: pauses.detect,
+					pauseRanges: pauses.pauseRanges,
 					fillerCuts: pauses.fillerCuts,
 				}).catch((error: unknown) => {
 					throw error instanceof BridgeError
@@ -264,6 +268,7 @@ export function startServer({
 				if ("result" in resolved)
 					return Response.json(rpcResult({ id, result: resolved.result }));
 				forwarded = resolved.plan;
+				tightening = resolved.tightening;
 			}
 			const result = await bridge.call({
 				method,
@@ -271,7 +276,16 @@ export function startServer({
 				// Importing probes every file, which can take minutes for long recordings.
 				timeoutMs: method === "editor.importItems" ? 10 * 60_000 : undefined,
 			});
-			return Response.json(rpcResult({ id, result }));
+			return Response.json(
+				rpcResult({
+					id,
+					// The apply pass sends these back to cut what the plan measured.
+					result:
+						tightening && typeof result === "object" && result !== null
+							? { ...result, tightening }
+							: result,
+				}),
+			);
 		} catch (error) {
 			if (error instanceof BridgeError) {
 				return Response.json(

@@ -361,6 +361,11 @@ const audioSources = [
 		ranges: [{ start: 0, end: 5 }],
 	},
 ];
+/** What splice resolved for the plan pass; the apply pass sends it back. */
+const tightening = {
+	pauses: [{ projectItemId: "rec-1", sourceIn: 4, sourceOut: 5 }],
+	fillerWords: [],
+};
 const measurements: Record<string, object> = {
 	"quiet.wav": { integratedLufs: -28, truePeakDbtp: -20, lraLu: 4 },
 	"loud.wav": { integratedLufs: -18, truePeakDbtp: -2.5, lraLu: 6 },
@@ -384,7 +389,7 @@ describe("loudness tools", () => {
 				return { path, ...measurements[String(path)], cached: false };
 			}
 			if (field({ params, key: "plan" }))
-				return { ok: true, revision: 3, audioSources };
+				return { ok: true, revision: 3, audioSources, tightening };
 			return { ok: true, revision: 4, sequenceId: "cut", sections: [] };
 		});
 		const result = await client.callTool({
@@ -416,6 +421,7 @@ describe("loudness tools", () => {
 						{ projectItemId: "rec-1", gainDb: 14 },
 						{ projectItemId: "rec-2", gainDb: 1.45 },
 					],
+					tightening,
 				},
 			],
 		]);
@@ -445,7 +451,7 @@ describe("loudness tools", () => {
 				return { path, ...measurements[String(path)], cached: false };
 			}
 			if (field({ params, key: "plan" }))
-				return { ok: true, revision: 3, audioSources };
+				return { ok: true, revision: 3, audioSources, tightening };
 			return { ok: true, revision: 4 };
 		});
 		const result = await client.callTool({
@@ -485,7 +491,7 @@ describe("loudness tools", () => {
 				return { path, ...measurements[String(path)], cached: false };
 			}
 			if (field({ params, key: "plan" }))
-				return { ok: true, revision: 3, audioSources };
+				return { ok: true, revision: 3, audioSources, tightening };
 			return {
 				ok: true,
 				revision: 4,
@@ -514,6 +520,7 @@ describe("loudness tools", () => {
 					{ projectItemId: "rec-1", gainDb: 14 },
 					{ projectItemId: "rec-2", gainDb: 1.45 },
 				],
+				tightening,
 			},
 		]);
 		expect(

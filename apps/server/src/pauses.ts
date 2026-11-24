@@ -341,6 +341,10 @@ export function fillerCut({
 }
 
 const round = (seconds: number) => Math.round(seconds * 1000) / 1000;
+const roundRange = ({ start, end }: TimeRange): TimeRange => ({
+	start: round(start),
+	end: round(end),
+});
 
 export function createPauseDetector({
 	root,
@@ -423,10 +427,21 @@ export function createPauseDetector({
 			noiseDb = DEFAULT_NOISE_DB,
 			minSeconds = DEFAULT_MIN_PAUSE_SECONDS,
 		} = parsed.data;
-		const [{ scan: result, cached }, transcript] = await Promise.all([
-			scan({ path, noiseDb }),
-			readTranscript({ path }),
-		]);
+		const [{ scan: result, cached }, { transcript, transcriptError }] =
+			await Promise.all([
+				scan({ path, noiseDb }),
+				// Pause edges come from the audio, and the transcript only joins
+				// silences and finds fillers, so a transcript that can't be read
+				// leaves the audio's pauses.
+				readTranscript({ path }).then(
+					(found) => ({ transcript: found, transcriptError: null }),
+					(error: unknown) => ({
+						transcript: null,
+						transcriptError:
+							error instanceof Error ? error : new Error(String(error)),
+					}),
+				),
+			]);
 		const words = transcript ? transcriptWords(transcript) : null;
 		const silences = combineSilencesWithTranscript({
 			silences: result.silences,
@@ -441,6 +456,7 @@ export function createPauseDetector({
 			durationSeconds: result.durationSeconds,
 			hasAudio: result.hasAudio,
 			transcript,
+			transcriptError,
 			silences,
 			pauses: silences.filter((silence) =>
 				lastsAtLeast({ range: silence, seconds: minSeconds }),
@@ -450,28 +466,33 @@ export function createPauseDetector({
 
 	return {
 		async detect(params: unknown) {
-			const { transcript, silences, pauses, ...rest } = await analyze(params);
+			const { transcript, transcriptError, silences, pauses, ...rest } =
+				await analyze(params);
 			return {
 				...rest,
 				transcribed: transcript !== null,
-				pauses: pauses.map(({ start, end }) => ({
-					start: round(start),
-					end: round(end),
-				})),
+				...(transcriptError && {
+					transcriptError: `Couldn't read the transcript, so pauses come from the audio alone: ${transcriptError.message}`,
+				}),
+				pauses: pauses.map(roundRange),
 				pauseSeconds: round(
 					pauses.reduce((sum, { start, end }) => sum + end - start, 0),
 				),
 				fillerWords: transcript
 					? findFillerWords({ transcript, silences }).map(
 							({ start, end, text, aligned }) => ({
-								start: round(start),
-								end: round(end),
+								...roundRange({ start, end }),
 								text,
 								aligned,
 							}),
 						)
 					: null,
 			};
+		},
+
+		/** What detect reports as pauses, without aligning filler words. */
+		async pauseRanges(params: unknown): Promise<TimeRange[]> {
+			return (await analyze(params)).pauses.map(roundRange);
 		},
 
 		/**
@@ -486,8 +507,10 @@ export function createPauseDetector({
 			noiseDb?: number;
 			paddingSeconds: number;
 		}): Promise<TimeRange[] | null> {
-			const { hasAudio, transcript, silences } = await analyze(params);
+			const { hasAudio, transcript, transcriptError, silences } =
+				await analyze(params);
 			if (!hasAudio) return [];
+			if (transcriptError) throw transcriptError;
 			if (!transcript) return null;
 			return findFillerWords({ transcript, silences }).flatMap((filler) => {
 				const cut = fillerCut({ filler, paddingSeconds });

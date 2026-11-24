@@ -237,6 +237,73 @@ describe("rpc endpoint", () => {
 		expect(seen).toEqual([["editor.apply", params]]);
 	});
 
+	test("a rough cut's plan pass returns its tightening, and the apply pass cuts it", async () => {
+		const server = start();
+		const seen: Array<[string, unknown]> = [];
+		const tab = connectTab({
+			origin: server.origin,
+			answer: (method, params) => {
+				seen.push([method, params]);
+				return { ok: true, revision: 3 };
+			},
+		});
+		await tab.authed;
+		const request = {
+			expectedRevision: 3,
+			sections: [],
+			pauses: [{ projectItemId: "a", sourceIn: 4, sourceOut: 5 }],
+		};
+		const tightening = { pauses: request.pauses, fillerWords: [] };
+		const plan = await rpc({
+			origin: server.origin,
+			body: {
+				jsonrpc: "2.0",
+				id: 1,
+				method: "editor.roughCut",
+				params: { ...request, plan: true },
+			},
+		});
+		expect(await plan.json()).toMatchObject({
+			result: { ok: true, revision: 3, tightening },
+		});
+		const sourceGains = [{ projectItemId: "a", gainDb: 2 }];
+		const applied = await rpc({
+			origin: server.origin,
+			body: {
+				jsonrpc: "2.0",
+				id: 2,
+				method: "editor.roughCut",
+				params: {
+					...request,
+					pauses: [],
+					sourceGains,
+					tightening,
+				},
+			},
+		});
+		expect(await applied.json()).toEqual({
+			jsonrpc: "2.0",
+			id: 2,
+			result: { ok: true, revision: 3 },
+		});
+		expect(seen.map(([, params]) => params)).toEqual([
+			{
+				...request,
+				falseStarts: [],
+				pausePaddingSeconds: 0.2,
+				fillerWords: [],
+				plan: true,
+			},
+			{
+				...request,
+				falseStarts: [],
+				pausePaddingSeconds: 0.2,
+				fillerWords: [],
+				sourceGains,
+			},
+		]);
+	});
+
 	test("status tracks the revision the tab reports", async () => {
 		const server = start();
 		const tab = connectTab({ origin: server.origin });

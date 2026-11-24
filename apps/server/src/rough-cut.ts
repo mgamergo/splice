@@ -1,5 +1,10 @@
 import type { RoughCutSources } from "@splice/bridge";
-import { type ItemRange, roughCutCallSchema } from "@splice/bridge/ops";
+import {
+	type ItemRange,
+	type RoughCutCall,
+	type RoughCutTightening,
+	roughCutCallSchema,
+} from "@splice/bridge/ops";
 import type { PauseDetector } from "./pauses";
 
 type Failure = Extract<RoughCutSources, { ok: false }>;
@@ -8,34 +13,74 @@ type Failure = Extract<RoughCutSources, { ok: false }>;
  * Turns the agent's `rough_cut` request into the explicit plan the tab
  * applies: `pauses: "auto"` becomes detect_pauses ranges and
  * `removeFillerWords` becomes filler cuts, for every recording heard on the
- * source sequence. Anything the schema rejects goes to the tab unchanged, so
- * the creator sees one kind of validation error.
+ * source sequence. A plan pass also returns those ranges as `tightening`, and
+ * an apply pass that sends them back cuts them instead of resolving again.
+ * Anything the schema rejects goes to the tab unchanged, so the creator sees
+ * one kind of validation error.
  */
 export async function resolveRoughCutRequest({
 	params,
 	listSources,
-	detect,
+	pauseRanges,
 	fillerCuts,
 }: {
 	params: unknown;
 	listSources: (params: { sequenceId?: string }) => Promise<RoughCutSources>;
-	detect: PauseDetector["detect"];
+	pauseRanges: PauseDetector["pauseRanges"];
 	fillerCuts: PauseDetector["fillerCuts"];
-}): Promise<{ plan: unknown } | { result: Failure }> {
+}): Promise<
+	{ plan: unknown; tightening?: RoughCutTightening } | { result: Failure }
+> {
 	const parsed = roughCutCallSchema.safeParse(params);
 	if (!parsed.success) return { plan: params };
-	const { pauses, pauseDetection, removeFillerWords, ...plan } = parsed.data;
-	if (pauses !== "auto" && !removeFillerWords)
-		return { plan: { ...plan, pauses, fillerWords: [] } };
+	const { pauses, pauseDetection, removeFillerWords, tightening, ...plan } =
+		parsed.data;
+	const resolved =
+		tightening ??
+		(await resolveTightening({
+			pauses,
+			pauseDetection,
+			removeFillerWords,
+			plan,
+			listSources,
+			pauseRanges,
+			fillerCuts,
+		}));
+	if ("result" in resolved) return resolved;
+	return {
+		plan: { ...plan, ...resolved },
+		...(plan.plan && { tightening: resolved }),
+	};
+}
 
-	const sources = await listSources({ sequenceId: plan.sequenceId });
+async function resolveTightening({
+	pauses,
+	pauseDetection,
+	removeFillerWords,
+	plan: { sequenceId, expectedRevision, pausePaddingSeconds },
+	listSources,
+	pauseRanges,
+	fillerCuts,
+}: Pick<RoughCutCall, "pauses" | "pauseDetection" | "removeFillerWords"> & {
+	plan: Pick<
+		RoughCutCall,
+		"sequenceId" | "expectedRevision" | "pausePaddingSeconds"
+	>;
+	listSources: (params: { sequenceId?: string }) => Promise<RoughCutSources>;
+	pauseRanges: PauseDetector["pauseRanges"];
+	fillerCuts: PauseDetector["fillerCuts"];
+}): Promise<RoughCutTightening | { result: Failure }> {
+	if (pauses !== "auto" && !removeFillerWords)
+		return { pauses, fillerWords: [] };
+
+	const sources = await listSources({ sequenceId });
 	if (!sources.ok) return { result: sources };
 	const failure = (message: string): { result: Failure } => ({
 		result: {
 			ok: false,
 			code: "INVALID_OP",
 			message,
-			revision: plan.expectedRevision,
+			revision: expectedRevision,
 		},
 	});
 
@@ -52,15 +97,15 @@ export async function resolveRoughCutRequest({
 			sourceIn: start,
 			sourceOut: end,
 		});
-		if (pauses === "auto") {
-			const result = await detect({ path, ...pauseDetection });
-			detected.push(...result.pauses.map(range));
-		}
+		if (pauses === "auto")
+			detected.push(
+				...(await pauseRanges({ path, ...pauseDetection })).map(range),
+			);
 		if (removeFillerWords) {
 			const cuts = await fillerCuts({
 				path,
 				noiseDb: pauseDetection?.noiseDb,
-				paddingSeconds: plan.pausePaddingSeconds,
+				paddingSeconds: pausePaddingSeconds,
 			});
 			if (!cuts)
 				return failure(
@@ -69,11 +114,5 @@ export async function resolveRoughCutRequest({
 			fillerWords.push(...cuts.map(range));
 		}
 	}
-	return {
-		plan: {
-			...plan,
-			pauses: pauses === "auto" ? detected : pauses,
-			fillerWords,
-		},
-	};
+	return { pauses: pauses === "auto" ? detected : pauses, fillerWords };
 }
