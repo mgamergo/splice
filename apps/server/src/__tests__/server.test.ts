@@ -7,6 +7,10 @@ import {
 	TAB_HELLO,
 	parseRpcMessage,
 } from "@splice/bridge";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createRpcClient } from "../rpc-client";
 import {
 	isAllowedHost,
 	isAllowedOrigin,
@@ -303,6 +307,71 @@ describe("rpc endpoint", () => {
 			},
 		]);
 	});
+
+	test("answers a rough cut whose pause scan outlasts the idle timeout", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-slow-scan-"));
+		try {
+			await mkdir(join(root, "Footage"));
+			await Bun.write(join(root, "Footage", "talk.wav"), "");
+			// A fake FFmpeg whose silence scan stays quiet for 6 s, long past the
+			// 1 s idle timeout. The RPC endpoint is exempt from it; the rough
+			// cut still answers through the client `splice mcp` uses.
+			const ffmpeg = join(root, "Tools", "ffmpeg");
+			await Bun.write(
+				ffmpeg,
+				[
+					"#!/bin/sh",
+					'case "$*" in',
+					"*silencedetect*) sleep 6",
+					'  echo "[silencedetect @ 0x1] silence_start: 1" >&2',
+					'  echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2 ;;',
+					'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
+					'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
+					"esac",
+					"",
+				].join("\n"),
+			);
+			await chmod(ffmpeg, 0o755);
+			const server = startServer({
+				port: 0,
+				token: TOKEN,
+				root,
+				upstream: null,
+				idleTimeoutSeconds: 1,
+			});
+			running.push(server);
+			const tab = connectTab({
+				origin: server.origin,
+				answer: (method) =>
+					method === "editor.roughCutSources"
+						? {
+								ok: true,
+								sequenceId: "raw",
+								items: [{ id: "a", name: "talk.wav", path: "talk.wav" }],
+							}
+						: { ok: true, revision: 3 },
+			});
+			await tab.authed;
+			const call = createRpcClient({ origin: server.origin, token: TOKEN });
+			const started = performance.now();
+			expect(
+				await call({
+					method: "editor.roughCut",
+					params: { expectedRevision: 3, sections: [], plan: true },
+				}),
+			).toEqual({
+				ok: true,
+				revision: 3,
+				tightening: {
+					pauses: [{ projectItemId: "a", sourceIn: 1, sourceOut: 2 }],
+					fillerWords: [],
+				},
+			});
+			expect(performance.now() - started).toBeGreaterThan(5_000);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	}, 20_000);
 
 	test("status tracks the revision the tab reports", async () => {
 		const server = start();

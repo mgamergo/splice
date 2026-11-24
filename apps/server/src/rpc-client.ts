@@ -33,6 +33,11 @@ export function createRpcClient({
 				"content-type": "application/json",
 			},
 			body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
+			// Bun drops a response that sends nothing for 5 minutes, and an
+			// uncached pause scan or an import sends nothing until it finishes.
+			// `splice` bounds its own work: bridge calls have deadlines, and
+			// FFmpeg scans end with their file.
+			timeout: false,
 		});
 		if (!response.ok) {
 			throw new Error(

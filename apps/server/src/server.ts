@@ -57,6 +57,8 @@ export interface StartServerOptions {
 	upstream: string | null;
 	/** While false, editor pages answer 503 "starting". */
 	isUpstreamReady?: () => boolean;
+	/** Seconds a connection may sit idle. RPC requests are exempt. Tests shorten it. */
+	idleTimeoutSeconds?: number;
 }
 
 export interface RunningServer {
@@ -138,6 +140,7 @@ export function startServer({
 	root,
 	upstream,
 	isUpstreamReady = () => true,
+	idleTimeoutSeconds = 120,
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
 	const transcription = createTranscriptionJobs({ root });
@@ -510,7 +513,7 @@ export function startServer({
 	const server = Bun.serve<SocketData>({
 		hostname: "127.0.0.1",
 		port,
-		idleTimeout: 120,
+		idleTimeout: idleTimeoutSeconds,
 		async fetch(request, srv) {
 			const url = new URL(request.url);
 			const actualPort = srv.port ?? port;
@@ -542,7 +545,9 @@ export function startServer({
 					: new Response("Upgrade failed", { status: 400 });
 			}
 			if (url.pathname === BRIDGE_PATHS.rpc) {
-				// Imports can outlast Bun's idle timeout; the bridge call has its own deadline.
+				// Imports and a rough cut's uncached pause scans send nothing until
+				// they finish, which can outlast Bun's idle timeout. Bridge calls have
+				// their own deadlines, and FFmpeg scans end with their file.
 				srv.timeout(request, 0);
 				return handleRpc(request);
 			}
