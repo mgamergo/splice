@@ -1,12 +1,14 @@
 import { beforeEach, expect, test } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
-import { collectAudioSources } from "@/agent/loudness";
+import { applySourceGains, collectAudioSources } from "@/agent/loudness";
+import type { ClipAnimations } from "@/animation/types";
+import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import type { EditorCore } from "@/core";
 import { collectAudioClipSources } from "@/media/audio";
 import type { ProjectItem } from "@/media/types";
 import type { TimelineClip } from "@/timeline";
-import { addMediaTime } from "@/wasm";
+import { addMediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 const first = "recording-1";
 const second = "recording-2";
@@ -149,7 +151,11 @@ test("a rough cut with noise reduction plans denoised sources and cuts with flag
 		sections: [section],
 		expectedRevision: api.getRevision(),
 		noiseReduction: true,
-		sourceGains: [{ projectItemId: first, gainDb: 3 }],
+		sourceGains: [
+			{ projectItemId: first, noiseReduction: true, gainDb: 3 },
+			// For plain clips of the recording, which this cut has none of.
+			{ projectItemId: second, gainDb: -9 },
+		],
 	});
 	expect(result).toMatchObject({ ok: true });
 	expect(active().name).toBe("Rough Cut");
@@ -159,6 +165,7 @@ test("a rough cut with noise reduction plans denoised sources and cuts with flag
 		["browser", false],
 	]);
 	expect(active().tracks.main.clips[0].params.volume).toBe(3);
+	expect(active().tracks.main.clips[1].params.volume ?? 0).toBe(0);
 	const rawAfter = editor.sequences
 		.getSequences()
 		.find(({ id }) => id === raw.id);
@@ -247,6 +254,40 @@ test("clips of one recording with noise reduction on and off are measured apart"
 		{ projectItemId: first, noiseReduction: true, clipIds: [clip.id] },
 		{ projectItemId: first, noiseReduction: false, clipIds: ["copy"] },
 	]);
+});
+
+test("a recording's denoised and plain clips take their own gains", () => {
+	const clip = active().tracks.main.clips[0];
+	const copy = {
+		...clip,
+		id: "copy",
+		startTime: addMediaTime({ a: clip.startTime, b: clip.duration }),
+	};
+	const tracks = applySourceGains({
+		tracks: {
+			...active().tracks,
+			main: {
+				...active().tracks.main,
+				clips: [
+					{ ...clip, params: { ...clip.params, noiseReduction: true } },
+					copy,
+				],
+			},
+		},
+		projectItems: editor.media.getProjectItems(),
+		// The denoised gain is listed last, so a gain keyed by recording alone
+		// would set it on both.
+		gains: [
+			{ projectItemId: first, gainDb: 2 },
+			{ projectItemId: first, noiseReduction: true, gainDb: 7 },
+		],
+	});
+	expect(tracks.main.clips.map(({ id, params }) => [id, params.volume])).toEqual(
+		[
+			[clip.id, 7],
+			["copy", 2],
+		],
+	);
 });
 
 test("audioSources can list each recording as it will sound once noise reduction is set", () => {
@@ -392,4 +433,90 @@ test("a take swapped out and back keeps its noise reduction when no other clip o
 	]);
 	expect(swap()).toMatchObject({ ok: true });
 	expect(flags()).toEqual([[first, true]]);
+});
+
+test("a take with extracted audio and keyframed volume keeps its noise reduction when swapped out and back", () => {
+	const animations = {
+		volume: {
+			keys: [
+				{
+					id: "key",
+					time: ZERO_MEDIA_TIME,
+					value: -6,
+					segmentToNext: "linear",
+					tangentMode: "auto",
+				},
+			],
+		},
+	} satisfies ClipAnimations;
+	const { tracks } = active();
+	editor.timeline.updateTracks({
+		...tracks,
+		main: {
+			...tracks.main,
+			clips: [
+				{
+					...videoClip({ id: "best", start: 0, duration: 2, trimStart: 4 }),
+					mediaId: first,
+					params: { noiseReduction: true },
+					animations,
+				},
+			],
+		},
+		audio: tracks.audio.map((track) => ({ ...track, clips: [] })),
+	});
+	editor.command.execute({
+		command: new ToggleSourceAudioSeparationCommand({
+			trackId: tracks.main.id,
+			clipId: "best",
+		}),
+	});
+	const extracted = () =>
+		active().tracks.audio.flatMap(({ clips }) =>
+			clips.filter((clip) => "mediaId" in clip && clip.mediaId === first),
+		);
+	// Extracting audio keeps it denoised.
+	expect(extracted()).toMatchObject([{ params: { noiseReduction: true } }]);
+	expect(
+		api.apply({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			label: "Marker",
+			ops: [
+				{
+					op: "add_marker",
+					at: { seconds: 1 },
+					data: {
+						kind: "removal",
+						sectionName: "Intro",
+						bestTake: { projectItemId: first, sourceIn: 4, sourceOut: 6 },
+						badTakes: [{ projectItemId: second, sourceIn: 0, sourceOut: 3 }],
+					},
+				},
+			],
+		}),
+	).toMatchObject({ ok: true });
+	const [marker] = active().markers;
+	const swap = () =>
+		api.apply({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			label: "Swap",
+			ops: [{ op: "swap_take", markerId: marker.id, takeIndex: 0 }],
+		});
+	expect(swap()).toMatchObject({ ok: true });
+	expect(extracted()).toEqual([]);
+	// Keyframed volume has no single gain to save, but noise reduction does.
+	expect(active().markers[0]?.data?.badTakePlacements).toEqual([
+		[
+			{
+				trackId: expect.any(String),
+				audioTrackId: expect.any(String),
+				noiseReduction: true,
+			},
+		],
+	]);
+	expect(swap()).toMatchObject({ ok: true });
+	expect(flags()).toEqual([[first, true]]);
+	expect(extracted()).toMatchObject([{ params: { noiseReduction: true } }]);
 });

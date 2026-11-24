@@ -293,7 +293,11 @@ export async function planSourceGains({
 			sources.push({ projectItemId, path, noiseReduction, skipped: "Silent." });
 			continue;
 		}
-		sourceGains.push({ projectItemId, gainDb: gain.gainDb });
+		sourceGains.push({
+			projectItemId,
+			...(noiseReduction && { noiseReduction }),
+			gainDb: gain.gainDb,
+		});
 		sources.push({ projectItemId, path, noiseReduction, measured, gain });
 	}
 	return { sourceGains, sources };

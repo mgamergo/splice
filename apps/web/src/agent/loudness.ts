@@ -58,6 +58,29 @@ export function audibleClips({
 	});
 }
 
+function footagePath(item: ProjectItem | undefined): string | null {
+	return item && isDiskMedia(item.file) ? item.file.path : null;
+}
+
+/** Browser-stored items have no noise-reduced render to play. */
+function playsDenoised({
+	clip,
+	item,
+}: {
+	clip: AudibleClip;
+	item: ProjectItem | undefined;
+}): boolean {
+	return footagePath(item) !== null && isNoiseReduced({ clip });
+}
+
+const sourceKey = ({
+	projectItemId,
+	noiseReduction,
+}: {
+	projectItemId: string;
+	noiseReduction: boolean;
+}) => `${projectItemId}:${noiseReduction}`;
+
 /**
  * Each project item's audible source ranges in a sequence, one per clip, for
  * measuring loudness. Clips of one item with noise reduction on and off are
@@ -85,10 +108,9 @@ export function collectAudioSources({
 		});
 		if (span <= 0) continue;
 		const item = projectItems.find(({ id }) => id === clip.mediaId);
-		const path = item && isDiskMedia(item.file) ? item.file.path : null;
-		// Browser-stored items have no noise-reduced render to play.
-		const noiseReduction = path !== null && isNoiseReduced({ clip });
-		const key = `${clip.mediaId}:${noiseReduction}`;
+		const path = footagePath(item);
+		const noiseReduction = playsDenoised({ clip, item });
+		const key = sourceKey({ projectItemId: clip.mediaId, noiseReduction });
 		let source = sources.get(key);
 		if (!source) {
 			source = {
@@ -113,8 +135,9 @@ export function collectAudioSources({
 }
 
 /**
- * Sets the volume of every audible clip of each listed project item. Gains are
- * absolute, since they come from measuring the source itself.
+ * Sets the volume of every audible clip of each listed project item, with its
+ * noise reduction on or off as the gain says. Gains are absolute, since they
+ * come from measuring the source itself.
  */
 export function applySourceGains({
 	tracks,
@@ -125,12 +148,21 @@ export function applySourceGains({
 	projectItems: ProjectItem[];
 	gains: SourceGain[];
 }): SequenceTracks {
-	const byItem = new Map(
-		gains.map((gain) => [gain.projectItemId, gain.gainDb]),
+	const items = new Map(projectItems.map((item) => [item.id, item]));
+	const bySource = new Map(
+		gains.map(({ projectItemId, noiseReduction = false, gainDb }) => [
+			sourceKey({ projectItemId, noiseReduction }),
+			gainDb,
+		]),
 	);
 	let updated = tracks;
 	for (const { trackId, clip } of audibleClips({ tracks, projectItems })) {
-		const volume = byItem.get(clip.mediaId);
+		const volume = bySource.get(
+			sourceKey({
+				projectItemId: clip.mediaId,
+				noiseReduction: playsDenoised({ clip, item: items.get(clip.mediaId) }),
+			}),
+		);
 		if (volume === undefined) continue;
 		if (hasAnimatedVolume({ clip }))
 			throw new LoudnessError(

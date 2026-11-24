@@ -636,30 +636,51 @@ describe("noise reduction tools", () => {
 		"loud.wav": { integratedLufs: -18.4, truePeakDbtp: -3, lraLu: 6 },
 	};
 
-	function fakeSplice(calls: Array<[string, unknown]>): RpcCall {
+	function fakeSplice({
+		calls,
+		denoisedNow = [],
+		vanished = [],
+	}: {
+		calls: Array<[string, unknown]>;
+		/** Recordings whose clips have noise reduction on now. */
+		denoisedNow?: string[];
+		/** Paths that leave Footage before they render. */
+		vanished?: string[];
+	}): RpcCall {
 		return async ({ method, params }) => {
 			calls.push([method, params]);
 			const path = String(field({ params, key: "path" }));
 			if (method === "editor.getState")
 				return { project: { format: "horizontal" } };
 			if (method === "editor.audioSources") {
-				const enabled = field({ params, key: "noiseReduction" }) === true;
+				const requested = field({ params, key: "noiseReduction" });
 				return {
 					ok: true,
 					sequenceId: "seq-1",
 					revision: 7,
 					audioSources: heard.map((source) => ({
 						...source,
-						noiseReduction: enabled && source.path !== null,
+						noiseReduction:
+							source.path !== null &&
+							(requested === undefined
+								? denoisedNow.includes(source.projectItemId)
+								: requested === true),
 					})),
 				};
 			}
-			if (method === "noiseReduction.render")
+			if (method === "noiseReduction.render") {
+				if (vanished.includes(path))
+					throw new RpcCallError({
+						code: -32602,
+						message: `Expected an existing video or audio file under Footage: ${path}`,
+						data: { missingFootage: true },
+					});
 				return {
 					path,
 					cached: false,
 					noiseProfile: { sampledAt: 4, rmsDb: -50 },
 				};
+			}
 			if (method === "loudness.measure")
 				return {
 					path,
@@ -683,7 +704,7 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction renders each recording, measures the denoised audio and applies flags and gains as one undo step", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(fakeSplice(calls));
+		const client = await connect(fakeSplice({ calls }));
 		const result = await client.callTool({
 			name: "noise_reduction",
 			arguments: { expectedRevision: 7, enabled: true },
@@ -693,6 +714,7 @@ describe("noise reduction tools", () => {
 			calls.map(([method, params]) => [method, field({ params, key: "path" })]),
 		).toEqual([
 			["editor.audioSources", undefined],
+			["editor.audioSources", undefined],
 			["noiseReduction.render", "quiet.wav"],
 			["noiseReduction.render", "loud.wav"],
 			["loudness.measure", "quiet.wav"],
@@ -701,8 +723,9 @@ describe("noise reduction tools", () => {
 		]);
 		// The tab is asked for each recording as it will sound denoised, and
 		// rec-1's clips are measured together, in playing order.
-		expect(calls[0][1]).toEqual({ noiseReduction: true });
-		expect(calls[3][1]).toEqual({
+		expect(calls[0][1]).toBeUndefined();
+		expect(calls[1][1]).toEqual({ noiseReduction: true });
+		expect(calls[4][1]).toEqual({
 			path: "quiet.wav",
 			ranges: [
 				{ start: 2, end: 6 },
@@ -763,7 +786,9 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction can target one recording, keep gains, or turn off without rendering", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(fakeSplice(calls));
+		const client = await connect(
+			fakeSplice({ calls, denoisedNow: ["rec-1"] }),
+		);
 		await client.callTool({
 			name: "noise_reduction",
 			arguments: {
@@ -774,6 +799,7 @@ describe("noise reduction tools", () => {
 			},
 		});
 		expect(calls.map(([method]) => method)).toEqual([
+			"editor.audioSources",
 			"editor.audioSources",
 			"noiseReduction.render",
 			"editor.apply",
@@ -793,10 +819,11 @@ describe("noise reduction tools", () => {
 		});
 		expect(calls.map(([method]) => method)).toEqual([
 			"editor.audioSources",
+			"editor.audioSources",
 			"loudness.measure",
 			"editor.apply",
 		]);
-		expect(calls[1][1]).toMatchObject({ noiseReduction: false });
+		expect(calls[2][1]).toMatchObject({ noiseReduction: false });
 		expect(field({ params: calls.at(-1)?.[1], key: "ops" })).toEqual([
 			{
 				op: "set_noise_reduction",
@@ -812,7 +839,7 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction refuses recordings the sequence doesn't play, and browser-only targets", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(fakeSplice(calls));
+		const client = await connect(fakeSplice({ calls }));
 		const unknown = await client.callTool({
 			name: "noise_reduction",
 			arguments: {
@@ -854,16 +881,111 @@ describe("noise reduction tools", () => {
 				},
 			],
 		});
-		expect(calls.map(([method]) => method)).toEqual([
-			"editor.audioSources",
-			"editor.audioSources",
-			"editor.audioSources",
+		expect(calls.map(([method]) => method)).toEqual(
+			Array(6).fill("editor.audioSources"),
+		);
+	});
+
+	test("noise_reduction leaves recordings already set that way, their gains included", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(
+			fakeSplice({ calls, denoisedNow: ["rec-1"] }),
+		);
+		const result = await client.callTool({
+			name: "noise_reduction",
+			arguments: { expectedRevision: 7, enabled: true },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(
+			calls
+				.filter(([method]) => method !== "editor.audioSources")
+				.map(([method, params]) => [method, field({ params, key: "path" })]),
+		).toEqual([
+			["noiseReduction.render", "loud.wav"],
+			["loudness.measure", "loud.wav"],
+			["editor.apply", undefined],
 		]);
+		expect(field({ params: calls.at(-1)?.[1], key: "ops" })).toEqual([
+			{ op: "set_noise_reduction", clipIds: ["c3"], enabled: true },
+			{ op: "set_gain", clipIds: ["c3"], gainDb: 1.95 },
+		]);
+		expect(JSON.parse(textOf(result)).noiseReduction.skipped[0]).toEqual({
+			projectItemId: "rec-1",
+			reason: "Noise reduction is already on.",
+		});
+
+		// Off for a recording that's already plain changes nothing.
+		calls.length = 0;
+		const off = await client.callTool({
+			name: "noise_reduction",
+			arguments: {
+				expectedRevision: 7,
+				enabled: false,
+				projectItemIds: ["rec-2"],
+			},
+		});
+		expect(off.isError).toBe(true);
+		expect(JSON.parse(textOf(off))).toMatchObject({
+			message: "Nothing to change.",
+			skipped: [
+				{ projectItemId: "rec-2", reason: "Noise reduction is already off." },
+			],
+		});
+		expect(calls.map(([method]) => method)).not.toContain("editor.apply");
+	});
+
+	test("noise_reduction skips a recording that leaves Footage while rendering and changes the rest", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(
+			fakeSplice({ calls, vanished: ["loud.wav"] }),
+		);
+		const result = await client.callTool({
+			name: "noise_reduction",
+			arguments: { expectedRevision: 7, enabled: true },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(
+			calls
+				.filter(([method]) => method !== "editor.audioSources")
+				.map(([method, params]) => [method, field({ params, key: "path" })]),
+		).toEqual([
+			["noiseReduction.render", "quiet.wav"],
+			["noiseReduction.render", "loud.wav"],
+			["loudness.measure", "quiet.wav"],
+			["editor.apply", undefined],
+		]);
+		expect(field({ params: calls.at(-1)?.[1], key: "ops" })).toEqual([
+			{
+				op: "set_noise_reduction",
+				clipIds: ["c1", "c4", "c2"],
+				enabled: true,
+			},
+			{ op: "set_gain", clipIds: ["c1", "c4", "c2"], gainDb: 14.5 },
+		]);
+		const report = JSON.parse(textOf(result)).noiseReduction;
+		expect(report.recordings).toHaveLength(1);
+		expect(report.skipped).toContainEqual({
+			projectItemId: "rec-2",
+			reason: expect.stringContaining("Missing from Footage"),
+		});
+
+		// Any other render error still fails the tool.
+		const failing = await connect(async (call) => {
+			if (call.method === "noiseReduction.render")
+				throw new RpcCallError({ code: -32603, message: "ffmpeg exited with 1." });
+			return fakeSplice({ calls: [] })(call);
+		});
+		const failed = await failing.callTool({
+			name: "noise_reduction",
+			arguments: { expectedRevision: 7, enabled: true },
+		});
+		expect(failed.isError).toBe(true);
+		expect(textOf(failed)).toContain("ffmpeg exited with 1.");
 	});
 
 	test("rough_cut with noiseReduction renders, measures after noise reduction, then cuts", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(fakeSplice(calls));
+		const client = await connect(fakeSplice({ calls }));
 		const result = await client.callTool({
 			name: "rough_cut",
 			arguments: { expectedRevision: 3, sections, noiseReduction: true },
@@ -884,8 +1006,8 @@ describe("noise reduction tools", () => {
 			sections,
 			noiseReduction: true,
 			sourceGains: [
-				{ projectItemId: "rec-1", gainDb: 14.5 },
-				{ projectItemId: "rec-2", gainDb: 1.95 },
+				{ projectItemId: "rec-1", noiseReduction: true, gainDb: 14.5 },
+				{ projectItemId: "rec-2", noiseReduction: true, gainDb: 1.95 },
 			],
 		});
 		expect(JSON.parse(textOf(result)).noiseReduction.recordings).toHaveLength(

@@ -81,15 +81,31 @@ type ResolvedRange = ReturnType<typeof resolveSourceRange>;
 type ResolvedTake = ResolvedRange[];
 
 interface TakeAudio {
-	volume: number;
+	/** Absent when the recording's clips all have keyframed volume. */
+	volume?: number;
 	noiseReduction: boolean;
 }
 
+function mostCommon<T>(values: T[]): T | undefined {
+	const counts = new Map<T, number>();
+	for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+	let most: T | undefined;
+	let mostCount = 0;
+	for (const [value, count] of counts)
+		if (count > mostCount) {
+			most = value;
+			mostCount = count;
+		}
+	return most;
+}
+
 /**
- * The clip volume and noise reduction each project item's audible clips mostly
+ * The noise reduction and clip volume each project item's audible clips mostly
  * play with, so restored and swapped takes keep a recording's gain, such as the
  * one loudness normalization set, and its noise reduction, instead of jumping
- * back to the source audio.
+ * back to the source audio. The volume is the one its clips with that noise
+ * reduction play at; keyframed volume has no single value, so it only counts
+ * towards noise reduction.
  */
 function itemAudio({
 	clips,
@@ -98,38 +114,36 @@ function itemAudio({
 	clips: TimelineClip[];
 	items: Map<string, ProjectItem>;
 }): Map<string, TakeAudio> {
-	const counts = new Map<
+	const heard = new Map<
 		string,
-		Map<string, { audio: TakeAudio; count: number }>
+		Array<{ volume: number | undefined; noiseReduction: boolean }>
 	>();
 	for (const clip of clips) {
-		if (
-			!canClipHaveAudio(clip) ||
-			!hasMediaId(clip) ||
-			hasAnimatedVolume({ clip })
-		)
-			continue;
+		if (!canClipHaveAudio(clip) || !hasMediaId(clip)) continue;
 		const item = items.get(clip.mediaId);
 		if (!item || !doesClipHaveEnabledAudio({ clip, projectItem: item }))
 			continue;
-		const audio = {
-			volume: getClipVolume({ clip }),
+		const list = heard.get(item.id) ?? [];
+		list.push({
+			volume: hasAnimatedVolume({ clip }) ? undefined : getClipVolume({ clip }),
 			noiseReduction: isNoiseReduced({ clip }),
-		};
-		const seen = counts.get(item.id) ?? new Map();
-		const key = `${audio.volume}:${audio.noiseReduction}`;
-		const entry = seen.get(key) ?? { audio, count: 0 };
-		entry.count++;
-		seen.set(key, entry);
-		counts.set(item.id, seen);
+		});
+		heard.set(item.id, list);
 	}
 	return new Map(
-		Array.from(counts, ([id, seen]) => [
-			id,
-			[...seen.values()].reduce((most, entry) =>
-				entry.count > most.count ? entry : most,
-			).audio,
-		]),
+		Array.from(heard, ([id, list]) => {
+			const noiseReduction =
+				mostCommon(list.map((audio) => audio.noiseReduction)) === true;
+			const volume = mostCommon(
+				list.flatMap((audio) =>
+					audio.noiseReduction === noiseReduction &&
+					audio.volume !== undefined
+						? [audio.volume]
+						: [],
+				),
+			);
+			return [id, { noiseReduction, ...(volume !== undefined && { volume }) }];
+		}),
 	);
 }
 
@@ -163,14 +177,13 @@ function takeAudio({
 	take: ResolvedRange;
 	audioByItem: Map<string, TakeAudio>;
 	placement?: TakePlacement;
-}): TakeAudio | undefined {
+}): TakeAudio {
 	const audio = audioByItem.get(take.item.id);
-	if (audio) return audio;
-	if (placement?.volume === undefined && !placement?.noiseReduction)
-		return undefined;
+	const volume = audio?.volume ?? placement?.volume;
 	return {
-		volume: placement.volume ?? 0,
-		noiseReduction: placement.noiseReduction === true,
+		...(volume !== undefined && { volume }),
+		noiseReduction:
+			audio?.noiseReduction ?? placement?.noiseReduction === true,
 	};
 }
 
@@ -181,7 +194,7 @@ function createTakeClip({
 }: {
 	take: ResolvedRange;
 	at: MediaTime;
-	audio: TakeAudio | undefined;
+	audio: TakeAudio;
 }): VideoClip | AudioClip {
 	const sourceDuration = mediaTimeFromSeconds({
 		seconds: take.item.duration ?? 0,
@@ -198,13 +211,11 @@ function createTakeClip({
 	}
 	return {
 		...clip,
-		...(audio && {
-			params: {
-				...clip.params,
-				volume: audio.volume,
-				...(audio.noiseReduction && { noiseReduction: true }),
-			},
-		}),
+		params: {
+			...clip.params,
+			...(audio.volume !== undefined && { volume: audio.volume }),
+			...(audio.noiseReduction && { noiseReduction: true }),
+		},
 		id: generateUUID(),
 		duration: roundMediaTime({ time: take.sourceOut - take.sourceIn }),
 		trimStart: take.sourceIn,

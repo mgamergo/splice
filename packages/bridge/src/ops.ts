@@ -256,6 +256,11 @@ export const roughCutRequestSchema = z.strictObject({
 
 const sourceGainSchema = z.strictObject({
 	projectItemId: z.string().min(1),
+	/**
+	 * Which of the recording's clips the gain is for: noise-reduced ones, or
+	 * (when absent) plain ones. They sound different, so each set has its own.
+	 */
+	noiseReduction: z.boolean().optional(),
 	gainDb: gainDbSchema,
 });
 

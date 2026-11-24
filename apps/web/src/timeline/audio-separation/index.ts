@@ -1,6 +1,7 @@
 import { cloneAnimations } from "@/animation";
 import type { ClipAnimations } from "@/animation/types";
 import type { ProjectItem } from "@/media/types";
+import { isNoiseReduced } from "@/timeline/audio-state";
 import { DEFAULTS } from "@/timeline/defaults";
 import type {
 	CreateUploadAudioClip,
@@ -95,6 +96,7 @@ export function buildSeparatedAudioClip({
 					? sourceClip.params.volume
 					: DEFAULTS.clip.volume,
 			muted: sourceClip.params.muted === true,
+			...(isNoiseReduced({ clip: sourceClip }) && { noiseReduction: true }),
 		},
 		retime: sourceClip.retime
 			? {
