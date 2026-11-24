@@ -652,13 +652,21 @@ test("swapping back puts each surviving range of a tightened take on its own tra
 	// The best take spans A, B and C: B on Main with its audio on Dialogue, C
 	// on an overlay. Tighten cuts A's part as a false start.
 	const { tracks } = buildDefaultSequence({ name: "Raw", isMain: true });
-	const clip = (id: string, start: number, duration: number) => ({
-		...videoClip({ id, start, duration }),
-		mediaId: id,
-	});
+	const clip = ({
+		id,
+		start,
+		duration,
+	}: {
+		id: string;
+		start: number;
+		duration: number;
+	}) => ({ ...videoClip({ id, start, duration }), mediaId: id });
 	const editor = setUpEditor({
 		tracks: {
-			main: { ...tracks.main, clips: [clip("A", 0, 4), clip("B", 4, 2)] },
+			main: { ...tracks.main, clips: [
+					clip({ id: "A", start: 0, duration: 4 }),
+					clip({ id: "B", start: 4, duration: 2 }),
+				] },
 			overlay: [
 				{
 					id: "overlay",
@@ -666,7 +674,7 @@ test("swapping back puts each surviving range of a tightened take on its own tra
 					type: "video",
 					hidden: false,
 					muted: false,
-					clips: [clip("C", 6, 3)],
+					clips: [clip({ id: "C", start: 6, duration: 3 })],
 				},
 			],
 		},
@@ -695,15 +703,15 @@ test("swapping back puts each surviving range of a tightened take on its own tra
 			clipId: "B",
 		}),
 	});
-	const range = (
-		projectItemId: string,
-		sourceIn: number,
-		sourceOut: number,
-	) => ({
-		projectItemId,
-		sourceIn,
-		sourceOut,
-	});
+	const range = ({
+		id,
+		from,
+		to,
+	}: {
+		id: string;
+		from: number;
+		to: number;
+	}) => ({ projectItemId: id, sourceIn: from, sourceOut: to });
 	expect(
 		api.roughCut({
 			sequenceId: active().id,
@@ -712,14 +720,14 @@ test("swapping back puts each surviving range of a tightened take on its own tra
 				{
 					name: "Across",
 					takes: [
-						range("A", 0, 1),
-						range("A", 1, 2),
-						{ ranges: [range("A", 3, 4), range("B", 0, 2), range("C", 0, 1)] },
+						range({ id: "A", from: 0, to: 1 }),
+						range({ id: "A", from: 1, to: 2 }),
+						{ ranges: [range({ id: "A", from: 3, to: 4 }), range({ id: "B", from: 0, to: 2 }), range({ id: "C", from: 0, to: 1 })] },
 					],
 					bestTakeIndex: 2,
 				},
 			],
-			falseStarts: [range("A", 3, 4)],
+			falseStarts: [range({ id: "A", from: 3, to: 4 })],
 		}),
 	).toMatchObject({ ok: true });
 	const mainId = active().tracks.main.id;
@@ -736,7 +744,9 @@ test("swapping back puts each surviving range of a tightened take on its own tra
 				})),
 		),
 		audio: active().tracks.audio.flatMap((track) =>
-			track.clips.filter((each) => each.mediaId === "B").map(() => track.id),
+			track.clips
+				.filter((each) => "mediaId" in each && each.mediaId === "B")
+				.map(() => track.id),
 		),
 	});
 	const before = placeB();
