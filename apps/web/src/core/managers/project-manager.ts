@@ -282,9 +282,9 @@ export class ProjectManager {
 			result: null,
 			step: delivery.video ? "upload-video" : "render",
 		};
-		this.notify();
-
-		const { result, isCurrent } = await this.exportJobs.start({
+		// Register the job before notifying, as export() does, so a subscriber
+		// that cancels on seeing it start cancels this one.
+		const job = this.exportJobs.start({
 			run: async ({ signal, isCurrent }): Promise<ExportResult> => {
 				const update = (patch: Partial<ExportState>) => {
 					if (!isCurrent()) return;
@@ -331,6 +331,8 @@ export class ProjectManager {
 				}
 			},
 		});
+		this.notify();
+		const { result, isCurrent } = await job;
 		if (!isCurrent()) return { success: false, cancelled: true };
 		// The render is kept only to retry a failure.
 		if (result.success || result.cancelled) this.delivery = null;
