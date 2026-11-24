@@ -581,7 +581,10 @@ test.skipIf(!Bun.which("ffmpeg"))(
 	},
 );
 
-test("a scan of Footage that changed while it ran isn't cached", async () => {
+// The fake FFmpeg is a shell script, which Windows can't run.
+test.skipIf(process.platform === "win32")(
+	"a scan of Footage that changed while it ran isn't cached",
+	async () => {
 	const root = await mkdtemp(join(tmpdir(), "splice-pauses-"));
 	const detector = createPauseDetector({
 		root,
@@ -623,7 +626,8 @@ test("a scan of Footage that changed while it ran isn't cached", async () => {
 		await detector.stop();
 		await rm(root, { recursive: true, force: true });
 	}
-});
+	},
+);
 
 function ffmpeg(args: string[]) {
 	const result = Bun.spawnSync([
