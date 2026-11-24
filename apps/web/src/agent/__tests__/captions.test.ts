@@ -383,6 +383,7 @@ describe("EditorApi captions", () => {
 		},
 	];
 
+	// Burned-in captions are for Shorts; Horizontal captions are SRT cues.
 	function setUp() {
 		const editor = setUpEditor({
 			tracks: {
@@ -390,6 +391,13 @@ describe("EditorApi captions", () => {
 					...tracksWith({}).main,
 					clips: [videoClip({ id: "v", start: 0, duration: 5 })],
 				},
+			},
+		});
+		const project = editor.project.getActive();
+		editor.project.setActiveProject({
+			project: {
+				...project,
+				settings: { ...project.settings, format: "short" },
 			},
 		});
 		return { editor, api: new EditorApi(editor) };

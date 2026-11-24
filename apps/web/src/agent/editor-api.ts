@@ -6,7 +6,24 @@ import {
 	sequenceDurationSeconds,
 } from "@/agent/rough-cut";
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
-import { CaptionError, withCaptionTrack } from "@/agent/captions";
+import {
+	CaptionError,
+	uncaptionedItemIds as uncaptionedRecordings,
+	withCaptionTrack,
+	withoutCaptionTrack,
+} from "@/agent/captions";
+import {
+	captionCuesRequestSchema,
+	correctCaptionRequestSchema,
+} from "@splice/bridge/delivery";
+import { CaptionCorrectionError, type CaptionCue } from "@/captions/cues";
+import {
+	correctCaption,
+	sequenceCaptionCues,
+	setCaptionSources,
+} from "@/captions/project-captions";
+import { useCaptionsStore } from "@/captions/store";
+import { projectFormat } from "@/project/format";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	applySourceGains,
@@ -309,6 +326,28 @@ export class EditorApi {
 			return this.invalidOp(
 				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
 			);
+		const project = this.editor.project.getActive();
+		if (projectFormat({ project }) === "horizontal") {
+			// Horizontal video ships a clean MP4 with a separate SRT, so its
+			// captions are cues derived from the words, never burned in.
+			setCaptionSources({
+				editor: this.editor,
+				sources,
+				label: "Agent: caption words",
+			});
+			return {
+				ok: true as const,
+				sequenceId: sequence.id,
+				revision: this.getRevision(),
+				label: "Agent: caption words",
+				captionCount: sequenceCaptionCues({ editor: this.editor, sequence })
+					.length,
+				uncaptionedItemIds: uncaptionedRecordings({
+					content: withoutCaptionTrack({ tracks: sequence.tracks }),
+					captions: { sources },
+				}),
+			};
+		}
 		try {
 			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
 				tracks: sequence.tracks,
@@ -334,6 +373,105 @@ export class EditorApi {
 			};
 		} catch (error) {
 			if (!(error instanceof CaptionError)) throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	/** The sequence a caption request names, or the active one. */
+	private captionSequence({ sequenceId }: { sequenceId?: string }) {
+		const project = this.editor.project.getActiveOrNull();
+		if (!project)
+			return {
+				error: {
+					ok: false as const,
+					code: "NO_PROJECT" as const,
+					message: "No project is open",
+					revision: this.getRevision(),
+				},
+			};
+		if (projectFormat({ project }) !== "horizontal")
+			return {
+				error: this.invalidOp(
+					"Short projects burn their captions in. Restyle them with captions_add.",
+				),
+			};
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return {
+				error: this.invalidOp(
+					sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+				),
+			};
+		return { sequence };
+	}
+
+	private summarizeCues(cues: CaptionCue[]) {
+		return cues.map(({ words: _words, ...cue }) => cue);
+	}
+
+	/** The SRT cues of a Horizontal sequence, as the caption list shows them. */
+	async captionCues(request: unknown) {
+		const parsed = captionCuesRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const found = this.captionSequence(parsed.data);
+		if ("error" in found) return found.error;
+		await useCaptionsStore.getState().loadSpellings();
+		const cues = sequenceCaptionCues({
+			editor: this.editor,
+			sequence: found.sequence,
+		});
+		return {
+			ok: true as const,
+			sequenceId: found.sequence.id,
+			revision: this.getRevision(),
+			cues: this.summarizeCues(cues),
+			...(!this.editor.project.getActive().captions?.sources.length && {
+				hint: "No caption words yet. Transcribe the recordings, then run captions_add.",
+			}),
+		};
+	}
+
+	/** Corrects one cue, the same words across the project, or saves a reusable spelling. */
+	async correctCaption(request: unknown) {
+		const parsed = correctCaptionRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const found = this.captionSequence(parsed.data);
+		if ("error" in found) return found.error;
+		const { cueId, text, scope } = parsed.data;
+		await useCaptionsStore.getState().loadSpellings();
+		const cue = sequenceCaptionCues({
+			editor: this.editor,
+			sequence: found.sequence,
+		}).find(({ id }) => id === cueId);
+		if (!cue)
+			return this.invalidOp(
+				`No cue ${cueId} on this sequence. Read captions_list again.`,
+			);
+		try {
+			const { replacement } = await correctCaption({
+				editor: this.editor,
+				cue,
+				text,
+				scope,
+			});
+			return {
+				ok: true as const,
+				revision: this.getRevision(),
+				scope,
+				...(replacement && { replaced: replacement }),
+				cues: this.summarizeCues(
+					sequenceCaptionCues({ editor: this.editor, sequence: found.sequence }),
+				).filter(
+					(summary) =>
+						summary.start < cue.end + 10 && summary.end > cue.start - 10,
+				),
+			};
+		} catch (error) {
+			if (!(error instanceof CaptionCorrectionError)) throw error;
 			return this.invalidOp(error.message);
 		}
 	}
