@@ -38,7 +38,7 @@ To let an agent edit, register `splice mcp` as a stdio MCP server in your agent 
 }
 ```
 
-`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe`, `transcribe_status`, `detect_pauses`, `raw_sequence`, `rough_cut`, `takes_list`, `captions_add`, `measure_loudness`, `normalize_loudness` and `noise_reduction`.
+`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe`, `transcribe_status`, `detect_pauses`, `raw_sequence`, `rough_cut`, `takes_list`, `captions_add`, `captions_list`, `captions_correct`, `exports_list`, `measure_loudness`, `normalize_loudness` and `noise_reduction`.
 
 Put recordings in the `Footage` folder. `items_import` adds them to the open project as project items that reference the files in place; nothing is copied into the browser. Files you drop or upload in the editor are still stored in the browser, as before. `bun run splice link` prints the editor link of a running `splice`, for example one that `splice mcp` started. The editor header shows whether an agent is connected, and **Stop agent** refuses its edits until you allow them again.
 
@@ -78,6 +78,14 @@ SPLICE_WHISPER_BIN="$PWD/whisper.cpp/build/bin/whisper-cli" bun run splice
 When you create a project, choose its format: **Horizontal** (1920×1080) or **Short** (1080×1920), both at 30 fps. `sequence_get` reports the format.
 
 In a Short project, `rough_cut` also burns in word-by-word captions from the recordings' cached transcripts, in the same undo step. They follow the tightened cut, so a word whose middle was cut away drops out. Pass `captionStyle` to change the defaults: up to 3 words at a time, bold white text on a black box, near the bottom and clear of the Shorts controls. To caption any sequence, or to restyle existing captions, call `captions_add`. It replaces the sequence's Captions track. The captions are ordinary text clips, so you can also edit them in the timeline.
+
+### Horizontal captions and export
+
+A Horizontal video ships as a clean MP4 with a separate SRT, so its captions are never burned in. Open **Captions** in the Library panel and choose **Load transcripts** (or call `captions_add`) to load the recordings' cached transcripts. Splice groups the words heard in the active sequence into SRT cues at sentence ends, pauses and clauses, at most two lines of 42 characters and 6 seconds each. The cues follow every cut and take swap, skip muted audio (so a picture-only repair is captioned from the narration you hear), and keep any filler words the cut kept.
+
+Each cue in the list can play its passage, and **Show in preview** shows the cue at the playhead over the preview, where clicking it selects the cue. Correct a cue for that cue only, everywhere in this project (the words that changed are replaced wherever they are heard), or **Always**, which also saves the spelling under `Profile/spellings.json` for every project. Cue and project corrections are undoable edits saved with the project. `captions_list` and `captions_correct` do the same for the agent.
+
+**Export** in a Horizontal project renders the sequence as it is when you click it, times the SRT against that same edit, and writes both into a staging folder under `Exports`. Only once both are written do they move into `Exports` together, as `<project> <date> <time>.mp4` and `.srt`. If a step fails, nothing is published, earlier exports stay as they were, and the popover names the failed step with **Retry**, which reuses a finished render. The popover lists the project's earlier exports with their date and revision (a hash of the exported edit), marks the one that matches the current edit, and has **Open folder**. `exports_list` reports the same history; starting an export stays the creator's decision.
 
 ## Reduce noise
 
