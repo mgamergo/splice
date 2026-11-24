@@ -184,13 +184,16 @@ export function selectedSentences({
 	return sentences.slice(Math.min(anchor, focus), Math.max(anchor, focus) + 1);
 }
 
+/** Seconds to the millisecond, as agents read them. */
+const toMs = (seconds: number) => Math.round(seconds * 1000) / 1000;
+
 export function summarizeSentence({
 	id,
 	start,
 	end,
 	text,
 }: TranscriptSentence): TranscriptSentenceSummary {
-	return { id, start, end, text };
+	return { id, start: toMs(start), end: toMs(end), text };
 }
 
 export function summarizeSelection({
@@ -203,8 +206,8 @@ export function summarizeSelection({
 	return {
 		sequenceId: sequence.id,
 		sequenceName: sequence.name,
-		start: sentences[0].start,
-		end: Math.max(...sentences.map(({ end }) => end)),
+		start: toMs(sentences[0].start),
+		end: toMs(Math.max(...sentences.map(({ end }) => end))),
 		text: sentences.map(({ text }) => text).join(" "),
 		sentences: sentences.map(summarizeSentence),
 	};
