@@ -645,10 +645,13 @@ describe("noise reduction tools", () => {
 		calls,
 		denoisedNow = [],
 		renderNoiseReduction,
+		switchesSequence = false,
 	}: {
 		calls: Array<[string, unknown]>;
 		/** Recordings whose clips have noise reduction on now. */
 		denoisedNow?: string[];
+		/** Another sequence becomes active between the two source reads. */
+		switchesSequence?: boolean;
 		/** Answers `noiseReduction.render` in place of a fixed result. */
 		renderNoiseReduction?: (params: unknown) => Promise<unknown>;
 	}): RpcCall {
@@ -661,7 +664,8 @@ describe("noise reduction tools", () => {
 				const requested = field({ params, key: "noiseReduction" });
 				return {
 					ok: true,
-					sequenceId: "seq-1",
+					sequenceId:
+						switchesSequence && requested !== undefined ? "seq-2" : "seq-1",
 					revision: 7,
 					audioSources: heard.map((source) => ({
 						...source,
@@ -782,6 +786,23 @@ describe("noise reduction tools", () => {
 			noiseReduction: true,
 			measured: { integratedLufs: -28.5 },
 		});
+	});
+
+	test("noise_reduction changes nothing when the active sequence changes between its reads", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(fakeSplice({ calls, switchesSequence: true }));
+		const result = await client.callTool({
+			name: "noise_reduction",
+			arguments: { expectedRevision: 7, enabled: true },
+		});
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result.content)).toContain(
+			"The active sequence changed while reading it.",
+		);
+		expect(calls.map(([method]) => method)).toEqual([
+			"editor.audioSources",
+			"editor.audioSources",
+		]);
 	});
 
 	test("noise_reduction can target one recording, keep gains, or turn off without rendering", async () => {

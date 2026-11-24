@@ -602,14 +602,21 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					params: { noiseReduction: enabled },
 				});
 				if (!isOk(current)) return editorResult(current);
-				const { sequenceId } = z
-					.object({ sequenceId: z.string() })
-					.parse(current);
+				const sequenceOf = (result: unknown) =>
+					z.object({ sequenceId: z.string() }).parse(result).sequenceId;
+				const sequenceId = sequenceOf(current);
 				const heard = parseAudioSources(current);
 				const fail = (details: { message: string; skipped?: object[] }) => ({
 					...text({ ok: false, ...details }),
 					isError: true,
 				});
+				// Both reads must describe one sequence, or the recordings picked
+				// from the first could be changed in another.
+				if (sequenceOf(before) !== sequenceId)
+					return fail({
+						message:
+							"The active sequence changed while reading it. Call sequence_get and try again.",
+					});
 				const unknown = (projectItemIds ?? []).filter(
 					(id) => !heard.some(({ projectItemId }) => projectItemId === id),
 				);
