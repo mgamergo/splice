@@ -51,14 +51,17 @@ test("a cancelled export stops mixing audio instead of decoding the clips left",
 	const started = new Promise<void>((resolve) => {
 		fetchStarted = resolve;
 	});
-	fetchSpy = spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+	const pendingFetch = (_input: RequestInfo | URL, init?: RequestInit) => {
 		fetchStarted();
 		const signal = init?.signal;
 		return new Promise<Response>((_resolve, reject) => {
 			if (signal?.aborted) return reject(signal.reason);
 			signal?.addEventListener("abort", () => reject(signal.reason));
 		});
-	});
+	};
+	fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(pendingFetch, { preconnect: globalThis.fetch.preconnect }),
+	);
 
 	const controller = new AbortController();
 	const mix = createTimelineAudioBuffer({
