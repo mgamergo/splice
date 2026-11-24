@@ -123,6 +123,37 @@ async function rpc({
 }
 
 /**
+ * Footage/talk.wav and a fake FFmpeg whose silence scan takes `seconds`, then
+ * finds one silence from 1 to 2 s.
+ */
+async function writeSlowScan({
+	root,
+	seconds,
+}: {
+	root: string;
+	seconds: number;
+}) {
+	await mkdir(join(root, "Footage"));
+	await Bun.write(join(root, "Footage", "talk.wav"), "");
+	const ffmpeg = join(root, "Tools", "ffmpeg");
+	await Bun.write(
+		ffmpeg,
+		[
+			"#!/bin/sh",
+			'case "$*" in',
+			`*silencedetect*) sleep ${seconds}`,
+			'  echo "[silencedetect @ 0x1] silence_start: 1" >&2',
+			'  echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2 ;;',
+			'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
+			'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
+			"esac",
+			"",
+		].join("\n"),
+	);
+	await chmod(ffmpeg, 0o755);
+}
+
+/**
  * Runs `body` against a splice whose fake FFmpeg stalls in a pause scan or a
  * noise-reduction scan after writing its process ID, for a recording
  * Footage/talk.wav.
@@ -418,27 +449,10 @@ describe("rpc endpoint", () => {
 	test("answers a rough cut whose pause scan outlasts the idle timeout", async () => {
 		const root = await mkdtemp(join(tmpdir(), "splice-slow-scan-"));
 		try {
-			await mkdir(join(root, "Footage"));
-			await Bun.write(join(root, "Footage", "talk.wav"), "");
-			// A fake FFmpeg whose silence scan stays quiet for 6 s, long past the
-			// 1 s idle timeout. The RPC endpoint is exempt from it; the rough
-			// cut still answers through the client `splice mcp` uses.
-			const ffmpeg = join(root, "Tools", "ffmpeg");
-			await Bun.write(
-				ffmpeg,
-				[
-					"#!/bin/sh",
-					'case "$*" in',
-					"*silencedetect*) sleep 6",
-					'  echo "[silencedetect @ 0x1] silence_start: 1" >&2',
-					'  echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2 ;;',
-					'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
-					'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
-					"esac",
-					"",
-				].join("\n"),
-			);
-			await chmod(ffmpeg, 0o755);
+			// The silence scan stays quiet for 6 s, long past the 1 s idle
+			// timeout. The RPC endpoint is exempt from it; the rough cut still
+			// answers through the client `splice mcp` uses.
+			await writeSlowScan({ root, seconds: 6 });
 			const server = startServer({
 				port: 0,
 				token: TOKEN,
@@ -472,9 +486,61 @@ describe("rpc endpoint", () => {
 				tightening: {
 					pauses: [{ projectItemId: "a", sourceIn: 1, sourceOut: 2 }],
 					fillerWords: [],
+					sequenceId: "raw",
 				},
 			});
 			expect(performance.now() - started).toBeGreaterThan(5_000);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	test("refuses to cut on a tab that connected while the pauses were found", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-tab-swap-"));
+		try {
+			await writeSlowScan({ root, seconds: 2 });
+			const server = startServer({
+				port: 0,
+				token: TOKEN,
+				root,
+				upstream: null,
+			});
+			running.push(server);
+			const { promise: listed, resolve: onListed } =
+				Promise.withResolvers<void>();
+			const measured = connectTab({
+				origin: server.origin,
+				answer: (method) => {
+					if (method !== "editor.roughCutSources")
+						return { ok: true, revision: 3 };
+					onListed();
+					return {
+						ok: true,
+						sequenceId: "raw",
+						items: [{ id: "a", name: "talk.wav", path: "talk.wav" }],
+					};
+				},
+			});
+			await measured.authed;
+			const call = createRpcClient({ origin: server.origin, token: TOKEN });
+			const cut = call({
+				method: "editor.roughCut",
+				params: { expectedRevision: 3, sections: [] },
+			});
+			cut.catch(() => {});
+			await listed;
+			// Same revision, but its sequences and unsaved edits weren't measured.
+			const asked: string[] = [];
+			const other = connectTab({
+				origin: server.origin,
+				answer: (method) => {
+					asked.push(method);
+					return { ok: true, revision: 3 };
+				},
+			});
+			await other.authed;
+			await expect(cut).rejects.toThrow("Another editor tab connected");
+			expect(asked).toEqual([]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

@@ -30,7 +30,12 @@ import { createPauseDetector } from "./pauses";
 import { resolveRoughCutRequest } from "./rough-cut";
 import { createToken, tokensMatch } from "./session";
 import { isLongMethod, rpcDeadlineMs } from "./rpc-client";
-import { BridgeError, DEFAULT_CALL_TIMEOUT_MS, TabBridge } from "./tab-bridge";
+import {
+	BridgeError,
+	DEFAULT_CALL_TIMEOUT_MS,
+	TabBridge,
+	type TabSocket,
+} from "./tab-bridge";
 import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
@@ -269,15 +274,18 @@ export function startServer({
 			let forwarded = params;
 			let tightening: RoughCutTightening | undefined;
 			if (method === "editor.roughCut") {
+				let measuredTab: TabSocket | null | undefined;
 				const resolved = await resolveRoughCutRequest({
 					params,
-					listSources: async (sourceParams) =>
-						roughCutSourcesSchema.parse(
+					listSources: async (sourceParams) => {
+						measuredTab = bridge.currentTab();
+						return roughCutSourcesSchema.parse(
 							await bridge.call({
 								method: "editor.roughCutSources",
 								params: sourceParams,
 							}),
-						),
+						);
+					},
 					pauseRanges: (scan) =>
 						pauses.pauseRanges({ ...scan, signal: request.signal }),
 					fillerCuts: (scan) =>
@@ -292,6 +300,14 @@ export function startServer({
 				});
 				if ("result" in resolved)
 					return Response.json(rpcResult({ id, result: resolved.result }));
+				// A tab that connected during the scan can hold the same sequence
+				// and revision with different edits, so only the measured tab cuts.
+				if (measuredTab !== undefined && bridge.currentTab() !== measuredTab)
+					throw new BridgeError({
+						code: RPC_ERRORS.TAB_DISCONNECTED,
+						message:
+							"Another editor tab connected while Splice found the pauses, so nothing was cut. Run rough_cut again.",
+					});
 				forwarded = resolved.plan;
 				tightening = resolved.tightening;
 			}

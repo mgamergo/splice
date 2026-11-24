@@ -760,6 +760,8 @@ test("resolves automatic pauses and filler words for every recording on the sour
 				{ projectItemId: "b", sourceIn: 4, sourceOut: 5 },
 			],
 			fillerWords: [{ projectItemId: "a", sourceIn: 7, sourceOut: 7.3 }],
+			// The cut goes to the sequence the pauses were measured on.
+			sequenceId: "raw",
 		},
 	});
 });
@@ -849,11 +851,16 @@ test("the plan and apply passes tighten alike and keep captions and gains for th
 		pausePaddingSeconds: 0.2,
 		pauses: [{ projectItemId: "a", sourceIn: 4, sourceOut: 5 }],
 		fillerWords: [],
+		sequenceId: "raw",
 		captions,
 	};
 	expect(planned).toEqual({
 		plan: { ...tighten, plan: true },
-		tightening: { pauses: tighten.pauses, fillerWords: [] },
+		tightening: {
+			pauses: tighten.pauses,
+			fillerWords: [],
+			sequenceId: "raw",
+		},
 	});
 	expect(applied).toEqual({ plan: { ...tighten, sourceGains } });
 	if (!("plan" in applied)) throw new Error("expected a plan");
@@ -878,7 +885,11 @@ test("the apply pass cuts the ranges the plan pass resolved, even after a transc
 	const planned = await resolve({ plan: true });
 	if (!("tightening" in planned) || !planned.tightening)
 		throw new Error("expected the plan's tightening");
-	expect(planned.tightening).toEqual({ pauses: [], fillerWords: [] });
+	expect(planned.tightening).toEqual({
+		pauses: [],
+		fillerWords: [],
+		sequenceId: "raw",
+	});
 
 	transcribed = true;
 	const applied = await resolve({
@@ -891,6 +902,8 @@ test("the apply pass cuts the ranges the plan pass resolved, even after a transc
 			pausePaddingSeconds: 0.2,
 			pauses: [],
 			fillerWords: [],
+			// The apply pass cuts the sequence the plan pass measured.
+			sequenceId: "raw",
 			sourceGains,
 		},
 	});

@@ -460,6 +460,8 @@ const roughCutPassFields = {
 export const roughCutTighteningSchema = z.strictObject({
 	pauses: z.array(itemRangeSchema),
 	fillerWords: z.array(itemRangeSchema),
+	/** The source sequence the ranges were measured on, when `splice` measured them. */
+	sequenceId: z.string().min(1).optional(),
 });
 
 /** What `splice mcp` sends `splice` for `editor.roughCut`: loudness is already measured. */

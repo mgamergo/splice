@@ -114,5 +114,11 @@ async function resolveTightening({
 			fillerWords.push(...cuts.map(range));
 		}
 	}
-	return { pauses: pauses === "auto" ? detected : pauses, fillerWords };
+	// The apply pass cuts the sequence these ranges were measured on, not
+	// whichever one is named Raw by then.
+	return {
+		pauses: pauses === "auto" ? detected : pauses,
+		fillerWords,
+		sequenceId: sources.sequenceId,
+	};
 }
