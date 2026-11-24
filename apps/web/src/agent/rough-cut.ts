@@ -239,8 +239,8 @@ export function audiblePauses({
 }
 
 /**
- * Each pause's silent parts in source seconds, joined across placements, so
- * tightening plans one cut for a pause split across a razor.
+ * Each pause's silent parts in source seconds, joined across the clips of one
+ * placement, so tightening plans one cut for a pause split across a razor.
  */
 function pausesInSource({
 	parts,
@@ -249,18 +249,95 @@ function pausesInSource({
 	parts: SilentPart[];
 	pauses: ItemRange[];
 }): ItemRange[] {
-	const spans: Array<Array<{ start: number; end: number }>> = pauses.map(
-		() => [],
+	return [...Map.groupBy(parts, ({ pauseIndex }) => pauseIndex)].flatMap(
+		([index, found]) =>
+			unionSpans(
+				found.map(({ sourceIn, sourceOut }) => ({
+					start: sourceIn,
+					end: sourceOut,
+				})),
+			).map(({ start, end }) => ({
+				projectItemId: pauses[index].projectItemId,
+				sourceIn: start,
+				sourceOut: end,
+			})),
 	);
-	for (const { pauseIndex, sourceIn, sourceOut } of parts)
-		spans[pauseIndex].push({ start: sourceIn, end: sourceOut });
-	return spans.flatMap((found, index) =>
-		unionSpans(found).map(({ start, end }) => ({
-			projectItemId: pauses[index].projectItemId,
-			sourceIn: start,
-			sourceOut: end,
-		})),
+}
+
+/** A run of heard clips that plays one recording without a jump. */
+type Placement = {
+	projectItemId: string;
+	clipIds: Set<string>;
+	sourceIn: number;
+	sourceOut: number;
+};
+
+/**
+ * The heard clips grouped into placements: a clip that picks up where the one
+ * before it on its track left off, in time and in source, continues it, as the
+ * pieces of a razor do.
+ */
+function continuousPlacements({
+	tracks,
+	projectItems,
+}: {
+	tracks: SequenceTracks;
+	projectItems: ProjectItem[];
+}): Placement[] {
+	const placements: Placement[] = [];
+	const byTrack = Map.groupBy(
+		audibleClips({ tracks, projectItems }),
+		({ trackId }) => trackId,
 	);
+	for (const clips of byTrack.values()) {
+		let last:
+			| {
+					placement: Placement;
+					end: MediaTime;
+					sourceEnd: MediaTime;
+					rate: number;
+			  }
+			| undefined;
+		for (const { clip } of clips.sort(
+			(a, b) => a.clip.startTime - b.clip.startTime,
+		)) {
+			const rate = clip.retime?.rate ?? 1;
+			const sourceEnd = addMediaTime({
+				a: clip.trimStart,
+				b: roundMediaTime({
+					time: getSourceSpanAtClipTime({
+						clipTime: clip.duration,
+						retime: clip.retime,
+					}),
+				}),
+			});
+			const continues =
+				last &&
+				last.placement.projectItemId === clip.mediaId &&
+				last.end === clip.startTime &&
+				last.sourceEnd === clip.trimStart &&
+				last.rate === rate;
+			const placement: Placement =
+				continues && last
+					? last.placement
+					: {
+							projectItemId: clip.mediaId,
+							clipIds: new Set(),
+							sourceIn: mediaTimeToSeconds({ time: clip.trimStart }),
+							sourceOut: 0,
+						};
+			if (placement !== last?.placement) placements.push(placement);
+			placement.clipIds.add(clip.id);
+			placement.sourceOut = mediaTimeToSeconds({ time: sourceEnd });
+			last = {
+				placement,
+				end: addMediaTime({ a: clip.startTime, b: clip.duration }),
+				sourceEnd,
+				rate,
+			};
+		}
+	}
+	return placements;
 }
 
 /** Where each source range shows in the source sequence, on any track. */
@@ -286,6 +363,8 @@ function mapSourceRanges({
 		}
 	});
 }
+
+const byItem = ({ projectItemId }: ItemRange) => projectItemId;
 
 const seconds = (time: number) =>
 	mediaTimeToSeconds({ time: roundMediaTime({ time }) });
@@ -410,18 +489,47 @@ export function buildRoughCut({
 		}).forEach((found, index) =>
 			pauses[parts[index].pauseIndex].push(...found),
 		);
-	// Planned in source seconds, so padding and filler edges follow the audio,
+	// Planned in source seconds for each placement, so padding and filler
+	// edges follow the audio and a pause's padding comes from its own silence,
 	// then kept only where a pause is silent at that placement or where a false
 	// start or filler is.
+	const placements = continuousPlacements({
+		tracks: source.tracks,
+		projectItems,
+	});
+	const placementOf = new Map(
+		placements.flatMap((placement) =>
+			[...placement.clipIds].map((clipId) => [clipId, placement] as const),
+		),
+	);
+	const partsByPlacement = Map.groupBy(silentParts, ({ clipId }) =>
+		placementOf.get(clipId),
+	);
+	const spokenByItem = {
+		falseStarts: Map.groupBy(clamped.falseStarts, byItem),
+		fillerWords: Map.groupBy(clamped.fillerWords, byItem),
+	};
 	const tightening = intersectSpans({
-		spans: map({
-			ranges: planTightenCuts({
-				...clamped,
-				pauses: pausesInSource({ parts: silentParts, pauses: clamped.pauses }),
-				paddingSeconds: plan.pausePaddingSeconds,
-			}),
-			context: "Cut",
-		}).flat(),
+		spans: placements.flatMap((placement) => {
+			const { projectItemId, clipIds, sourceIn, sourceOut } = placement;
+			const here = (ranges: ItemRange[] = []) =>
+				ranges.filter(
+					(range) => range.sourceIn < sourceOut && range.sourceOut > sourceIn,
+				);
+			return map({
+				ranges: planTightenCuts({
+					pauses: pausesInSource({
+						parts: partsByPlacement.get(placement) ?? [],
+						pauses: clamped.pauses,
+					}),
+					falseStarts: here(spokenByItem.falseStarts.get(projectItemId)),
+					fillerWords: here(spokenByItem.fillerWords.get(projectItemId)),
+					paddingSeconds: plan.pausePaddingSeconds,
+				}),
+				context: "Cut",
+				tracks: keepClips({ tracks: heard, keep: ({ id }) => clipIds.has(id) }),
+			}).flat();
+		}),
 		within: [...pauses.flat(), ...falseStarts.flat(), ...fillerWords.flat()],
 	});
 	const takeCuts: Window[] = mapped.flatMap((section) => section.cuts);

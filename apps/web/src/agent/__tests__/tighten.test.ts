@@ -774,10 +774,12 @@ describe("pauses follow what plays", () => {
 		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(2.1, 3);
 	});
 
-	test("cuts a pause only at the placement where every recording is silent", () => {
-		// The first recording's opening 6 s plays again at 24 s, under the
-		// scratch recording.
-		const seconds = (value: number) => mediaTimeFromSeconds({ seconds: value });
+	const seconds = (value: number) => mediaTimeFromSeconds({ seconds: value });
+	/**
+	 * The first recording's opening 6 s plays again at 24 s, under the scratch
+	 * recording.
+	 */
+	const repeatUnderScratch = () => {
 		const repeat = buildClipFromMedia({
 			mediaId: first,
 			mediaType: "video",
@@ -815,6 +817,33 @@ describe("pauses follow what plays", () => {
 				),
 			})),
 		});
+	};
+
+	test("pads a pause from its own silence at each placement", () => {
+		repeatUnderScratch();
+		// The pause is silent throughout at 2 s, but at the repeat only from
+		// source 3 s, where the scratch recording goes quiet. Each cut keeps
+		// 0.2 s of its own silence.
+		const result = cut([at([first, 2, 4.5]), at([scratch, 3, 6])]);
+		expect(result).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 2 } },
+		});
+		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(3.2, 3);
+		expect(result.durationSeconds).toBeCloseTo(26.8, 3);
+		expect(
+			layout(active().tracks.main.clips).filter(([id]) => id === first),
+		).toEqual([
+			[first, 0, 2.2, 0],
+			[first, 2.2, 7.7, 4.3],
+			[first, 21.9, 3.2, 0],
+			[first, 25.1, 1.7, 4.3],
+		]);
+	});
+
+	test("cuts a pause only at the placement where every recording is silent", () => {
+		repeatUnderScratch();
 		/** How much of the scratch recording the new Rough Cut keeps. */
 		const scratchLength = () => {
 			const cutSequence = active();
