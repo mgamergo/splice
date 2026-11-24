@@ -18,6 +18,11 @@ import {
 	type RoughCutTightening,
 	roughCutSourcesSchema,
 } from "@splice/bridge/ops";
+import {
+	EXPORT_FILE_KINDS,
+	isTabApiMethod,
+	type TabApiMethod,
+} from "@splice/bridge/delivery";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	FOOTAGE_FOLDER,
@@ -39,9 +44,14 @@ import {
 import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
+import { createExportStore, type OpenFolder } from "./exports";
+import { createSpellingStore } from "./spellings";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
 const MAX_RPC_BODY_BYTES = 4 * 1024 * 1024;
+const EXPORT_UPLOAD_PATH = new RegExp(
+	`^${BRIDGE_PATHS.api}/exports/([0-9a-f-]{36})/(${EXPORT_FILE_KINDS.join("|")})$`,
+);
 
 type SocketData =
 	| {
@@ -67,6 +77,8 @@ export interface StartServerOptions {
 	isUpstreamReady?: () => boolean;
 	/** Seconds a connection may sit idle. RPC requests are exempt. Tests shorten it. */
 	idleTimeoutSeconds?: number;
+	/** How Open folder shows the Exports folder. Tests replace it. */
+	openFolder?: OpenFolder;
 }
 
 export interface RunningServer {
@@ -159,6 +171,7 @@ export function startServer({
 	upstream,
 	isUpstreamReady = () => true,
 	idleTimeoutSeconds = 120,
+	openFolder,
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
 	const transcription = createTranscriptionJobs({ root });
@@ -168,6 +181,20 @@ export function startServer({
 	});
 	const noiseReduction = createNoiseReducer({ root });
 	const loudness = createLoudnessMeter({ root, noiseReduction });
+	const exportStore = createExportStore({ root, openFolder });
+	const spellings = createSpellingStore({ root });
+	/** What the editor tab may ask of `splice` itself. */
+	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
+		"transcript.words": (params) => transcription.words(params),
+		"spellings.list": () => spellings.list(),
+		"spellings.save": (params) => spellings.save(params),
+		"spellings.remove": (params) => spellings.remove(params),
+		"exports.list": (params) => exportStore.list(params),
+		"exports.begin": (params) => exportStore.begin(params),
+		"exports.publish": (params) => exportStore.publish(params),
+		"exports.abort": (params) => exportStore.abort(params),
+		"exports.open": () => exportStore.open(),
+	};
 	// `signal` aborts when the caller hangs up, so FFmpeg work nobody waits
 	// for stops.
 	const serverJobs = new Map<
@@ -180,6 +207,7 @@ export function startServer({
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
 		["noiseReduction.render", (request) => noiseReduction.render(request)],
+		["exports.list", ({ params }) => exportStore.list(params)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
@@ -242,15 +270,7 @@ export function startServer({
 				const result = await job({ params, signal: request.signal });
 				return Response.json(rpcResult({ id, result }));
 			} catch (error) {
-				return Response.json(
-					rpcError({
-						id,
-						code:
-							error instanceof BridgeError ? error.code : RPC_ERRORS.INTERNAL,
-						message: error instanceof Error ? error.message : String(error),
-						data: error instanceof BridgeError ? error.data : undefined,
-					}),
-				);
+				return errorResponse({ id, error });
 			}
 		}
 		if (isServerMethod(method)) {
@@ -394,6 +414,101 @@ export function startServer({
 				"set-cookie": `${sessionCookieName(actualPort)}=${mediaKey}; Path=${BRIDGE_PATHS.media}; HttpOnly; SameSite=Strict`,
 			},
 		});
+	}
+
+	function errorResponse({
+		id,
+		error,
+	}: {
+		id: RpcId | null;
+		error: unknown;
+	}): Response {
+		return Response.json(
+			rpcError({
+				id,
+				code: error instanceof BridgeError ? error.code : RPC_ERRORS.INTERNAL,
+				message: error instanceof Error ? error.message : String(error),
+				data: error instanceof BridgeError ? error.data : undefined,
+			}),
+		);
+	}
+
+	/**
+	 * The editor tab's calls to `splice`: JSON-RPC posted to `BRIDGE_PATHS.api`,
+	 * and export files put to `<api>/exports/<id>/<kind>`. Like the session
+	 * endpoint, they need the editor's origin and the bridge token.
+	 */
+	async function handleTabApi({
+		request,
+		url,
+		port: actualPort,
+	}: {
+		request: Request;
+		url: URL;
+		port: number;
+	}): Promise<Response> {
+		if (
+			!isAllowedOrigin({
+				origin: request.headers.get("origin"),
+				port: actualPort,
+			})
+		) {
+			return new Response("Forbidden", { status: 403 });
+		}
+		if (!hasBearerToken(request)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+		const upload = EXPORT_UPLOAD_PATH.exec(url.pathname);
+		if (upload) {
+			if (request.method !== "PUT")
+				return new Response("Method not allowed", { status: 405 });
+			const kind = EXPORT_FILE_KINDS.find((value) => value === upload[2]);
+			const offset = Number(url.searchParams.get("offset") ?? 0);
+			if (!kind || !Number.isSafeInteger(offset) || offset < 0)
+				return new Response("Bad upload", { status: 400 });
+			try {
+				const result = await exportStore.write({
+					exportId: upload[1],
+					kind,
+					offset,
+					body: request.body,
+				});
+				return Response.json(rpcResult({ id: null, result }));
+			} catch (error) {
+				return errorResponse({ id: null, error });
+			}
+		}
+		if (url.pathname !== BRIDGE_PATHS.api)
+			return new Response("Not found", { status: 404 });
+		if (request.method !== "POST")
+			return new Response("Method not allowed", { status: 405 });
+		const text = await request.text();
+		const message =
+			text.length <= MAX_RPC_BODY_BYTES ? parseRpcMessage(text) : null;
+		if (!message || !isRpcRequest(message))
+			return Response.json(
+				rpcError({
+					id: null,
+					code: RPC_ERRORS.INVALID_REQUEST,
+					message: "Expected a JSON-RPC request",
+				}),
+			);
+		const { id, method, params } = message;
+		if (!isTabApiMethod(method))
+			return Response.json(
+				rpcError({
+					id,
+					code: RPC_ERRORS.METHOD_NOT_FOUND,
+					message: `Unknown method ${method}`,
+				}),
+			);
+		try {
+			return Response.json(
+				rpcResult({ id, result: await tabApi[method](params) }),
+			);
+		} catch (error) {
+			return errorResponse({ id, error });
+		}
 	}
 
 	async function handleMedia({
@@ -611,6 +726,14 @@ export function startServer({
 			if (url.pathname === BRIDGE_PATHS.session) {
 				return handleSession({ request, port: actualPort });
 			}
+			if (
+				url.pathname === BRIDGE_PATHS.api ||
+				url.pathname.startsWith(`${BRIDGE_PATHS.api}/`)
+			) {
+				// An export's MP4 can take a while to stream in.
+				srv.timeout(request, 0);
+				return handleTabApi({ request, url, port: actualPort });
+			}
 			if (url.pathname.startsWith(BRIDGE_PATHS.media)) {
 				// The first request for denoised audio renders it, which takes a while.
 				if (wantsDenoisedAudio(url)) srv.timeout(request, 0);
@@ -693,6 +816,7 @@ export function startServer({
 			await Promise.all([
 				pauses.stop(),
 				transcription.stop(),
+				exportStore.stop(),
 				loudness.stop(),
 				noiseReduction.stop(),
 			]);
