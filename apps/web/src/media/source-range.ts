@@ -36,9 +36,11 @@ export function getClipSourceRange({
 		0,
 		getSourceTimeAtClipTime({ clipTime: duration, retime }),
 	);
-	// A clip that ends before its source starts plays none of it.
-	const end = Math.max(start, trimStart + span + SOURCE_RANGE_TAIL_SECONDS);
-	return { start, end };
+	const outPoint = trimStart + span;
+	// A clip that ends before its source starts plays none of it; the tail
+	// pads a range, it never makes an empty one.
+	if (outPoint <= start) return { start, end: start };
+	return { start, end: outPoint + SOURCE_RANGE_TAIL_SECONDS };
 }
 
 /** The span to decode so a range comes out right: the range plus decoder pre-roll. */
@@ -48,6 +50,14 @@ export function getDecodeWindow({ range }: { range: SourceRange }): SourceRange 
 		end: range.end,
 	};
 }
+
+/**
+ * How far a chunk's timestamp may sit from where the chunk before it ended and
+ * still count as continuous. Containers store timestamps coarser than a sample
+ * (Matroska and WebM in whole milliseconds), so each chunk of an unbroken
+ * stream lands up to about 1 ms off. Real gaps in a source are far longer.
+ */
+const TIMESTAMP_TOLERANCE_SECONDS = 0.002;
 
 /** The slice of AudioBuffer that range assembly reads. */
 type AudioChunk = Pick<
@@ -65,8 +75,10 @@ export interface AssembledAudio {
  * Copies decoded chunks into arrays that cover exactly one source range, as
  * the chunks stream in. Chunks are placed by timestamp, so the decoder's
  * lead-in before the range and its overshoot past the end are dropped, and a
- * gap in the source stays silent. Memory is the range's length, never the
- * source's.
+ * gap in the source stays silent. A chunk within the container's timestamp
+ * precision of where the last one ended follows it directly, so rounded
+ * timestamps never open gaps or overlaps in continuous audio. Memory is the
+ * range's length, never the source's.
  */
 export function createAudioRangeAssembler({
 	range,
@@ -79,6 +91,9 @@ export function createAudioRangeAssembler({
 	let startSample = 0;
 	let channels: Float32Array<ArrayBuffer>[] = [];
 	let written = 0;
+	let toleranceSamples = 0;
+	/** Where the last chunk ended, relative to the range's start. */
+	let expectedOffset: number | null = null;
 
 	return {
 		add({ buffer, timestamp }: { buffer: AudioChunk; timestamp: number }) {
@@ -87,6 +102,10 @@ export function createAudioRangeAssembler({
 				// size the arrays from the first chunk.
 				sampleRate = buffer.sampleRate;
 				startSample = Math.round(range.start * sampleRate);
+				toleranceSamples = Math.max(
+					1,
+					Math.round(TIMESTAMP_TOLERANCE_SECONDS * sampleRate),
+				);
 				const length = Math.max(
 					0,
 					Math.round(range.end * sampleRate) - startSample,
@@ -97,7 +116,14 @@ export function createAudioRangeAssembler({
 				);
 			}
 			const length = channels[0].length;
-			const offset = Math.round(timestamp * sampleRate) - startSample;
+			let offset = Math.round(timestamp * sampleRate) - startSample;
+			if (
+				expectedOffset !== null &&
+				Math.abs(offset - expectedOffset) <= toleranceSamples
+			) {
+				offset = expectedOffset;
+			}
+			expectedOffset = offset + buffer.length;
 			const from = Math.max(0, -offset);
 			const to = Math.min(buffer.length, length - offset);
 			if (to <= from) return;

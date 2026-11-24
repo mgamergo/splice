@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ALL_FORMATS, BlobSource, EncodedPacketSink, Input } from "mediabunny";
 import {
 	createAudioRangeAssembler,
 	DECODER_PREROLL_SECONDS,
@@ -46,6 +47,13 @@ describe("getClipSourceRange", () => {
 
 	test("is empty, not reversed, when the clip ends before the source starts", () => {
 		expect(getClipSourceRange({ trimStart: -1, duration: 0.25 })).toEqual({
+			start: 0,
+			end: 0,
+		});
+	});
+
+	test("stays empty when the clip ends within the tail of the source's start", () => {
+		expect(getClipSourceRange({ trimStart: -1, duration: 0.99 })).toEqual({
 			start: 0,
 			end: 0,
 		});
@@ -133,5 +141,127 @@ describe("createAudioRangeAssembler", () => {
 		expect(assembler.finish()).toBeNull();
 		assembler.add({ timestamp: 0, buffer: chunk({ channels: [[1, 2, 3]] }) });
 		expect(assembler.finish()).toBeNull();
+	});
+});
+
+/** A decoded chunk whose samples are their own index in the stream, so any gap or overlap shows. */
+function indexedChunk({
+	first,
+	length,
+	sampleRate,
+}: {
+	first: number;
+	length: number;
+	sampleRate: number;
+}) {
+	return chunk({
+		channels: [Array.from({ length }, (_, index) => first + index)],
+		sampleRate,
+	});
+}
+
+/** Indices of the samples that don't follow the one before them. */
+function discontinuities(samples: Float32Array): number[] {
+	const breaks: number[] = [];
+	for (let index = 1; index < samples.length; index++) {
+		if (samples[index] !== samples[index - 1] + 1) breaks.push(index);
+	}
+	return breaks;
+}
+
+describe("createAudioRangeAssembler with container timestamps", () => {
+	const AAC_FRAME = 1024;
+	const SAMPLE_RATE = 48000;
+
+	test("joins continuous chunks whose timestamps are rounded to milliseconds", () => {
+		// 1024-sample AAC frames at 48 kHz last 21.33 ms; Matroska stores 0, 21, 43, 64…
+		const assembler = createAudioRangeAssembler({
+			range: { start: 0, end: 1 },
+			maxChannels: 2,
+		});
+		for (let frame = 0; frame * AAC_FRAME < SAMPLE_RATE + AAC_FRAME; frame++) {
+			const first = frame * AAC_FRAME;
+			assembler.add({
+				timestamp: Math.round((first / SAMPLE_RATE) * 1000) / 1000,
+				buffer: indexedChunk({
+					first,
+					length: AAC_FRAME,
+					sampleRate: SAMPLE_RATE,
+				}),
+			});
+		}
+		const samples = assembler.finish()?.channels[0] ?? new Float32Array();
+		expect(samples).toHaveLength(SAMPLE_RATE);
+		expect(samples[0]).toBe(0);
+		expect(discontinuities(samples)).toEqual([]);
+	});
+
+	test("still leaves a real gap silent at 48 kHz", () => {
+		const assembler = createAudioRangeAssembler({
+			range: { start: 0, end: 0.1 },
+			maxChannels: 2,
+		});
+		assembler.add({
+			timestamp: 0,
+			buffer: indexedChunk({ first: 1, length: 960, sampleRate: SAMPLE_RATE }),
+		});
+		// 20 ms of the source are missing before the next chunk.
+		assembler.add({
+			timestamp: 0.04,
+			buffer: indexedChunk({ first: 1, length: 960, sampleRate: SAMPLE_RATE }),
+		});
+		const samples = assembler.finish()?.channels[0] ?? new Float32Array();
+		expect(Array.from(samples.subarray(960, 1920)).every((v) => v === 0)).toBe(
+			true,
+		);
+		expect(samples[1920]).toBe(1);
+	});
+
+	test("assembles a 48 kHz AAC tone in Matroska without gaps or overlaps", async () => {
+		// One second of a sine, encoded by FFmpeg:
+		// ffmpeg -f lavfi -i sine=frequency=440:sample_rate=48000:duration=1 -c:a aac -b:a 24k -ac 1 tone-48k-aac.mkv
+		const bytes = await Bun.file(
+			new URL("./fixtures/tone-48k-aac.mkv", import.meta.url),
+		).arrayBuffer();
+		const input = new Input({
+			source: new BlobSource(new Blob([bytes])),
+			formats: ALL_FORMATS,
+		});
+		try {
+			const track = await input.getPrimaryAudioTrack();
+			if (!track) throw new Error("The fixture has no audio track");
+			expect(track.sampleRate).toBe(SAMPLE_RATE);
+
+			const range = { start: 0.25, end: 0.75 };
+			const assembler = createAudioRangeAssembler({ range, maxChannels: 2 });
+			// Each AAC packet decodes to the next 1024 samples of the stream; the
+			// container's timestamps say where they go.
+			let first = 0;
+			const timestamps: number[] = [];
+			for await (const packet of new EncodedPacketSink(track).packets()) {
+				timestamps.push(packet.timestamp);
+				assembler.add({
+					timestamp: packet.timestamp,
+					buffer: indexedChunk({
+						first,
+						length: AAC_FRAME,
+						sampleRate: SAMPLE_RATE,
+					}),
+				});
+				first += AAC_FRAME;
+			}
+			// The timestamps really are rounded, or this test proves nothing.
+			const offFrame = timestamps.filter((timestamp) => {
+				const sample = timestamp * SAMPLE_RATE;
+				return Math.abs(sample - Math.round(sample / AAC_FRAME) * AAC_FRAME) > 1;
+			});
+			expect(offFrame.length).toBeGreaterThan(timestamps.length / 2);
+
+			const samples = assembler.finish()?.channels[0] ?? new Float32Array();
+			expect(samples).toHaveLength((range.end - range.start) * SAMPLE_RATE);
+			expect(discontinuities(samples)).toEqual([]);
+		} finally {
+			input.dispose();
+		}
 	});
 });
