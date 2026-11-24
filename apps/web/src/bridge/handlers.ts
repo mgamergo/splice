@@ -73,6 +73,8 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.correctCaption(params);
 		},
+		"editor.cutTranscript": (params) => api.cutTranscript(params),
+		"editor.transcriptSelection": (params) => api.transcriptSelection(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>
