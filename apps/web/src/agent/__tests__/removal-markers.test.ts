@@ -317,7 +317,7 @@ describe("removal markers", () => {
 			raw: JSON.parse(JSON.stringify(markers())),
 		});
 		expect(saved[0]?.data?.badTakePlacements).toEqual([
-			[{ trackId: expect.any(String), volume: 18.1 }],
+			[{ trackId: expect.any(String), volume: 18.1, noiseReduction: false }],
 		]);
 
 		expect(swap()).toMatchObject({ ok: true });

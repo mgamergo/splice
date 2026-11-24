@@ -8,6 +8,7 @@ import type { EditorCore } from "@/core";
 import { collectAudioClipSources } from "@/media/audio";
 import type { ProjectItem } from "@/media/types";
 import type { TimelineClip } from "@/timeline";
+import type { VideoClip } from "@/timeline/types";
 import { addMediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 const first = "recording-1";
@@ -535,7 +536,12 @@ const keyframedVolume = {
 	},
 } satisfies ClipAnimations;
 
-test.each([
+const swapBackCases: Array<{
+	name: string;
+	swapped: { noiseReduction: boolean; volume: number };
+	remaining: Pick<VideoClip, "params"> | Pick<VideoClip, "animations">;
+	saved: { volume: number; noiseReduction: boolean };
+}> = [
 	{
 		name: "denoised at +7 dB beside a plain -5 dB clip",
 		swapped: { noiseReduction: true, volume: 7 },
@@ -554,9 +560,10 @@ test.each([
 		remaining: { params: { noiseReduction: true, volume: 7 } },
 		saved: { volume: 0, noiseReduction: false },
 	},
-])(
-	"a take swapped out and back plays as it did, $name of its recording",
-	({ swapped, remaining, saved }) => {
+];
+
+for (const { name, swapped, remaining, saved } of swapBackCases)
+	test(`a take swapped out and back plays as it did, ${name} of its recording`, () => {
 		const { tracks } = active();
 		editor.timeline.updateTracks({
 			...tracks,
@@ -615,5 +622,4 @@ test.each([
 			back.params.noiseReduction ?? false,
 			back.params.volume,
 		]).toEqual([first, swapped.noiseReduction, swapped.volume]);
-	},
-);
+	});
