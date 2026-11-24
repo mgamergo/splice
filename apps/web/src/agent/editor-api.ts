@@ -1,6 +1,7 @@
 import {
 	buildRawSequence,
 	buildRoughCut,
+	playedClips,
 	RAW_SEQUENCE_NAME,
 	sequenceDurationSeconds,
 } from "@/agent/rough-cut";
@@ -9,7 +10,6 @@ import { CaptionError, withCaptionTrack } from "@/agent/captions";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	applySourceGains,
-	audibleClips,
 	collectAudioSources,
 	formatGain,
 	LoudnessError,
@@ -187,6 +187,7 @@ export class EditorApi {
 	 * The recordings heard on a rough cut's source sequence, so `splice` can
 	 * find their pauses. A recording only on muted tracks or clips, or with its
 	 * audio turned off, isn't listed: its silences say nothing about what plays.
+	 * Nor is a missing recording, which playback skips.
 	 */
 	roughCutSources(request: unknown): RoughCutSources {
 		const parsed = roughCutSourcesRequestSchema.safeParse(request ?? {});
@@ -195,7 +196,7 @@ export class EditorApi {
 		if ("ok" in source) return source;
 		const projectItems = this.editor.media.getProjectItems();
 		const heard = new Set(
-			audibleClips({ tracks: source.tracks, projectItems }).map(
+			playedClips({ tracks: source.tracks, projectItems }).map(
 				({ clip }) => clip.mediaId,
 			),
 		);

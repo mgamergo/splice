@@ -652,7 +652,13 @@ test("rejects a false start that isn't on the source sequence and reports source
 describe("pauses follow what plays", () => {
 	const scratch = "scratch";
 	/** A scratch recording under Main's first 12 s, on its own audio track. */
-	const addScratch = ({ muted }: { muted: boolean }) => {
+	const addScratch = ({
+		muted,
+		missing = false,
+	}: {
+		muted: boolean;
+		missing?: boolean;
+	}) => {
 		editor.media.setProjectItems({
 			projectItems: [
 				...editor.media.getProjectItems(),
@@ -662,6 +668,7 @@ describe("pauses follow what plays", () => {
 					type: "audio",
 					duration: 12,
 					file: new File([], scratch),
+					missing,
 				},
 			],
 		});
@@ -734,6 +741,28 @@ describe("pauses follow what plays", () => {
 		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
 		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(1.197, 3);
 		expect(result.durationSeconds).toBeCloseTo(22.803, 3);
+	});
+
+	test("skips a missing recording, which playback skips too", () => {
+		addScratch({ muted: false, missing: true });
+		expect(api.roughCutSources({})).toMatchObject({
+			items: [{ id: first }, { id: second }],
+		});
+		// The missing scratch clip neither blocks Main's pause nor is scanned.
+		const result = cut([at([first, 2, 4.5])]);
+		expect(result).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 1 } },
+		});
+		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(2.1, 3);
+		// Loudness still lists it, so the report says it was skipped.
+		expect(api.audioSources({})).toMatchObject({
+			ok: true,
+			audioSources: expect.arrayContaining([
+				expect.objectContaining({ projectItemId: scratch, missing: true }),
+			]),
+		});
 	});
 
 	test("keeps a pause under library music, which can't be scanned", () => {

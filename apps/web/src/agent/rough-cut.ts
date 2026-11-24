@@ -144,6 +144,26 @@ function keepClips({
 	};
 }
 
+/**
+ * The audible clips whose recording plays. A recording whose file left
+ * Footage keeps its clips, but playback skips them, so they have no pauses to
+ * find and sound over none.
+ */
+export function playedClips({
+	tracks,
+	projectItems,
+}: {
+	tracks: SequenceTracks;
+	projectItems: ProjectItem[];
+}): ReturnType<typeof audibleClips> {
+	const missing = new Set(
+		projectItems.filter((item) => item.missing).map(({ id }) => id),
+	);
+	return audibleClips({ tracks, projectItems }).filter(
+		({ clip }) => !missing.has(clip.mediaId),
+	);
+}
+
 /** A part of a pause that is silent at one placement of its recording. */
 export type SilentPart = ItemRange & {
 	/** Index of the pause in the list given to `audiblePauses`. */
@@ -159,7 +179,8 @@ export type SilentPart = ItemRange & {
  * recording's sound, isn't cut. The same source time can be silent at one
  * placement of a recording and under another recording's sound at the next,
  * so a part only holds for its own clip. Audio that wasn't scanned, such as
- * library music, which has no project item, sounds throughout.
+ * library music, which has no project item, sounds throughout; a missing
+ * recording's clips are silent.
  */
 export function audiblePauses({
 	tracks,
@@ -170,7 +191,7 @@ export function audiblePauses({
 	pauses: ItemRange[];
 	projectItems: ProjectItem[];
 }): SilentPart[] {
-	const placed = audibleClips({ tracks, projectItems }).map(({ clip }) => {
+	const placed = playedClips({ tracks, projectItems }).map(({ clip }) => {
 		const { startTime, trimStart, retime } = clip;
 		const toSequence = (source: number) =>
 			startTime +
