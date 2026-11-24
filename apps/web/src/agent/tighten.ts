@@ -237,7 +237,8 @@ function firstAbove({ values, at }: { values: number[]; at: number }) {
  * gap between two cuts, shorter than `minimum`. `clips` are the clip bounds on
  * every track. Each edge moves to the bound of a clip it would leave a sliver
  * of, then checks again from there, so a clip that starts just before another
- * one isn't left with the difference.
+ * one isn't left with the difference. Only a clip the edge crosses can leave a
+ * sliver: a short clip that merely touches a cut stays.
  */
 export function closeSlivers<T extends Span>({
 	cuts,
@@ -256,7 +257,12 @@ export function closeSlivers<T extends Span>({
 		for (;;) {
 			// Sorted by start, so the first clip the edge would leave a sliver of reaches furthest back.
 			let i = firstAbove({ values: starts, at: at - minimum });
-			while (i < byStart.length && byStart[i].start < at && byStart[i].end < at)
+			// A clip that ends at the edge is untouched by the cut.
+			while (
+				i < byStart.length &&
+				byStart[i].start < at &&
+				byStart[i].end <= at
+			)
 				i++;
 			if (i === byStart.length || byStart[i].start >= at) return at;
 			at = byStart[i].start;
@@ -270,7 +276,8 @@ export function closeSlivers<T extends Span>({
 				i < byEnd.length && byEnd[i].end - at < minimum;
 				i++
 			)
-				if (byEnd[i].start <= at) reach = byEnd[i].end;
+				// A clip that starts at the edge is untouched by the cut.
+				if (byEnd[i].start < at) reach = byEnd[i].end;
 			if (reach === at) return at;
 			at = reach;
 		}

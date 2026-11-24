@@ -162,6 +162,33 @@ describe("closeSlivers", () => {
 		).toEqual([{ start: 9.98, end: 11 }]);
 	});
 
+	test("leaves a short clip that only touches a cut", () => {
+		expect(
+			closeSlivers({
+				cuts: [{ start: 10, end: 11 }],
+				clips: [
+					{ start: 0, end: 9.95 },
+					{ start: 9.95, end: 10 },
+					{ start: 10, end: 11 },
+					{ start: 11, end: 11.05 },
+					{ start: 11.05, end: 20 },
+				],
+				minimum: 2 / 30,
+			}),
+		).toEqual([{ start: 10, end: 11 }]);
+		// The remnants of a clip the cut crosses still close.
+		expect(
+			closeSlivers({
+				cuts: [{ start: 10, end: 11 }],
+				clips: [
+					{ start: 9.95, end: 10.5 },
+					{ start: 10.5, end: 11.05 },
+				],
+				minimum: 2 / 30,
+			}),
+		).toEqual([{ start: 9.95, end: 11.05 }]);
+	});
+
 	test("measures each moment once", () => {
 		expect(
 			measureSpans({
