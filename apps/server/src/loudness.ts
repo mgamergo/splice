@@ -461,29 +461,54 @@ export function createLoudnessMeter({
 			render = { name: basename(input), info: await stat(input) };
 		}
 		const key = loudnessCacheKey({ path, info, ranges, render });
-		return { input, key, cachePath: join(cacheDir, `${key}.json`) };
+		return {
+			input,
+			info,
+			render,
+			key,
+			cachePath: join(cacheDir, `${key}.json`),
+		};
+	}
+	type Identified = Awaited<ReturnType<typeof identify>>;
+
+	const sameFile = ({ a, b }: { a: FileIdentity; b: FileIdentity }) =>
+		fileIdentity(a).join() === fileIdentity(b).join();
+
+	/**
+	 * Whether the recording, and the render when one was measured, are still
+	 * the files measured. Checked from their identities alone: rendering again
+	 * here would only spend minutes before a stale result is thrown away.
+	 */
+	async function stillMeasured({
+		target,
+		identified: { input, info, render },
+	}: {
+		target: Target;
+		identified: Identified;
+	}): Promise<boolean> {
+		const current = await resolveRecording({ root, path: target.path });
+		if (!sameFile({ a: current.info, b: info })) return false;
+		if (!render) return true;
+		const rendered = await stat(input).catch(() => null);
+		return rendered !== null && sameFile({ a: rendered, b: render.info });
 	}
 
 	async function measureAndCache({
 		target,
-		input,
-		key,
-		cachePath,
+		identified,
 	}: {
 		target: Target;
-		input: string;
-		key: string;
-		cachePath: string;
+		identified: Identified;
 	}): Promise<LoudnessMeasurement> {
 		const measurement = await measure({
 			root,
-			source: input,
+			source: identified.input,
 			ranges: target.ranges,
 			signal,
 		});
-		const current = await identify(target);
-		if (current.key !== key)
+		if (!(await stillMeasured({ target, identified })))
 			throw new Error("Footage changed while measuring. Measure it again.");
+		const { cachePath } = identified;
 		await mkdir(cacheDir, { recursive: true });
 		const temporary = await mkdtemp(join(cacheDir, ".job-"));
 		try {
@@ -505,20 +530,16 @@ export function createLoudnessMeter({
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
 			const target = { path, ranges, denoised };
-			const { input, key, cachePath } = await identify(target);
+			const identified = await identify(target);
+			const { key } = identified;
 			signal.throwIfAborted();
 			let pending = active.get(key);
 			if (!pending) {
-				pending = readCache(cachePath).then(async (cached) =>
+				pending = readCache(identified.cachePath).then(async (cached) =>
 					cached
 						? { ...cached, cached: true }
 						: {
-								...(await measureAndCache({
-									target,
-									input,
-									key,
-									cachePath,
-								})),
+								...(await measureAndCache({ target, identified })),
 								cached: false,
 							},
 				);

@@ -360,6 +360,55 @@ test("loudness with noise reduction on measures the render, cached apart from th
 		await meter.stop();
 	}));
 
+test("a denoised measurement goes stale without rendering again when the source or render changes mid-measure", () =>
+	withRoot(async (root) => {
+		const source = join(root, "Footage", "take.wav");
+		await writeFile(source, "source");
+		await mkdir(join(root, "Cache", "noise-reduction"), { recursive: true });
+		const rendered = join(root, "Cache", "noise-reduction", "x.wav");
+		await writeFile(rendered, "render");
+		let ensured = 0;
+		let replace: () => Promise<void> = async () => undefined;
+		const meter = createLoudnessMeter({
+			root,
+			noiseReduction: {
+				ensure: async () => {
+					ensured += 1;
+					return { file: rendered, cached: true };
+				},
+			},
+			measure: async () => {
+				await replace();
+				return { integratedLufs: -20, truePeakDbtp: -6, lraLu: 3 };
+			},
+		});
+		const request = { path: "take.wav", noiseReduction: true };
+		const rewrite = (file: string) => async () => {
+			await Bun.sleep(10);
+			await rm(file);
+			await writeFile(file, "replaced");
+		};
+
+		replace = rewrite(source);
+		await expect(meter.measure(request)).rejects.toThrow(
+			"Footage changed while measuring",
+		);
+		expect(ensured).toBe(1);
+
+		replace = rewrite(rendered);
+		await expect(meter.measure(request)).rejects.toThrow(
+			"Footage changed while measuring",
+		);
+		expect(ensured).toBe(2);
+
+		replace = () => rm(rendered);
+		await expect(meter.measure(request)).rejects.toThrow(
+			"Footage changed while measuring",
+		);
+		expect(ensured).toBe(3);
+		await meter.stop();
+	}));
+
 const ffmpeg = Bun.which("ffmpeg");
 
 async function ffmpegLog(args: string[]): Promise<string> {
