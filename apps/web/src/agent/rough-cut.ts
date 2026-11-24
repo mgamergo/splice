@@ -435,17 +435,25 @@ export function buildRoughCut({
 			start: clip.startTime,
 			end: roundMediaTime({ time: clip.startTime + clip.duration }),
 		}));
-	const cuts = closeSlivers({
-		cuts: [...takeCuts, ...tightening],
-		// The whole timeline counts as a clip, so a cut never leaves a sliver of its start or end.
-		clips: [
-			...clips,
-			{
-				start: ZERO_MEDIA_TIME,
-				end: calculateTotalDuration({ tracks: source.tracks }),
-			},
-		],
-		minimum: sliverDuration,
+	const closeAll = (removed: Window[]) =>
+		closeSlivers({
+			cuts: removed,
+			// The whole timeline counts as a clip, so a cut never leaves a sliver of its start or end.
+			clips: [
+				...clips,
+				{
+					start: ZERO_MEDIA_TIME,
+					end: calculateTotalDuration({ tracks: source.tracks }),
+				},
+			],
+			minimum: sliverDuration,
+		});
+	const spoken = [...takeCuts, ...falseStarts.flat(), ...fillerWords.flat()];
+	// A pause cut may only grow over silence found at its placement: a sliver
+	// between two pauses can be a short word the detector kept.
+	const cuts = intersectSpans({
+		spans: closeAll([...takeCuts, ...tightening]),
+		within: [...closeAll(spoken), ...pauses.flat()],
 	});
 
 	let tracks = source.tracks;
@@ -499,7 +507,6 @@ export function buildRoughCut({
 		found: fillerWords,
 		without: [...takeCuts, ...falseStarts.flat()],
 	});
-	const spoken = [...takeCuts, ...falseStarts.flat(), ...fillerWords.flat()];
 	const removedPauses = {
 		...summarize({ found: pauses, without: spoken, within: cuts }),
 		removedSeconds: seconds(

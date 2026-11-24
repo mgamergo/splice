@@ -474,6 +474,28 @@ test("keeps separated audio linked to the video when tightening across two files
 	);
 });
 
+test("keeps a sound shorter than a sliver between two pauses", () => {
+	// 40 ms of sound between the pauses is under two frames at 30 fps.
+	const result = api.roughCut({
+		expectedRevision: api.getRevision(),
+		pauses: [at([first, 2, 3]), at([first, 3.04, 4])],
+		pausePaddingSeconds: 0,
+	});
+	expect(result).toMatchObject({
+		ok: true,
+		tightening: { pauses: { count: 2 }, sliverSeconds: 0 },
+	});
+	if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+	expect(result.tightening.pauses.removedSeconds).toBeCloseTo(1.96, 3);
+	expect(result.durationSeconds).toBeCloseTo(22.04, 3);
+	expect(layout(active().tracks.main.clips)).toEqual([
+		[first, 0, 2, 0],
+		[first, 2, 0.04, 3],
+		[first, 2.04, 8, 4],
+		[second, 10.04, 12, 0],
+	]);
+});
+
 test("Restore and Swap still work on a tightened Rough Cut", () => {
 	expect(
 		api.roughCut({ ...plan, expectedRevision: api.getRevision() }),
