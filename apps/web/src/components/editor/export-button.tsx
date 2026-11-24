@@ -123,10 +123,9 @@ function ExportPopover({
 			},
 		});
 
-		if (result.cancelled) {
-			editor.project.clearExportState();
-			return;
-		}
+		// The project manager has already reset the state, possibly for an export
+		// that replaced this one.
+		if (result.cancelled) return;
 
 		if (result.success && result.buffer) {
 			downloadBuffer({

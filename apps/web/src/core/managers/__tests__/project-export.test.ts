@@ -1,0 +1,132 @@
+import { describe, expect, test } from "bun:test";
+import type { EditorCore } from "@/core";
+import type { ExportResult } from "@/export";
+import { ProjectManager } from "@/core/managers/project-manager";
+
+/** One call to the fake renderer's exportProject, finished by the test. */
+interface FakeExport {
+	signal: AbortSignal;
+	onProgress?: ({ progress }: { progress: number }) => void;
+	finish: (result: ExportResult) => void;
+}
+
+/** A ProjectManager whose renderer records each export and lets the test finish it. */
+function setup() {
+	const exports: FakeExport[] = [];
+	const editor = {
+		renderer: {
+			exportProject: ({
+				signal,
+				onProgress,
+			}: {
+				signal: AbortSignal;
+				onProgress?: ({ progress }: { progress: number }) => void;
+			}) =>
+				new Promise<ExportResult>((finish) => {
+					exports.push({ signal, onProgress, finish });
+				}),
+		},
+	};
+	// The export path only reaches the renderer.
+	const project = new ProjectManager(editor as unknown as EditorCore);
+	return { project, exports };
+}
+
+/** Lets pending promise callbacks run. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const OPTIONS = { format: "mp4", quality: "high" } as const;
+
+describe("ProjectManager export", () => {
+	test("a restarted export waits for the cancelled one to stop drawing", async () => {
+		const { project, exports } = setup();
+
+		const first = project.export({ options: OPTIONS });
+		await flush();
+		expect(exports).toHaveLength(1);
+
+		// Closing the dialog cancels the export and clears its state...
+		project.cancelExport();
+		project.clearExportState();
+		expect(exports[0].signal.aborted).toBe(true);
+		expect(project.getExportState().isExporting).toBe(false);
+		// ...but the cancelled export still holds the canvas until it stops.
+		expect(project.isExportRunning()).toBe(true);
+
+		const second = project.export({ options: OPTIONS });
+		await flush();
+		// The second export doesn't draw while the first is still stopping.
+		expect(exports).toHaveLength(1);
+
+		exports[0].finish({ success: false, cancelled: true });
+		expect(await first).toEqual({ success: false, cancelled: true });
+		await flush();
+		expect(exports).toHaveLength(2);
+		expect(exports[1].signal.aborted).toBe(false);
+		// The first export's end leaves the second one's state alone.
+		expect(project.getExportState().isExporting).toBe(true);
+		expect(project.isExportRunning()).toBe(true);
+
+		exports[1].onProgress?.({ progress: 0.5 });
+		expect(project.getExportState().progress).toBe(0.5);
+
+		const buffer = new ArrayBuffer(8);
+		exports[1].finish({ success: true, buffer });
+		expect(await second).toEqual({ success: true, buffer });
+		expect(project.getExportState()).toMatchObject({
+			isExporting: false,
+			result: { success: true },
+		});
+		expect(project.isExportRunning()).toBe(false);
+	});
+
+	test("ignores progress and results from an export another one replaced", async () => {
+		const { project, exports } = setup();
+
+		const first = project.export({ options: OPTIONS });
+		await flush();
+		const second = project.export({ options: OPTIONS });
+		await flush();
+		// Starting the second cancels the first through its own signal.
+		expect(exports[0].signal.aborted).toBe(true);
+
+		// The first export reports a frame and even finishes before it notices.
+		exports[0].onProgress?.({ progress: 0.9 });
+		expect(project.getExportState()).toMatchObject({
+			isExporting: true,
+			progress: 0,
+		});
+		exports[0].finish({ success: true, buffer: new ArrayBuffer(8) });
+		expect(await first).toEqual({ success: false, cancelled: true });
+		expect(project.getExportState()).toMatchObject({
+			isExporting: true,
+			result: null,
+		});
+
+		await flush();
+		expect(exports).toHaveLength(2);
+		exports[1].finish({ success: false, cancelled: true });
+		expect(await second).toEqual({ success: false, cancelled: true });
+		expect(project.getExportState()).toEqual({
+			isExporting: false,
+			progress: 0,
+			result: null,
+		});
+	});
+
+	test("cancelling one export leaves the next one's signal alone", async () => {
+		const { project, exports } = setup();
+
+		const first = project.export({ options: OPTIONS });
+		await flush();
+		project.cancelExport();
+		exports[0].finish({ success: false, cancelled: true });
+		await first;
+
+		const second = project.export({ options: OPTIONS });
+		await flush();
+		expect(exports[1].signal.aborted).toBe(false);
+		exports[1].finish({ success: true, buffer: new ArrayBuffer(8) });
+		expect(await second).toMatchObject({ success: true });
+	});
+});

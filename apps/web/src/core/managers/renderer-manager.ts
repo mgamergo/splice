@@ -138,27 +138,25 @@ export class RendererManager {
 		}
 	}
 
+	/** Renders the active sequence to a file; resolves as cancelled once `signal` aborts. */
 	async exportProject({
 		options,
 		onProgress,
-		onCancel,
+		signal,
 	}: {
 		options: ExportOptions;
 		onProgress?: ({ progress }: { progress: number }) => void;
-		onCancel?: () => boolean;
+		signal: AbortSignal;
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio } = options;
 
-		// One signal cancels whichever stage is running: the audio mix or the frames.
-		const abort = new AbortController();
+		// The signal cancels whichever stage is running: the audio mix or the frames.
 		let exporter: SequenceExporter | null = null;
-		const cancelInterval = setInterval(() => {
-			if (abort.signal.aborted || !onCancel?.()) return;
-			abort.abort();
-			exporter?.cancel();
-		}, 100);
+		const cancelFrames = () => exporter?.cancel();
+		signal.addEventListener("abort", cancelFrames, { once: true });
 
 		try {
+			signal.throwIfAborted();
 			const tracks = this.editor.sequences.getActiveSequence().tracks;
 			const projectItems = this.editor.media.getProjectItems();
 			const activeProject = this.editor.project.getActive();
@@ -182,10 +180,10 @@ export class RendererManager {
 					tracks,
 					projectItems,
 					duration,
-					signal: abort.signal,
+					signal,
 				});
 			}
-			abort.signal.throwIfAborted();
+			signal.throwIfAborted();
 
 			const sequence = buildScene({
 				tracks,
@@ -214,7 +212,7 @@ export class RendererManager {
 
 			const buffer = await exporter.export({ rootNode: sequence });
 
-			if (abort.signal.aborted) {
+			if (signal.aborted) {
 				return { success: false, cancelled: true };
 			}
 
@@ -227,7 +225,7 @@ export class RendererManager {
 				buffer,
 			};
 		} catch (error) {
-			if (abort.signal.aborted) {
+			if (signal.aborted) {
 				return { success: false, cancelled: true };
 			}
 			console.error("Export failed:", error);
@@ -236,7 +234,7 @@ export class RendererManager {
 				error: error instanceof Error ? error.message : "Unknown export error",
 			};
 		} finally {
-			clearInterval(cancelInterval);
+			signal.removeEventListener("abort", cancelFrames);
 		}
 	}
 

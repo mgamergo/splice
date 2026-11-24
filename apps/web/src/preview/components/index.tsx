@@ -185,8 +185,9 @@ function PreviewCanvas({
 	const render = useCallback(() => {
 		if (!renderTree || renderingRef.current) return;
 		// Export draws on the canvas the preview mounts; drawing here too would
-		// put preview frames into the export.
-		if (editor.project.getExportState().isExporting) return;
+		// put preview frames into the export. A cancelled export holds the
+		// canvas until it has stopped, even after its dialog has closed.
+		if (editor.project.isExportRunning()) return;
 
 		const renderTime = Math.min(
 			editor.playback.getCurrentTime(),
