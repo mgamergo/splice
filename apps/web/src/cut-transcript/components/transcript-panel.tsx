@@ -243,22 +243,30 @@ function SentenceButton({
 	isSelected: boolean;
 	onClick: (extend: boolean) => void;
 }) {
+	// A span, not a <button>, so a sentence wraps with the paragraph's text.
 	return (
-		<button
-			type="button"
+		<span
+			role="button"
+			tabIndex={0}
 			data-sentence-id={sentence.id}
 			aria-pressed={isSelected}
 			aria-current={isCurrent ? "time" : undefined}
 			title={`${formatTime(sentence.start)} – ${formatTime(sentence.end)}`}
 			onClick={(event) => onClick(event.shiftKey)}
+			onKeyDown={(event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				event.preventDefault();
+				onClick(event.shiftKey);
+			}}
 			className={cn(
-				"hover:bg-accent/60 inline cursor-pointer rounded-sm px-0.5 text-left [box-decoration-break:clone]",
-				isCurrent && "bg-accent text-accent-foreground",
-				isSelected && "bg-primary/20 ring-primary/40 ring-1",
+				"hover:bg-accent focus-visible:ring-ring cursor-pointer rounded-sm px-0.5 outline-none [box-decoration-break:clone] focus-visible:ring-2",
+				isSelected && "bg-primary/15 hover:bg-primary/25",
+				isCurrent &&
+					"decoration-primary underline decoration-2 underline-offset-4",
 			)}
 		>
 			{sentence.text}
-		</button>
+		</span>
 	);
 }
 
