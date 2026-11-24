@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { PopoverContent } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { useCaptionsStore } from "@/captions/store";
 import { useCaptionCues } from "@/captions/use-caption-cues";
 import { useEditor } from "@/editor/use-editor";
 import {
@@ -54,6 +55,8 @@ export function DeliveryPopover() {
 	const project = useEditor((e) => e.project.getActive());
 	const exportState = useEditor((e) => e.project.getExportState());
 	const revision = useEditor((e) => e.command.getRevision());
+	// Saved spellings change the SRT without a new revision.
+	const spellings = useCaptionsStore((state) => state.spellings);
 	const cueCount = useCaptionCues().filter(({ text }) => text).length;
 	const { isExporting, progress, result, step } = exportState;
 	const [quality, setQuality] = useState<ExportQuality>(
@@ -94,7 +97,7 @@ export function DeliveryPopover() {
 		return () => {
 			cancelled = true;
 		};
-	}, [editor, revision]);
+	}, [editor, revision, spellings]);
 
 	const handleExport = async () => {
 		setFolderMessage(null);

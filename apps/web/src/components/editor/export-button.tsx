@@ -98,7 +98,9 @@ export function ExportButton() {
 			</PopoverTrigger>
 			{hasProject &&
 				(deliversPair ? (
-					<DeliveryPopover />
+					// Mounted only while open, so the history and the current edit's
+					// fingerprint are read fresh each time.
+					isExportPopoverOpen && <DeliveryPopover />
 				) : (
 					<ExportPopover onOpenChange={setIsExportPopoverOpen} />
 				))}
