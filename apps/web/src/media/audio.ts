@@ -340,6 +340,7 @@ export async function decodeAudioRange({
 		const assembler = createAudioRangeAssembler({
 			range,
 			maxChannels: MAX_AUDIO_CHANNELS,
+			timeResolution: audioTrack.timeResolution,
 		});
 		const sink = new AudioBufferSink(audioTrack);
 		const decodeWindow = getDecodeWindow({ range });

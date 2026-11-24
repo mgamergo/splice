@@ -81,6 +81,7 @@ describe("createAudioRangeAssembler", () => {
 		const assembler = createAudioRangeAssembler({
 			range: { start: 1.2, end: 1.6 },
 			maxChannels: 2,
+			timeResolution: 10,
 		});
 		// The decoder starts at the packet before the range...
 		assembler.add({
@@ -103,6 +104,7 @@ describe("createAudioRangeAssembler", () => {
 		const assembler = createAudioRangeAssembler({
 			range: { start: 0, end: 0.6 },
 			maxChannels: 2,
+			timeResolution: 10,
 		});
 		assembler.add({ timestamp: 0, buffer: chunk({ channels: [[1, 2]] }) });
 		assembler.add({ timestamp: 0.4, buffer: chunk({ channels: [[5, 6]] }) });
@@ -115,6 +117,7 @@ describe("createAudioRangeAssembler", () => {
 		const assembler = createAudioRangeAssembler({
 			range: { start: 0.1, end: 5 },
 			maxChannels: 2,
+			timeResolution: 10,
 		});
 		assembler.add({
 			timestamp: 0,
@@ -137,6 +140,7 @@ describe("createAudioRangeAssembler", () => {
 		const assembler = createAudioRangeAssembler({
 			range: { start: 30, end: 31 },
 			maxChannels: 2,
+			timeResolution: 10,
 		});
 		expect(assembler.finish()).toBeNull();
 		assembler.add({ timestamp: 0, buffer: chunk({ channels: [[1, 2, 3]] }) });
@@ -178,6 +182,7 @@ describe("createAudioRangeAssembler with container timestamps", () => {
 		const assembler = createAudioRangeAssembler({
 			range: { start: 0, end: 1 },
 			maxChannels: 2,
+			timeResolution: 1000,
 		});
 		for (let frame = 0; frame * AAC_FRAME < SAMPLE_RATE + AAC_FRAME; frame++) {
 			const first = frame * AAC_FRAME;
@@ -200,6 +205,7 @@ describe("createAudioRangeAssembler with container timestamps", () => {
 		const assembler = createAudioRangeAssembler({
 			range: { start: 0, end: 0.1 },
 			maxChannels: 2,
+			timeResolution: 1000,
 		});
 		assembler.add({
 			timestamp: 0,
@@ -215,6 +221,44 @@ describe("createAudioRangeAssembler with container timestamps", () => {
 			true,
 		);
 		expect(samples[1920]).toBe(1);
+	});
+
+	test("keeps short gaps in a track with sample-accurate timestamps", () => {
+		// MP4 stores AAC timestamps in samples: these gaps are real, not rounding.
+		const GAP = 72;
+		const assembler = createAudioRangeAssembler({
+			range: { start: 0, end: (4 * AAC_FRAME + 2 * GAP) / SAMPLE_RATE },
+			maxChannels: 2,
+			timeResolution: SAMPLE_RATE,
+		});
+		const starts = [
+			0,
+			AAC_FRAME + GAP,
+			2 * AAC_FRAME + GAP,
+			3 * AAC_FRAME + 2 * GAP,
+		];
+		for (const [index, start] of starts.entries()) {
+			assembler.add({
+				timestamp: start / SAMPLE_RATE,
+				buffer: indexedChunk({
+					first: index * AAC_FRAME,
+					length: AAC_FRAME,
+					sampleRate: SAMPLE_RATE,
+				}),
+			});
+		}
+		const samples = assembler.finish()?.channels[0] ?? new Float32Array();
+		expect(samples).toHaveLength(4 * AAC_FRAME + 2 * GAP);
+		// Each chunk starts exactly where its timestamp says...
+		for (const [index, start] of starts.entries()) {
+			expect(samples[start]).toBe(index * AAC_FRAME);
+		}
+		// ...and each gap is silent for exactly its own length.
+		for (const start of [AAC_FRAME, 3 * AAC_FRAME + GAP]) {
+			expect(Array.from(samples.subarray(start, start + GAP))).toEqual(
+				new Array<number>(GAP).fill(0),
+			);
+		}
 	});
 
 	test("assembles a 48 kHz AAC tone in Matroska without gaps or overlaps", async () => {
@@ -233,7 +277,13 @@ describe("createAudioRangeAssembler with container timestamps", () => {
 			expect(track.sampleRate).toBe(SAMPLE_RATE);
 
 			const range = { start: 0.25, end: 0.75 };
-			const assembler = createAudioRangeAssembler({ range, maxChannels: 2 });
+			// Matroska's millisecond timestamps.
+			expect(track.timeResolution).toBe(1000);
+			const assembler = createAudioRangeAssembler({
+				range,
+				maxChannels: 2,
+				timeResolution: track.timeResolution,
+			});
 			// Each AAC packet decodes to the next 1024 samples of the stream; the
 			// container's timestamps say where they go.
 			let first = 0;

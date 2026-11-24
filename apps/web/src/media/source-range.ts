@@ -51,14 +51,6 @@ export function getDecodeWindow({ range }: { range: SourceRange }): SourceRange 
 	};
 }
 
-/**
- * How far a chunk's timestamp may sit from where the chunk before it ended and
- * still count as continuous. Containers store timestamps coarser than a sample
- * (Matroska and WebM in whole milliseconds), so each chunk of an unbroken
- * stream lands up to about 1 ms off. Real gaps in a source are far longer.
- */
-const TIMESTAMP_TOLERANCE_SECONDS = 0.002;
-
 /** The slice of AudioBuffer that range assembly reads. */
 type AudioChunk = Pick<
 	AudioBuffer,
@@ -75,17 +67,22 @@ export interface AssembledAudio {
  * Copies decoded chunks into arrays that cover exactly one source range, as
  * the chunks stream in. Chunks are placed by timestamp, so the decoder's
  * lead-in before the range and its overshoot past the end are dropped, and a
- * gap in the source stays silent. A chunk within the container's timestamp
- * precision of where the last one ended follows it directly, so rounded
- * timestamps never open gaps or overlaps in continuous audio. Memory is the
- * range's length, never the source's.
+ * gap in the source stays silent. A chunk within one tick of the track's
+ * timestamps of where the last one ended follows it directly: containers can
+ * store timestamps coarser than a sample (Matroska and WebM in whole
+ * milliseconds), and that rounding must not open gaps or overlaps in
+ * continuous audio. A track with sample-accurate timestamps keeps every gap
+ * longer than a sample. Memory is the range's length, never the source's.
  */
 export function createAudioRangeAssembler({
 	range,
 	maxChannels,
+	timeResolution,
 }: {
 	range: SourceRange;
 	maxChannels: number;
+	/** The track's timestamp ticks per second (Mediabunny's `timeResolution`). */
+	timeResolution: number;
 }) {
 	let sampleRate = 0;
 	let startSample = 0;
@@ -102,10 +99,9 @@ export function createAudioRangeAssembler({
 				// size the arrays from the first chunk.
 				sampleRate = buffer.sampleRate;
 				startSample = Math.round(range.start * sampleRate);
-				toleranceSamples = Math.max(
-					1,
-					Math.round(TIMESTAMP_TOLERANCE_SECONDS * sampleRate),
-				);
+				// A timestamp sits up to a tick off the stream, and rounding it to a
+				// sample adds half a sample more.
+				toleranceSamples = Math.max(1, Math.round(sampleRate / timeResolution));
 				const length = Math.max(
 					0,
 					Math.round(range.end * sampleRate) - startSample,
