@@ -585,47 +585,47 @@ test.skipIf(!Bun.which("ffmpeg"))(
 test.skipIf(process.platform === "win32")(
 	"a scan of Footage that changed while it ran isn't cached",
 	async () => {
-	const root = await mkdtemp(join(tmpdir(), "splice-pauses-"));
-	const detector = createPauseDetector({
-		root,
-		readTranscript: async () => null,
-	});
-	try {
-		await mkdir(join(root, "Footage"));
-		const file = join(root, "Footage", "talk.wav");
-		await Bun.write(file, "");
-		// A fake FFmpeg whose first silence scan rewrites the recording.
-		const changed = join(root, "changed");
-		const ffmpeg = join(root, "Tools", "ffmpeg");
-		await Bun.write(
-			ffmpeg,
-			[
-				"#!/bin/sh",
-				'case "$*" in',
-				`*silencedetect*) if [ ! -e '${changed}' ]; then : > '${changed}'; printf x >> '${file}'; fi`,
-				'  echo "[silencedetect @ 0x1] silence_start: 1" >&2',
-				'  echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2 ;;',
-				'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
-				'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
-				"esac",
-				"",
-			].join("\n"),
-		);
-		await chmod(ffmpeg, 0o755);
-		const detect = () => detector.detect({ params: { path: "talk.wav" } });
-
-		await expect(detect()).rejects.toThrow(
-			"Footage changed while finding pauses",
-		);
-		expect(await detect()).toMatchObject({
-			cached: false,
-			pauses: [{ start: 1, end: 2 }],
+		const root = await mkdtemp(join(tmpdir(), "splice-pauses-"));
+		const detector = createPauseDetector({
+			root,
+			readTranscript: async () => null,
 		});
-		expect(await detect()).toMatchObject({ cached: true });
-	} finally {
-		await detector.stop();
-		await rm(root, { recursive: true, force: true });
-	}
+		try {
+			await mkdir(join(root, "Footage"));
+			const file = join(root, "Footage", "talk.wav");
+			await Bun.write(file, "");
+			// A fake FFmpeg whose first silence scan rewrites the recording.
+			const changed = join(root, "changed");
+			const ffmpeg = join(root, "Tools", "ffmpeg");
+			await Bun.write(
+				ffmpeg,
+				[
+					"#!/bin/sh",
+					'case "$*" in',
+					`*silencedetect*) if [ ! -e '${changed}' ]; then : > '${changed}'; printf x >> '${file}'; fi`,
+					'  echo "[silencedetect @ 0x1] silence_start: 1" >&2',
+					'  echo "[silencedetect @ 0x1] silence_end: 2 | silence_duration: 1" >&2 ;;',
+					'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
+					'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
+					"esac",
+					"",
+				].join("\n"),
+			);
+			await chmod(ffmpeg, 0o755);
+			const detect = () => detector.detect({ params: { path: "talk.wav" } });
+
+			await expect(detect()).rejects.toThrow(
+				"Footage changed while finding pauses",
+			);
+			expect(await detect()).toMatchObject({
+				cached: false,
+				pauses: [{ start: 1, end: 2 }],
+			});
+			expect(await detect()).toMatchObject({ cached: true });
+		} finally {
+			await detector.stop();
+			await rm(root, { recursive: true, force: true });
+		}
 	},
 );
 
