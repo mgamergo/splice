@@ -1,17 +1,29 @@
-import type { Take, TakePlacement, TakeSourceRange } from "@splice/bridge/ops";
+import type {
+	Take,
+	TakeAudioSegment,
+	TakePlacement,
+	TakeSourceRange,
+} from "@splice/bridge/ops";
+import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import {
 	buildSeparatedAudioClip,
 	doesClipHaveEnabledAudio,
 } from "@/timeline/audio-separation";
-import { getClipVolume, hasAnimatedVolume } from "@/timeline/audio-state";
+import {
+	getClipVolume,
+	hasAnimatedVolume,
+	isClipMuted,
+	isNoiseReduced,
+} from "@/timeline/audio-state";
 import {
 	buildClipFromMedia,
 	canClipHaveAudio,
 	hasMediaId,
 } from "@/timeline/clip-utils";
 import { razorClip } from "@/timeline/razor";
+import { canTrackHaveAudio } from "@/timeline/track-capabilities";
 import type {
 	AudioClip,
 	RemovalMarker,
@@ -25,6 +37,7 @@ import { generateUUID } from "@/utils/id";
 import {
 	type MediaTime,
 	mediaTimeFromSeconds,
+	mediaTimeToSeconds,
 	roundMediaTime,
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
@@ -54,7 +67,13 @@ function resolveSourceRange({
 	if (sourceOut <= sourceIn) {
 		throw new RemovalTakeError("Take range is too short.");
 	}
-	return { item, sourceIn, sourceOut };
+	return {
+		item,
+		sourceIn,
+		sourceOut,
+		/** The take's in point as stored, which saved audio offsets start from. */
+		sourceInSeconds: take.sourceIn,
+	};
 }
 
 export function takeRanges(take: Take): TakeSourceRange[] {
@@ -76,86 +95,243 @@ export function resolveTake({
 type ResolvedRange = ReturnType<typeof resolveSourceRange>;
 type ResolvedTake = ResolvedRange[];
 
+interface TakeAudio {
+	/** Absent when the recording's clips all have keyframed volume. */
+	volume?: number;
+	noiseReduction: boolean;
+}
+
+type TrackClip = { clip: TimelineClip; trackId: string };
+
+function mostCommon<T>(values: T[]): T | undefined {
+	const counts = new Map<T, number>();
+	for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+	let most: T | undefined;
+	let mostCount = 0;
+	for (const [value, count] of counts)
+		if (count > mostCount) {
+			most = value;
+			mostCount = count;
+		}
+	return most;
+}
+
 /**
- * The clip volume each project item's audible clips mostly play at, so
- * restored and swapped takes keep a recording's gain, such as the one loudness
- * normalization set, instead of jumping back to the source level.
+ * The noise reduction and clip volume each project item's audible clips mostly
+ * play with, so restored and swapped takes keep a recording's gain, such as the
+ * one loudness normalization set, and its noise reduction, instead of jumping
+ * back to the source audio. The volume is the one its clips with that noise
+ * reduction play at; keyframed volume has no single value, so it only counts
+ * towards noise reduction.
  */
-function itemVolumes({
+function itemAudio({
 	clips,
 	items,
 }: {
 	clips: TimelineClip[];
 	items: Map<string, ProjectItem>;
-}): Map<string, number> {
-	const counts = new Map<string, Map<number, number>>();
+}): Map<string, TakeAudio> {
+	const heard = new Map<
+		string,
+		Array<{ volume: number | undefined; noiseReduction: boolean }>
+	>();
 	for (const clip of clips) {
-		if (
-			!canClipHaveAudio(clip) ||
-			!hasMediaId(clip) ||
-			hasAnimatedVolume({ clip })
-		)
-			continue;
+		if (!canClipHaveAudio(clip) || !hasMediaId(clip)) continue;
 		const item = items.get(clip.mediaId);
 		if (!item || !doesClipHaveEnabledAudio({ clip, projectItem: item }))
 			continue;
-		const volumes = counts.get(item.id) ?? new Map<number, number>();
-		const volume = getClipVolume({ clip });
-		volumes.set(volume, (volumes.get(volume) ?? 0) + 1);
-		counts.set(item.id, volumes);
+		const list = heard.get(item.id) ?? [];
+		list.push({
+			volume: hasAnimatedVolume({ clip }) ? undefined : getClipVolume({ clip }),
+			noiseReduction: isNoiseReduced({ clip }),
+		});
+		heard.set(item.id, list);
 	}
 	return new Map(
-		Array.from(counts, ([id, volumes]) => [
-			id,
-			[...volumes].reduce((most, entry) =>
-				entry[1] > most[1] ? entry : most,
-			)[0],
-		]),
+		Array.from(heard, ([id, list]) => {
+			const noiseReduction =
+				mostCommon(list.map((audio) => audio.noiseReduction)) === true;
+			const volume = mostCommon(
+				list.flatMap((audio) =>
+					audio.noiseReduction === noiseReduction &&
+					audio.volume !== undefined
+						? [audio.volume]
+						: [],
+				),
+			);
+			return [id, { noiseReduction, ...(volume !== undefined && { volume }) }];
+		}),
 	);
 }
 
-const allClips = (tracks: SequenceTracks) =>
-	[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap(
-		(track): TimelineClip[] => track.clips,
+const trackClips = (tracks: SequenceTracks) =>
+	[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+		track.clips.map((clip): TrackClip => ({ clip, trackId: track.id })),
 	);
 
-function takeVolumes({
+/** How each take's recording is heard: muted clips and tracks don't count. */
+function takesAudio({
 	tracks,
 	takes,
 }: {
 	tracks: SequenceTracks;
 	takes: ResolvedRange[];
-}): Map<string, number> {
-	return itemVolumes({
-		clips: allClips(tracks),
+}): Map<string, TakeAudio> {
+	return itemAudio({
+		clips: [tracks.main, ...tracks.overlay, ...tracks.audio]
+			.filter((track) => !(canTrackHaveAudio(track) && track.muted))
+			.flatMap((track): TimelineClip[] => track.clips)
+			.filter((clip) => !(canClipHaveAudio(clip) && isClipMuted({ clip }))),
 		items: new Map(takes.map(({ item }) => [item.id, item])),
 	});
 }
 
 /**
- * A take's volume: what its recording plays at elsewhere in the sequence, else
- * what it played at when it was swapped out.
+ * A take's audio: how it played when it was swapped out, else how its
+ * recording plays elsewhere in the sequence. A saved gain stays paired with
+ * its saved noise reduction; without one (keyframed volume), the recording's
+ * gain is used only when its clips share that noise reduction.
  */
-function takeVolume({
+function takeAudio({
 	take,
-	volumes,
+	audioByItem,
+	saved,
+}: {
+	take: ResolvedRange;
+	audioByItem: Map<string, TakeAudio>;
+	saved?: Pick<TakePlacement, "volume" | "noiseReduction">;
+}): TakeAudio {
+	const audio = audioByItem.get(take.item.id);
+	if (saved?.noiseReduction === undefined && saved?.volume === undefined)
+		return audio ?? { noiseReduction: false };
+	const noiseReduction = saved.noiseReduction === true;
+	const volume =
+		saved.volume ??
+		(audio?.noiseReduction === noiseReduction ? audio.volume : undefined);
+	return { noiseReduction, ...(volume !== undefined && { volume }) };
+}
+
+type TakeStretch = {
+	range: ResolvedRange;
+	audio: TakeAudio;
+	/** The track a video take's audio was extracted to, when it was. */
+	audioTrackId?: string;
+};
+
+/**
+ * The take's range split where its saved audio changes, each stretch with its
+ * own audio and audio track. Placements saved before per-stretch audio play as
+ * one stretch.
+ */
+function takeStretches({
+	take,
+	audioByItem,
 	placement,
 }: {
 	take: ResolvedRange;
-	volumes: Map<string, number>;
+	audioByItem: Map<string, TakeAudio>;
 	placement?: TakePlacement;
-}): number | undefined {
-	return volumes.get(take.item.id) ?? placement?.volume;
+}): TakeStretch[] {
+	const segments = placement?.audioSegments;
+	if (!segments)
+		return [
+			{
+				range: take,
+				audio: takeAudio({ take, audioByItem, saved: placement }),
+				audioTrackId: placement?.audioTrackId,
+			},
+		];
+	const starts = segments.map(({ from }, index) => {
+		const start = mediaTimeFromSeconds({ seconds: from });
+		return index === 0 || start < take.sourceIn ? take.sourceIn : start;
+	});
+	return segments.flatMap((segment, index) => {
+		const sourceIn = starts[index];
+		const next = starts[index + 1];
+		const sourceOut =
+			next === undefined || next > take.sourceOut ? take.sourceOut : next;
+		return sourceOut > sourceIn
+			? [
+					{
+						range: { ...take, sourceIn, sourceOut },
+						audio: takeAudio({ take, audioByItem, saved: segment }),
+						audioTrackId: segment.audioTrackId,
+					},
+				]
+			: [];
+	});
+}
+
+/**
+ * Where the take's audio changes partway, as when it was split into a
+ * denoised clip and a plain one, or into a clip playing its own audio and one
+ * with extracted audio: each setting in source order. Undefined when the whole
+ * take plays one way.
+ */
+function audioSegments({
+	clips,
+	range,
+}: {
+	clips: TrackClip[];
+	range: ResolvedRange;
+}): TakeAudioSegment[] | undefined {
+	const heard = clips
+		.flatMap(({ clip, trackId }) =>
+			canClipHaveAudio(clip) &&
+			hasMediaId(clip) &&
+			clip.mediaId === range.item.id &&
+			doesClipHaveEnabledAudio({ clip, projectItem: range.item })
+				? [
+						{
+							sourceIn: clip.trimStart,
+							volume: hasAnimatedVolume({ clip })
+								? undefined
+								: getClipVolume({ clip }),
+							noiseReduction: isNoiseReduced({ clip }),
+							// A video take's audio clips are its extracted audio.
+							audioTrackId:
+								clip.type === "audio" && range.item.type === "video"
+									? trackId
+									: undefined,
+						},
+					]
+				: [],
+		)
+		.sort((a, b) => a.sourceIn - b.sourceIn);
+	const segments: TakeAudioSegment[] = [];
+	for (const { sourceIn, volume, noiseReduction, audioTrackId } of heard) {
+		const last = segments.at(-1);
+		if (
+			last &&
+			last.volume === volume &&
+			last.noiseReduction === noiseReduction &&
+			last.audioTrackId === audioTrackId
+		)
+			continue;
+		// The first stretch starts at the take's in point as stored, so the
+		// offsets validate against it; later ones start inside the take.
+		const from = last
+			? mediaTimeToSeconds({ time: sourceIn })
+			: range.sourceInSeconds;
+		if (last && from <= last.from) continue;
+		segments.push({
+			from,
+			...(volume !== undefined && { volume }),
+			noiseReduction,
+			...(audioTrackId && { audioTrackId }),
+		});
+	}
+	return segments.length > 1 ? segments : undefined;
 }
 
 function createTakeClip({
 	take,
 	at,
-	volume,
+	audio,
 }: {
 	take: ResolvedRange;
 	at: MediaTime;
-	volume: number | undefined;
+	audio: TakeAudio;
 }): VideoClip | AudioClip {
 	const sourceDuration = mediaTimeFromSeconds({
 		seconds: take.item.duration ?? 0,
@@ -172,7 +348,13 @@ function createTakeClip({
 	}
 	return {
 		...clip,
-		...(volume !== undefined && { params: { ...clip.params, volume } }),
+		params: {
+			...clip.params,
+			...(audio.volume !== undefined && { volume: audio.volume }),
+			// Only Footage has a noise-reduced render, as set_noise_reduction checks.
+			...(audio.noiseReduction &&
+				isDiskMedia(take.item.file) && { noiseReduction: true }),
+		},
 		id: generateUUID(),
 		duration: roundMediaTime({ time: take.sourceOut - take.sourceIn }),
 		trimStart: take.sourceIn,
@@ -582,7 +764,7 @@ export function restoreTakeClips({
 		)?.id;
 	const audioTrack = (id?: string) =>
 		tracks.audio.find((track) => track.id === id)?.id;
-	const volumes = takeVolumes({
+	const audioByItem = takesAudio({
 		tracks,
 		takes: takes.flatMap(({ take }) => take),
 	});
@@ -590,38 +772,44 @@ export function restoreTakeClips({
 	for (const { take, placements } of takes) {
 		for (const [index, range] of take.entries()) {
 			const placement = placements?.[index];
-			const clip = createTakeClip({
+			for (const stretch of takeStretches({
 				take: range,
-				at: end,
-				volume: takeVolume({ take: range, volumes, placement }),
-			});
-			end = roundMediaTime({ time: end + clip.duration });
-			if (clip.type === "audio") {
-				audio.push({
-					clip,
-					trackId: audioTrack(placement?.trackId) ?? tracks.audio[0]?.id,
+				audioByItem,
+				placement,
+			})) {
+				const clip = createTakeClip({
+					take: stretch.range,
+					at: end,
+					audio: stretch.audio,
 				});
-				continue;
+				end = roundMediaTime({ time: end + clip.duration });
+				if (clip.type === "audio") {
+					audio.push({
+						clip,
+						trackId: audioTrack(placement?.trackId) ?? tracks.audio[0]?.id,
+					});
+					continue;
+				}
+				const trackId = videoTrack(placement?.trackId) ?? tracks.main.id;
+				const audioTrackId = audioTrack(stretch.audioTrackId);
+				if (!audioTrackId || range.item.hasAudio === false) {
+					video.push({ clip, trackId });
+					continue;
+				}
+				const paired = {
+					...clip,
+					isSourceAudioEnabled: false,
+					sourceAudioGroupId: generateUUID(),
+				};
+				video.push({ clip: paired, trackId });
+				audio.push({
+					clip: {
+						...buildSeparatedAudioClip({ sourceClip: paired }),
+						id: generateUUID(),
+					},
+					trackId: audioTrackId,
+				});
 			}
-			const trackId = videoTrack(placement?.trackId) ?? tracks.main.id;
-			const audioTrackId = audioTrack(placement?.audioTrackId);
-			if (!audioTrackId || range.item.hasAudio === false) {
-				video.push({ clip, trackId });
-				continue;
-			}
-			const paired = {
-				...clip,
-				isSourceAudioEnabled: false,
-				sourceAudioGroupId: generateUUID(),
-			};
-			video.push({ clip: paired, trackId });
-			audio.push({
-				clip: {
-					...buildSeparatedAudioClip({ sourceClip: paired }),
-					id: generateUUID(),
-				},
-				trackId: audioTrackId,
-			});
 		}
 	}
 	const delta = end - at;
@@ -749,8 +937,8 @@ export function tagBestTake({
 
 /**
  * Where a range that Tighten cut whole goes back: on the tracks of the
- * nearest surviving range, preferring one of the same kind, at its own
- * recording's gain.
+ * nearest surviving range, preferring one of the same kind, with its own
+ * recording's gain and noise reduction.
  */
 function neighborPlacement({
 	take,
@@ -818,59 +1006,73 @@ export function swapTakeClips({
 
 	const video: PlacedClip<VideoClip>[] = [];
 	const audio: PlacedClip<AudioClip>[] = [];
-	const volumes = takeVolumes({ tracks, takes: chosen });
+	const audioByItem = takesAudio({ tracks, takes: chosen });
 	let replacementEnd = start;
 	let videoIndex = 0;
 	let audioIndex = 0;
 	for (const [index, range] of chosen.entries()) {
 		const placement = chosenPlacements?.[index];
-		const clip = {
-			...createTakeClip({
-				take: range,
-				at: replacementEnd,
-				volume: takeVolume({ take: range, volumes, placement }),
-			}),
-			bestTakeMarkerIds: [marker.id],
-		};
-		replacementEnd = roundMediaTime({ time: replacementEnd + clip.duration });
-		if (clip.type === "audio") {
-			const partIndex = Math.min(audioIndex++, audioParts.length - 1);
-			const trackId =
-				tracks.audio.find(({ id }) => id === placement?.trackId)?.id ??
-				audioParts[partIndex]?.trackId ??
-				linkedAudio[0]?.trackId;
-			audio.push({ clip, trackId });
-			continue;
-		}
-		const partIndex = Math.min(videoIndex++, videoParts.length - 1);
-		const trackId =
-			[tracks.main, ...tracks.overlay].find(
-				({ id, type }) => id === placement?.trackId && type === "video",
-			)?.id ??
-			videoParts[partIndex]?.trackId ??
-			(tracks.main.clips.length === 0 ? tracks.main.id : undefined);
-		const audioTrackId =
-			placement && !placement.audioTrackId
-				? undefined
-				: (tracks.audio.find(({ id }) => id === placement?.audioTrackId)?.id ??
-					audioForVideo.get(videoParts[partIndex])?.[0]?.trackId ??
-					linkedAudio[0]?.trackId);
-		if (audioTrackId && range.item.hasAudio !== false) {
-			const paired = {
-				...clip,
-				isSourceAudioEnabled: false,
-				sourceAudioGroupId: generateUUID(),
+		// Stretches of one range all go where the part they replace was.
+		const isAudio = range.item.type === "audio";
+		const audioPart = isAudio
+			? audioParts.at(Math.min(audioIndex++, audioParts.length - 1))
+			: undefined;
+		const videoPart = isAudio
+			? undefined
+			: videoParts.at(Math.min(videoIndex++, videoParts.length - 1));
+		for (const stretch of takeStretches({
+			take: range,
+			audioByItem,
+			placement,
+		})) {
+			const clip = {
+				...createTakeClip({
+					take: stretch.range,
+					at: replacementEnd,
+					audio: stretch.audio,
+				}),
+				bestTakeMarkerIds: [marker.id],
 			};
-			video.push({ clip: paired, trackId });
-			audio.push({
-				clip: {
-					...buildSeparatedAudioClip({ sourceClip: paired }),
-					id: generateUUID(),
-				},
-				trackId: audioTrackId,
+			replacementEnd = roundMediaTime({
+				time: replacementEnd + clip.duration,
 			});
-		} else {
-			video.push({ clip, trackId });
+			if (clip.type === "audio") {
+				const trackId =
+					tracks.audio.find(({ id }) => id === placement?.trackId)?.id ??
+					audioPart?.trackId ??
+					linkedAudio[0]?.trackId;
+				audio.push({ clip, trackId });
+				continue;
+			}
+			const trackId =
+				[tracks.main, ...tracks.overlay].find(
+					({ id, type }) => id === placement?.trackId && type === "video",
+				)?.id ??
+				videoPart?.trackId ??
+				(tracks.main.clips.length === 0 ? tracks.main.id : undefined);
+			const audioTrackId =
+				placement && !stretch.audioTrackId
+					? undefined
+					: (tracks.audio.find(({ id }) => id === stretch.audioTrackId)?.id ??
+						(videoPart && audioForVideo.get(videoPart)?.[0]?.trackId) ??
+						linkedAudio[0]?.trackId);
+			if (audioTrackId && range.item.hasAudio !== false) {
+				const paired = {
+					...clip,
+					isSourceAudioEnabled: false,
+					sourceAudioGroupId: generateUUID(),
+				};
+				video.push({ clip: paired, trackId });
+				audio.push({
+					clip: {
+						...buildSeparatedAudioClip({ sourceClip: paired }),
+						id: generateUUID(),
+					},
+					trackId: audioTrackId,
+				});
+			} else {
+				video.push({ clip, trackId });
+			}
 		}
 	}
 
@@ -935,17 +1137,26 @@ export function swapTakeClips({
 			const clipIds = new Set(
 				[part, ...linked].flatMap(({ clipIds }) => clipIds),
 			);
-			const volume = itemVolumes({
-				clips: allClips(tracks).filter(({ id }) => clipIds.has(id)),
+			const clips = trackClips(tracks).filter(({ clip }) =>
+				clipIds.has(clip.id),
+			);
+			const audio = itemAudio({
+				clips: clips.map(({ clip }) => clip),
 				items: new Map([[part.range.item.id, part.range.item]]),
 			}).get(part.range.item.id);
+			const segments = audioSegments({ clips, range: part.range });
 			return [
 				part.range,
 				{
 					trackId: part.trackId,
 					...(audioTrackId ? { audioTrackId } : {}),
-					// 0 dB is the default volume, so it needs no record.
-					...(volume ? { volume } : {}),
+					// Saved even at 0 dB and off, so swapping back restores them
+					// rather than taking another clip's noise reduction and gain.
+					...(audio && {
+						...(audio.volume !== undefined && { volume: audio.volume }),
+						noiseReduction: audio.noiseReduction,
+					}),
+					...(segments && { audioSegments: segments }),
 				},
 			];
 		}),

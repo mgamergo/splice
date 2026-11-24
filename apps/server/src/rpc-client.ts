@@ -15,14 +15,16 @@ const MINUTE_MS = 60_000;
 
 /**
  * Methods whose work grows with the footage: imports probe every file, and
- * rough cuts, pause scans and loudness measures run FFmpeg over whole
- * recordings. Hours of footage take minutes, so they get half an hour.
+ * rough cuts, pause scans, loudness measures and noise-reduction renders run
+ * FFmpeg over whole recordings. Hours of footage take minutes, so they get
+ * half an hour.
  */
 const LONG_METHODS: ReadonlySet<string> = new Set([
 	"editor.importItems",
 	"editor.roughCut",
 	"pauses.detect",
 	"loudness.measure",
+	"noiseReduction.render",
 ]);
 
 /**

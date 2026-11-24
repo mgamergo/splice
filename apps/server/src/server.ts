@@ -30,6 +30,7 @@ import { resolveRoughCutRequest } from "./rough-cut";
 import { createToken, tokensMatch } from "./session";
 import { BridgeError, TabBridge } from "./tab-bridge";
 import { createLoudnessMeter } from "./loudness";
+import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
@@ -148,7 +149,8 @@ export function startServer({
 		root,
 		readTranscript: transcription.cached,
 	});
-	const loudness = createLoudnessMeter({ root });
+	const noiseReduction = createNoiseReducer({ root });
+	const loudness = createLoudnessMeter({ root, noiseReduction });
 	// `signal` aborts when the caller hangs up, so an FFmpeg scan nobody
 	// waits for stops.
 	const serverJobs = new Map<
@@ -160,6 +162,7 @@ export function startServer({
 		["transcript.words", ({ params }) => transcription.words(params)],
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
+		["noiseReduction.render", ({ params }) => noiseReduction.render(params)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
@@ -398,7 +401,23 @@ export function startServer({
 		if (!contentType || !absolutePath) {
 			return new Response("Not found", { status: 404 });
 		}
-		return serveFile({ request, absolutePath, contentType });
+		if (!wantsDenoisedAudio(url))
+			return serveFile({ request, absolutePath, contentType });
+		try {
+			const { file } = await noiseReduction.ensure({ path });
+			return serveFile({
+				request,
+				absolutePath: file,
+				contentType: "audio/wav",
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return new Response(`Couldn't reduce noise: ${message}`, {
+				// Invalid params: not a recording, e.g. an image.
+				status: error instanceof BridgeError ? 400 : 500,
+				headers: { "content-type": "text/plain; charset=utf-8" },
+			});
+		}
 	}
 
 	async function proxy({
@@ -563,6 +582,8 @@ export function startServer({
 				return handleSession({ request, port: actualPort });
 			}
 			if (url.pathname.startsWith(BRIDGE_PATHS.media)) {
+				// The first request for denoised audio renders it, which takes a while.
+				if (wantsDenoisedAudio(url)) srv.timeout(request, 0);
 				return handleMedia({ request, url, port: actualPort });
 			}
 			if (url.pathname.startsWith("/splice/")) {
@@ -640,7 +661,11 @@ export function startServer({
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
 			await pauses.stop();
-			await Promise.all([transcription.stop(), loudness.stop()]);
+			await Promise.all([
+				transcription.stop(),
+				loudness.stop(),
+				noiseReduction.stop(),
+			]);
 		},
 	};
 }

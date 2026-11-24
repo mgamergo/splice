@@ -14,8 +14,10 @@ import {
 	formatGain,
 	LoudnessError,
 } from "@/agent/loudness";
+import { setNoiseReduction } from "@/agent/noise-reduction";
 import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
-import { canClipHaveAudio } from "@/timeline/clip-utils";
+import { isDiskMedia } from "@/media/media-data";
+import { canClipHaveAudio, hasMediaId } from "@/timeline/clip-utils";
 import { hasAnimatedVolume } from "@/timeline/audio-state";
 import { buildSequenceDigest } from "@/agent/digest";
 import type { RoughCutSources } from "@splice/bridge";
@@ -219,6 +221,7 @@ export class EditorApi {
 			captions,
 			plan,
 			sourceGains,
+			noiseReduction = false,
 			...cutPlan
 		} = parsed.data;
 		const source = this.findRoughCutSource(cutPlan);
@@ -241,36 +244,36 @@ export class EditorApi {
 					fps: this.editor.project.getActive().settings.fps,
 				}),
 			});
+			// Noise reduction goes on first, so the plan reports which audio
+			// `splice` must measure denoised.
+			const tracks = noiseReduction
+				? setNoiseReduction({
+						tracks: cut.sequence.tracks,
+						projectItems,
+						enabled: true,
+					})
+				: cut.sequence.tracks;
 			// A plan builds the same cut without applying it, so `splice` can
 			// measure what it keeps and send the gains with the same revision.
 			if (plan)
 				return {
 					ok: true as const,
 					revision: this.getRevision(),
-					audioSources: collectAudioSources({
-						tracks: cut.sequence.tracks,
-						projectItems,
-					}),
+					audioSources: collectAudioSources({ tracks, projectItems }),
 				};
-			const tracks = sourceGains
-				? applySourceGains({
-						tracks: cut.sequence.tracks,
-						projectItems,
-						gains: sourceGains,
-					})
-				: cut.sequence.tracks;
+			const gained = sourceGains
+				? applySourceGains({ tracks, projectItems, gains: sourceGains })
+				: tracks;
 			const captioned = captions
 				? withCaptionTrack({
-						tracks,
+						tracks: gained,
 						captions,
 						canvasSize: this.editor.project.getActive().settings.canvasSize,
 					})
 				: null;
 			const sequence = captioned
 				? { ...cut.sequence, tracks: captioned.tracks, captions }
-				: sourceGains
-					? { ...cut.sequence, tracks }
-					: cut.sequence;
+				: { ...cut.sequence, tracks: gained };
 			return {
 				...this.addPreparedSequence({ sequence, label }),
 				sections: cut.sections,
@@ -368,7 +371,7 @@ export class EditorApi {
 	audioSources(request: unknown) {
 		const parsed = audioSourcesRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
-		const { sequenceId } = parsed.data;
+		const { sequenceId, noiseReduction } = parsed.data;
 		const sequence = sequenceId
 			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
 			: this.editor.sequences.getActiveSequenceOrNull();
@@ -376,13 +379,21 @@ export class EditorApi {
 			return this.invalidOp(
 				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
 			);
+		const projectItems = this.editor.media.getProjectItems();
 		return {
 			ok: true as const,
 			sequenceId: sequence.id,
 			revision: this.getRevision(),
 			audioSources: collectAudioSources({
-				tracks: sequence.tracks,
-				projectItems: this.editor.media.getProjectItems(),
+				tracks:
+					noiseReduction === undefined
+						? sequence.tracks
+						: setNoiseReduction({
+								tracks: sequence.tracks,
+								projectItems,
+								enabled: noiseReduction,
+							}),
+				projectItems,
 			}),
 		};
 	}
@@ -631,6 +642,37 @@ export class EditorApi {
 				return {
 					command: new UpdateClipsCommand({ updates }),
 					description: `set ${clips.length} clip(s) to ${formatGain(op.gainDb)}`,
+				};
+			}
+			case "set_noise_reduction": {
+				const projectItems = new Map(
+					this.editor.media
+						.getProjectItems()
+						.map((projectItem) => [projectItem.id, projectItem]),
+				);
+				const clips = this.findClipRefs({
+					tracks: sequence.tracks,
+					clipIds: op.clipIds,
+				});
+				const updates = clips.map(({ trackId, clipId, clip }) => {
+					if (!canClipHaveAudio(clip) || !hasMediaId(clip))
+						throw new InvalidOpError(
+							`set_noise_reduction: clip ${clipId} has no recording audio`,
+						);
+					const projectItem = projectItems.get(clip.mediaId);
+					if (op.enabled && !(projectItem && isDiskMedia(projectItem.file)))
+						throw new InvalidOpError(
+							`set_noise_reduction: clip ${clipId} plays an item stored in the browser, not under Footage, which splice can't reduce noise for`,
+						);
+					return {
+						trackId,
+						clipId,
+						patch: { params: { ...clip.params, noiseReduction: op.enabled } },
+					};
+				});
+				return {
+					command: new UpdateClipsCommand({ updates }),
+					description: `turned noise reduction ${op.enabled ? "on" : "off"} for ${clips.length} clip(s)`,
 				};
 			}
 			case "restore_takes":

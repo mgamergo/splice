@@ -318,7 +318,7 @@ describe("removal markers", () => {
 			raw: JSON.parse(JSON.stringify(markers())),
 		});
 		expect(saved[0]?.data?.badTakePlacements).toEqual([
-			[{ trackId: expect.any(String), volume: 18.1 }],
+			[{ trackId: expect.any(String), volume: 18.1, noiseReduction: false }],
 		]);
 
 		expect(swap()).toMatchObject({ ok: true });
@@ -766,9 +766,15 @@ test("swapping back puts each surviving range of a tightened take on its own tra
 	expect(
 		stored?.kind === "removal" ? stored.badTakePlacements?.[0] : undefined,
 	).toEqual([
+		// Cut whole, so it goes back with its recording's gain and noise reduction.
 		{ trackId: mainId, audioTrackId: dialogueId },
-		{ trackId: mainId, audioTrackId: dialogueId },
-		{ trackId: "overlay" },
+		{
+			trackId: mainId,
+			audioTrackId: dialogueId,
+			volume: 0,
+			noiseReduction: false,
+		},
+		{ trackId: "overlay", volume: 0, noiseReduction: false },
 	]);
 	expect(swap(1)).toMatchObject({ ok: true });
 	expect(swap(0)).toMatchObject({ ok: true });

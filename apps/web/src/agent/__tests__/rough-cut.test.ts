@@ -54,6 +54,8 @@ beforeEach(() => {
 });
 
 const active = () => editor.sequences.getActiveSequence();
+/** How a swapped-out take of plain audio at 0 dB is saved. */
+const plainAudio = { volume: 0, noiseReduction: false };
 const raw = () =>
 	api.rawSequence({
 		projectItemIds: [first, second],
@@ -622,7 +624,12 @@ test.each([true, false])(
 		);
 		expect(
 			normalizeMarkers({ raw: active().markers })[0].data?.badTakePlacements,
-		).toEqual([[{ trackId: tracks.main.id }, { trackId: "overlay" }]]);
+		).toEqual([
+			[
+				{ trackId: tracks.main.id, ...plainAudio },
+				{ trackId: "overlay", ...plainAudio },
+			],
+		]);
 
 		expect(apply({ op: "swap_take", markerId, takeIndex: 0 })).toMatchObject({
 			ok: true,
@@ -684,8 +691,8 @@ test("swapping back keeps each extracted audio part on its original track", () =
 		normalizeMarkers({ raw: active().markers })[0].data?.badTakePlacements,
 	).toEqual([
 		[
-			{ trackId: main.id, audioTrackId: audio.id },
-			{ trackId: main.id, audioTrackId: otherAudio.id },
+			{ trackId: main.id, audioTrackId: audio.id, ...plainAudio },
+			{ trackId: main.id, audioTrackId: otherAudio.id, ...plainAudio },
 		],
 	]);
 
