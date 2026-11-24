@@ -73,7 +73,10 @@ test("plays the ranges in order from an ffconcat list, as dual mono, on the tran
 		"outpoint 4.000000",
 		"",
 	]);
-	const args = ebur128Args({ source: "Cache/loudness/ranges.ffconcat", concat: true });
+	const args = ebur128Args({
+		source: "Cache/loudness/ranges.ffconcat",
+		concat: true,
+	});
 	expect(args.slice(args.indexOf("-format_whitelist"))).toEqual([
 		"-format_whitelist",
 		"concat,mov,matroska,webm,wav,mp3,aac,flac,ogg",
@@ -219,8 +222,8 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 			{ start: 1.5, end: 3 },
 		];
 		const [first, joined] = await Promise.all([
-			meter.measure({ path: "take.wav", ranges }),
-			meter.measure({ path: "take.wav", ranges }),
+			meter.measure({ params: { path: "take.wav", ranges } }),
+			meter.measure({ params: { path: "take.wav", ranges } }),
 		]);
 		expect(first).toEqual({
 			path: "take.wav",
@@ -232,20 +235,28 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		});
 		expect(joined).toEqual(first);
 		expect(
-			await meter.measure({ path: "take.wav", ranges: ranges.map((r) => ({ ...r })) }),
+			await meter.measure({
+				params: { path: "take.wav", ranges: ranges.map((r) => ({ ...r })) },
+			}),
 		).toMatchObject({ integratedLufs: -20, cached: true });
 		// Played in another order, the joins differ, so it's measured again.
 		expect(
-			await meter.measure({ path: "take.wav", ranges: [...ranges].reverse() }),
+			await meter.measure({
+				params: { path: "take.wav", ranges: [...ranges].reverse() },
+			}),
 		).toMatchObject({ cached: false });
-		expect(await meter.measure({ path: "take.wav" })).toMatchObject({
-			ranges: null,
-			cached: false,
-		});
+		expect(await meter.measure({ params: { path: "take.wav" } })).toMatchObject(
+			{
+				ranges: null,
+				cached: false,
+			},
+		);
 		expect(calls).toHaveLength(3);
 
 		await utimes(file, new Date(), new Date(Date.now() + 10_000));
-		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
+		expect(
+			await meter.measure({ params: { path: "take.wav", ranges } }),
+		).toMatchObject({
 			cached: false,
 		});
 		expect(calls).toHaveLength(4);
@@ -267,18 +278,22 @@ test("refuses paths outside Footage and files that aren't audio or video", async
 			},
 		});
 		for (const path of ["../secret.wav", "notes.txt"]) {
-			await expect(meter.measure({ path })).rejects.toMatchObject({
+			await expect(meter.measure({ params: { path } })).rejects.toMatchObject({
 				code: RPC_ERRORS.INVALID_PARAMS,
 				data: undefined,
 			});
 		}
 		// A recording that left Footage says so, so normalizing can skip it.
-		await expect(meter.measure({ path: "missing.wav" })).rejects.toMatchObject({
+		await expect(
+			meter.measure({ params: { path: "missing.wav" } }),
+		).rejects.toMatchObject({
 			code: RPC_ERRORS.INVALID_PARAMS,
 			data: { missingFootage: true },
 		});
 		await expect(
-			meter.measure({ path: "a.wav", ranges: [{ start: 2, end: 1 }] }),
+			meter.measure({
+				params: { path: "a.wav", ranges: [{ start: 2, end: 1 }] },
+			}),
 		).rejects.toMatchObject({ code: RPC_ERRORS.INVALID_PARAMS });
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -583,13 +598,17 @@ test.skipIf(!ffmpeg)(
 			expect(measured.truePeakDbtp ?? -Infinity).toBeGreaterThanOrEqual(
 				(exact.peak ?? 0) - 0.1,
 			);
-			const copies = [...new Bun.Glob("audio-*.mka").scanSync(
-				join(root, "Cache", "loudness"),
-			)];
+			const copies = [
+				...new Bun.Glob("audio-*.mka").scanSync(
+					join(root, "Cache", "loudness"),
+				),
+			];
 			expect(copies).toHaveLength(1);
 			await measure(source, [{ start: 0, end: 1 }]);
 			expect([
-				...new Bun.Glob("audio-*.mka").scanSync(join(root, "Cache", "loudness")),
+				...new Bun.Glob("audio-*.mka").scanSync(
+					join(root, "Cache", "loudness"),
+				),
 			]).toEqual(copies);
 		}),
 	60_000,

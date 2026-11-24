@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import { createSharedWork } from "./shared-work";
 import {
 	ffmpegInputArgs,
 	findFfmpeg,
@@ -386,14 +387,16 @@ export function createPauseDetector({
 }) {
 	const stop = new AbortController();
 	const cacheDir = join(root, "Cache", "pauses");
-	const scans = new Map<string, Promise<Scan>>();
+	const scans = createSharedWork<Scan>({ stop: stop.signal });
 
 	async function scan({
 		path,
 		noiseDb,
+		signal,
 	}: {
 		path: string;
 		noiseDb: number;
+		signal?: AbortSignal;
 	}): Promise<{ scan: Scan; cached: boolean }> {
 		const { source, info } = await resolveRecording({ root, path });
 		const key = createHash("sha256")
@@ -408,49 +411,51 @@ export function createPauseDetector({
 				.catch(() => null),
 		);
 		if (cached.success) return { scan: cached.data, cached: true };
-		let pending = scans.get(key);
-		if (!pending) {
-			pending = (async () => {
-				const command = await findFfmpeg({ root });
-				const probe = await probeRecording({
+		const work = async (jobSignal: AbortSignal) => {
+			const command = await findFfmpeg({ root });
+			const probe = await probeRecording({
+				command,
+				source,
+				signal: jobSignal,
+			});
+			let result: Scan;
+			if (parseHasAudio({ output: probe })) {
+				const lines: string[] = [];
+				await run({
 					command,
-					source,
-					signal: stop.signal,
+					args: silencedetectArgs({ source, noiseDb }),
+					signal: jobSignal,
+					onLine: (line) => lines.push(line),
 				});
-				let result: Scan;
-				if (parseHasAudio({ output: probe })) {
-					const lines: string[] = [];
-					await run({
-						command,
-						args: silencedetectArgs({ source, noiseDb }),
-						signal: stop.signal,
-						onLine: (line) => lines.push(line),
-					});
-					result = {
-						...parseSilencedetect({ output: lines.join("\n") }),
-						hasAudio: true,
-					};
-				} else {
-					const { durationSeconds } = parseSilencedetect({ output: probe });
-					result = { durationSeconds, hasAudio: false, silences: [] };
-				}
-				await mkdir(cacheDir, { recursive: true });
-				const temporary = await mkdtemp(join(cacheDir, ".scan-"));
-				try {
-					const file = join(temporary, "scan.json");
-					await Bun.write(file, JSON.stringify(result));
-					await rename(file, cachePath);
-				} finally {
-					await rm(temporary, { recursive: true, force: true });
-				}
-				return result;
-			})().finally(() => scans.delete(key));
-			scans.set(key, pending);
-		}
-		return { scan: await pending, cached: false };
+				result = {
+					...parseSilencedetect({ output: lines.join("\n") }),
+					hasAudio: true,
+				};
+			} else {
+				const { durationSeconds } = parseSilencedetect({ output: probe });
+				result = { durationSeconds, hasAudio: false, silences: [] };
+			}
+			await mkdir(cacheDir, { recursive: true });
+			const temporary = await mkdtemp(join(cacheDir, ".scan-"));
+			try {
+				const file = join(temporary, "scan.json");
+				await Bun.write(file, JSON.stringify(result));
+				await rename(file, cachePath);
+			} finally {
+				await rm(temporary, { recursive: true, force: true });
+			}
+			return result;
+		};
+		return { scan: await scans.run({ key, signal, work }), cached: false };
 	}
 
-	async function analyze(params: unknown) {
+	async function analyze({
+		params,
+		signal,
+	}: {
+		params: unknown;
+		signal?: AbortSignal;
+	}) {
 		const parsed = detectPausesSchema.safeParse(params);
 		if (!parsed.success) throw invalidParams(parsed.error.message);
 		const {
@@ -460,7 +465,7 @@ export function createPauseDetector({
 		} = parsed.data;
 		const [{ scan: result, cached }, { transcript, transcriptError }] =
 			await Promise.all([
-				scan({ path, noiseDb }),
+				scan({ path, noiseDb, signal }),
 				// Pause edges come from the audio, and the transcript only joins
 				// silences and finds fillers, so a transcript that can't be read
 				// leaves the audio's pauses.
@@ -496,9 +501,16 @@ export function createPauseDetector({
 	}
 
 	return {
-		async detect(params: unknown) {
+		/** `signal` ends this request's wait, and the scan once no request waits. */
+		async detect({
+			params,
+			signal,
+		}: {
+			params: unknown;
+			signal?: AbortSignal;
+		}) {
 			const { transcript, transcriptError, silences, pauses, ...rest } =
-				await analyze(params);
+				await analyze({ params, signal });
 			return {
 				...rest,
 				transcribed: transcript !== null,
@@ -522,8 +534,16 @@ export function createPauseDetector({
 		},
 
 		/** What detect reports as pauses, without aligning filler words. */
-		async pauseRanges(params: unknown): Promise<TimeRange[]> {
-			return (await analyze(params)).pauses.map(roundRange);
+		async pauseRanges({
+			signal,
+			...params
+		}: {
+			path: string;
+			noiseDb?: number;
+			minSeconds?: number;
+			signal?: AbortSignal;
+		}): Promise<TimeRange[]> {
+			return (await analyze({ params, signal })).pauses.map(roundRange);
 		},
 
 		/**
@@ -532,14 +552,17 @@ export function createPauseDetector({
 		 */
 		async fillerCuts({
 			paddingSeconds,
+			signal,
 			...params
 		}: {
 			path: string;
 			noiseDb?: number;
 			paddingSeconds: number;
+			signal?: AbortSignal;
 		}): Promise<TimeRange[] | null> {
-			const { hasAudio, transcript, transcriptError, silences } =
-				await analyze(params);
+			const { hasAudio, transcript, transcriptError, silences } = await analyze(
+				{ params, signal },
+			);
 			if (!hasAudio) return [];
 			if (transcriptError) throw transcriptError;
 			if (!transcript) return null;

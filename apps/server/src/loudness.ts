@@ -8,7 +8,15 @@ import {
 	sourceRangeSchema,
 } from "@splice/bridge/ops";
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
@@ -19,6 +27,7 @@ import {
 } from "./transcription-tools";
 import { mediaTypeForPath } from "./footage";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import { createSharedWork } from "./shared-work";
 
 export const measureLoudnessInput = {
 	path: footagePath,
@@ -315,7 +324,13 @@ async function audioOnly({
 		.update(JSON.stringify([resolve(source), size, mtimeMs]))
 		.digest("hex");
 	const audio = join(cacheDir, `audio-${key}.mka`);
-	if (await access(audio).then(() => true, () => false)) return audio;
+	if (
+		await access(audio).then(
+			() => true,
+			() => false,
+		)
+	)
+		return audio;
 	// Each copy is written in its own folder, then moved into place whole, so
 	// measurements of the same recording never share a half-written file.
 	const job = await mkdtemp(join(cacheDir, ".audio-"));
@@ -341,7 +356,13 @@ async function audioOnly({
 		});
 		await rename(partial, audio).catch(async (error) => {
 			// Another measurement published the same copy first.
-			if (!(await access(audio).then(() => true, () => false))) throw error;
+			if (
+				!(await access(audio).then(
+					() => true,
+					() => false,
+				))
+			)
+				throw error;
 		});
 	} finally {
 		await rm(job, { recursive: true, force: true });
@@ -408,12 +429,10 @@ export function createLoudnessMeter({
 	measure?: typeof runEbur128;
 }) {
 	const stop = new AbortController();
-	const signal = stop.signal;
 	const cacheDir = join(root, "Cache", "loudness");
-	const active = new Map<
-		string,
-		Promise<LoudnessMeasurement & { cached: boolean }>
-	>();
+	const active = createSharedWork<LoudnessMeasurement & { cached: boolean }>({
+		stop: stop.signal,
+	});
 
 	async function identify({
 		path,
@@ -438,12 +457,14 @@ export function createLoudnessMeter({
 		source,
 		key,
 		cachePath,
+		signal,
 	}: {
 		path: string;
 		ranges: SourceRange[] | null;
 		source: string;
 		key: string;
 		cachePath: string;
+		signal: AbortSignal;
 	}): Promise<LoudnessMeasurement> {
 		const measurement = await measure({ root, source, ranges, signal });
 		const current = await identify({ path, ranges });
@@ -462,7 +483,14 @@ export function createLoudnessMeter({
 	}
 
 	return {
-		async measure(params: unknown) {
+		/** `signal` ends this request's wait, and FFmpeg once no request waits. */
+		async measure({
+			params,
+			signal,
+		}: {
+			params: unknown;
+			signal?: AbortSignal;
+		}) {
 			const parsed = measureSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const { path } = parsed.data;
@@ -470,32 +498,32 @@ export function createLoudnessMeter({
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
 			const { source, key, cachePath } = await identify({ path, ranges });
-			signal.throwIfAborted();
-			let pending = active.get(key);
-			if (!pending) {
-				pending = readCache(cachePath).then(async (cached) =>
-					cached
-						? { ...cached, cached: true }
-						: {
-								...(await measureAndCache({
-									path,
-									ranges,
-									source,
-									key,
-									cachePath,
-								})),
-								cached: false,
-							},
-				);
-				active.set(key, pending);
-				void pending.catch(() => undefined).finally(() => active.delete(key));
-			}
-			return { path, ranges, ...(await pending) };
+			stop.signal.throwIfAborted();
+			const measured = await active.run({
+				key,
+				signal,
+				work: async (jobSignal) => {
+					const cached = await readCache(cachePath);
+					if (cached) return { ...cached, cached: true };
+					return {
+						...(await measureAndCache({
+							path,
+							ranges,
+							source,
+							key,
+							cachePath,
+							signal: jobSignal,
+						})),
+						cached: false,
+					};
+				},
+			});
+			return { path, ranges, ...measured };
 		},
 
 		async stop() {
 			stop.abort();
-			await Promise.allSettled(active.values());
+			await active.settled();
 		},
 	};
 }

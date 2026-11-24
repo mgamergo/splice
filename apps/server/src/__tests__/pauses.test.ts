@@ -475,7 +475,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				root,
 				readTranscript: async () => cached,
 			});
-			const first = await detector.detect({ path: "take.wav" });
+			const first = await detector.detect({ params: { path: "take.wav" } });
 			expect(first).toMatchObject({
 				path: "take.wav",
 				noiseDb: -35,
@@ -495,8 +495,10 @@ test.skipIf(!Bun.which("ffmpeg"))(
 
 			cached = transcript({ words: [word(["uh", 2.7, 3])] });
 			const second = await detector.detect({
-				path: "take.wav",
-				minSeconds: 0.25,
+				params: {
+					path: "take.wav",
+					minSeconds: 0.25,
+				},
 			});
 			expect(second).toMatchObject({
 				cached: true,
@@ -513,10 +515,12 @@ test.skipIf(!Bun.which("ffmpeg"))(
 			expect(cut?.start).toBeCloseTo(1.2, 1);
 			expect(cut?.end).toBeCloseTo(3.2, 1);
 			expect(second.pauses).toHaveLength(3);
-			await expect(detector.detect({ path: "../take.wav" })).rejects.toThrow();
-			await expect(detector.detect({ path: "missing.wav" })).rejects.toThrow(
-				"Expected an existing video or audio file",
-			);
+			await expect(
+				detector.detect({ params: { path: "../take.wav" } }),
+			).rejects.toThrow();
+			await expect(
+				detector.detect({ params: { path: "missing.wav" } }),
+			).rejects.toThrow("Expected an existing video or audio file");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -557,12 +561,12 @@ test.skipIf(!Bun.which("ffmpeg"))(
 					],
 				}),
 			);
-			expect((await detector.detect({ path: "threshold.wav" })).pauses).toEqual(
-				[
-					{ start: 1, end: 1.6 },
-					{ start: 8, end: 8.6 },
-				],
-			);
+			expect(
+				(await detector.detect({ params: { path: "threshold.wav" } })).pauses,
+			).toEqual([
+				{ start: 1, end: 1.6 },
+				{ start: 8, end: 8.6 },
+			]);
 
 			const video = join(root, "Footage", "screen.mp4");
 			ffmpeg([
@@ -574,7 +578,9 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				"mpeg4",
 				video,
 			]);
-			expect(await detector.detect({ path: "screen.mp4" })).toMatchObject({
+			expect(
+				await detector.detect({ params: { path: "screen.mp4" } }),
+			).toMatchObject({
 				cached: false,
 				hasAudio: false,
 				durationSeconds: 1,
@@ -582,7 +588,9 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				pauseSeconds: 0,
 			});
 			// The scan is cached like any other.
-			expect(await detector.detect({ path: "screen.mp4" })).toMatchObject({
+			expect(
+				await detector.detect({ params: { path: "screen.mp4" } }),
+			).toMatchObject({
 				cached: true,
 				hasAudio: false,
 			});
@@ -849,15 +857,17 @@ test.skipIf(!Bun.which("ffmpeg"))(
 			expect(joined).toHaveLength(1);
 			expect(joined[0].start).toBeCloseTo(1, 1);
 			expect(joined[0].end).toBeCloseTo(1.85, 1);
-			expect((await detector.detect({ path: "click.wav" })).pauses).toEqual(
-				joined,
-			);
+			expect(
+				(await detector.detect({ params: { path: "click.wav" } })).pauses,
+			).toEqual(joined);
 			expect(
 				await resolve({ sourceGains: [], tightening: planned.tightening }),
 			).toMatchObject({ plan: { pauses: [] } });
 
 			broken = true;
-			expect(await detector.detect({ path: "click.wav" })).toMatchObject({
+			expect(
+				await detector.detect({ params: { path: "click.wav" } }),
+			).toMatchObject({
 				hasAudio: true,
 				transcribed: false,
 				transcriptError: expect.stringContaining(

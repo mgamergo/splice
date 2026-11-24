@@ -149,12 +149,17 @@ export function startServer({
 		readTranscript: transcription.cached,
 	});
 	const loudness = createLoudnessMeter({ root });
-	const serverJobs = new Map<string, (params: unknown) => Promise<unknown>>([
-		["transcribe.start", (params) => transcription.start(params)],
-		["transcribe.status", (params) => transcription.status(params)],
-		["transcript.words", (params) => transcription.words(params)],
-		["loudness.measure", (params) => loudness.measure(params)],
-		["pauses.detect", (params) => pauses.detect(params)],
+	// `signal` aborts when the caller hangs up, so an FFmpeg scan nobody
+	// waits for stops.
+	const serverJobs = new Map<
+		string,
+		(request: { params: unknown; signal: AbortSignal }) => Promise<unknown>
+	>([
+		["transcribe.start", ({ params }) => transcription.start(params)],
+		["transcribe.status", ({ params }) => transcription.status(params)],
+		["transcript.words", ({ params }) => transcription.words(params)],
+		["loudness.measure", (request) => loudness.measure(request)],
+		["pauses.detect", (request) => pauses.detect(request)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
@@ -214,7 +219,7 @@ export function startServer({
 		const job = serverJobs.get(method);
 		if (job) {
 			try {
-				const result = await job(params);
+				const result = await job({ params, signal: request.signal });
 				return Response.json(rpcResult({ id, result }));
 			} catch (error) {
 				return Response.json(
@@ -258,8 +263,10 @@ export function startServer({
 								params: sourceParams,
 							}),
 						),
-					pauseRanges: pauses.pauseRanges,
-					fillerCuts: pauses.fillerCuts,
+					pauseRanges: (scan) =>
+						pauses.pauseRanges({ ...scan, signal: request.signal }),
+					fillerCuts: (scan) =>
+						pauses.fillerCuts({ ...scan, signal: request.signal }),
 				}).catch((error: unknown) => {
 					throw error instanceof BridgeError
 						? error
@@ -547,7 +554,8 @@ export function startServer({
 			if (url.pathname === BRIDGE_PATHS.rpc) {
 				// Imports and a rough cut's uncached pause scans send nothing until
 				// they finish, which can outlast Bun's idle timeout. Bridge calls have
-				// their own deadlines, and FFmpeg scans end with their file.
+				// their own deadlines, `splice mcp` gives each call one, and an FFmpeg
+				// scan stops once no caller waits for it.
 				srv.timeout(request, 0);
 				return handleRpc(request);
 			}

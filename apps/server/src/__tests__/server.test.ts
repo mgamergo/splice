@@ -373,6 +373,76 @@ describe("rpc endpoint", () => {
 		}
 	}, 20_000);
 
+	test("stops a pause scan's FFmpeg when its caller hangs up", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-hang-up-"));
+		try {
+			await mkdir(join(root, "Footage"));
+			await Bun.write(join(root, "Footage", "talk.wav"), "");
+			// A fake FFmpeg whose silence scan stalls after writing its process ID.
+			const pidFile = join(root, "scan.pid");
+			const ffmpeg = join(root, "Tools", "ffmpeg");
+			await Bun.write(
+				ffmpeg,
+				[
+					"#!/bin/sh",
+					'case "$*" in',
+					`*silencedetect*) echo $$ > '${pidFile}'; exec sleep 60 ;;`,
+					'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
+					'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
+					"esac",
+					"",
+				].join("\n"),
+			);
+			await chmod(ffmpeg, 0o755);
+			const server = startServer({
+				port: 0,
+				token: TOKEN,
+				root,
+				upstream: null,
+			});
+			running.push(server);
+			const hangUp = new AbortController();
+			const call = fetch(`${server.origin}${BRIDGE_PATHS.rpc}`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${TOKEN}` },
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "pauses.detect",
+					params: { path: "talk.wav" },
+				}),
+				signal: hangUp.signal,
+			});
+			call.catch(() => {});
+			const isRunning = (pid: number) => {
+				try {
+					process.kill(pid, 0);
+					return true;
+				} catch {
+					return false;
+				}
+			};
+			let pid = 0;
+			for (let tries = 0; !pid && tries < 100; tries++) {
+				await Bun.sleep(50);
+				pid = Number(
+					await Bun.file(pidFile)
+						.text()
+						.catch(() => "0"),
+				);
+			}
+			expect(isRunning(pid)).toBe(true);
+
+			hangUp.abort();
+			await expect(call).rejects.toThrow();
+			for (let tries = 0; isRunning(pid) && tries < 100; tries++)
+				await Bun.sleep(50);
+			expect(isRunning(pid)).toBe(false);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	}, 20_000);
+
 	test("status tracks the revision the tab reports", async () => {
 		const server = start();
 		const tab = connectTab({ origin: server.origin });
