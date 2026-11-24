@@ -1,22 +1,26 @@
 import { RPC_ERRORS } from "@splice/bridge";
 import {
+	type BeginExportRequest,
 	beginExportRequestSchema,
+	EXPORT_FILE_KINDS,
 	type ExportFileKind,
 	type ExportRecord,
 	type ExportSource,
 	exportIdRequestSchema,
+	exportRecordSchema,
 	exportsFileSchema,
 	exportsListRequestSchema,
 } from "@splice/bridge/delivery";
 import { randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import {
 	appendFile,
 	mkdir,
+	readdir,
 	readFile,
 	rename,
 	rm,
 	stat,
-	unlink,
 	writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -29,7 +33,9 @@ export const EXPORTS_FOLDER = "Exports";
 export const MAX_EXPORT_CHUNK_BYTES = 64 * 1024 * 1024;
 /** Where an export's files wait until both are written. */
 const STAGING_FOLDER = ".staging";
-const HISTORY_FILE = "exports.json";
+/** Each published pair's record, next to its files. */
+const RECORD_FILE = "export.json";
+const LEGACY_HISTORY_FILE = "exports.json";
 const MAX_STEM_LENGTH = 80;
 
 /** Opens a folder in the platform's file manager. */
@@ -77,15 +83,22 @@ async function exists(path: string): Promise<boolean> {
 }
 
 interface PendingExport {
-	source: ExportSource;
+	source: BeginExportRequest;
 	dir: string;
 	written: Map<ExportFileKind, number>;
 }
 
+/** A published pair and where its files are, relative to Exports. */
+interface PublishedExport {
+	record: ExportRecord;
+	files: Record<ExportFileKind, string>;
+}
+
 /**
  * Publishes MP4/SRT pairs under Exports. The tab writes both files into a
- * staging folder; only once both are there do they move into Exports under
- * one new stem, so a failed export never replaces or half-writes a pair.
+ * staging folder of their own; once both are there, the folder gets their
+ * record and moves into Exports as `<stem>` in one rename, so a pair is
+ * published whole, with its record, or not at all.
  */
 export function createExportStore({
 	root,
@@ -98,15 +111,16 @@ export function createExportStore({
 }) {
 	const folder = join(root, EXPORTS_FOLDER);
 	const staging = join(folder, STAGING_FOLDER);
-	const historyPath = join(folder, HISTORY_FILE);
 	const pending = new Map<string, PendingExport>();
-	// Publishing picks a free stem and rewrites the history, one at a time.
+	// Publishing picks a free stem and moves a folder in, one at a time.
 	let publishing: Promise<unknown> = Promise.resolve();
 
-	async function readHistory(): Promise<ExportRecord[]> {
+	/** Pairs published before per-export folders, from `exports.json`. */
+	async function readLegacyHistory(): Promise<PublishedExport[]> {
+		const path = join(folder, LEGACY_HISTORY_FILE);
 		let text: string;
 		try {
-			text = await readFile(historyPath, "utf8");
+			text = await readFile(path, "utf8");
 		} catch {
 			return [];
 		}
@@ -114,15 +128,64 @@ export function createExportStore({
 		if (!parsed.success)
 			throw new BridgeError({
 				code: RPC_ERRORS.INTERNAL,
-				message: `${historyPath} is not a valid export history. Move it aside to start a new one.`,
+				message: `${path} is not a valid export history. Move it aside to start a new one.`,
 			});
-		return parsed.data.exports;
+		return parsed.data.exports.map((record) => ({
+			record,
+			files: { mp4: `${record.stem}.mp4`, srt: `${record.stem}.srt` },
+		}));
 	}
 
-	async function writeHistory(exports: ExportRecord[]): Promise<void> {
-		const temporary = `${historyPath}.${randomUUID()}.tmp`;
-		await Bun.write(temporary, JSON.stringify({ version: 1, exports }, null, 2));
-		await rename(temporary, historyPath);
+	/** Every published pair, oldest first. */
+	async function readPublished(): Promise<PublishedExport[]> {
+		let entries: Dirent[];
+		try {
+			entries = await readdir(folder, { withFileTypes: true });
+		} catch {
+			return [];
+		}
+		const published = await Promise.all(
+			entries
+				.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+				.map(async ({ name }): Promise<PublishedExport | null> => {
+					let text: string;
+					try {
+						text = await readFile(join(folder, name, RECORD_FILE), "utf8");
+					} catch {
+						// A folder the creator made, not an export.
+						return null;
+					}
+					let json: unknown;
+					try {
+						json = JSON.parse(text);
+					} catch {
+						return null;
+					}
+					const parsed = exportRecordSchema.safeParse(json);
+					if (!parsed.success) return null;
+					const { stem } = parsed.data;
+					return {
+						record: parsed.data,
+						files: { mp4: `${name}/${stem}.mp4`, srt: `${name}/${stem}.srt` },
+					};
+				}),
+		);
+		return [
+			...(await readLegacyHistory()),
+			...published.filter((entry) => entry !== null),
+		].sort(
+			(a, b) =>
+				a.record.exportedAt.localeCompare(b.record.exportedAt) ||
+				a.record.stem.localeCompare(b.record.stem, undefined, { numeric: true }),
+		);
+	}
+
+	async function committed(deliveryId: string): Promise<ExportRecord | null> {
+		return (
+			(await readPublished()).find(
+				({ record }) => record.deliveryId === deliveryId,
+			)?.record ?? null
+		);
 	}
 
 	function pendingExport(params: unknown): [string, PendingExport] {
@@ -141,6 +204,7 @@ export function createExportStore({
 		for (let attempt = 1; ; attempt++) {
 			const stem = attempt === 1 ? base : `${base} (${attempt})`;
 			if (
+				!(await exists(join(folder, stem))) &&
 				!(await exists(join(folder, `${stem}.mp4`))) &&
 				!(await exists(join(folder, `${stem}.srt`)))
 			)
@@ -148,45 +212,48 @@ export function createExportStore({
 		}
 	}
 
-	async function publish({ id, entry }: { id: string; entry: PendingExport }) {
-		for (const kind of ["mp4", "srt"] as const)
-			if (!entry.written.has(kind))
-				throw invalidParams(`The ${kind.toUpperCase()} was not written yet.`);
-		if (!entry.written.get("mp4"))
-			throw invalidParams("The MP4 is empty.");
-		const stem = await freeStem(entry.source);
-		const video = join(folder, `${stem}.mp4`);
-		const captions = join(folder, `${stem}.srt`);
+	async function publish(entry: PendingExport): Promise<ExportRecord> {
+		const { deliveryId, ...source } = entry.source;
+		// An earlier attempt at this Export, whose answer was lost, published it.
+		const earlier = await committed(deliveryId);
+		if (earlier) return earlier;
+		const stem = await freeStem(source);
 		const record: ExportRecord = {
-			...entry.source,
+			...source,
 			stem,
+			deliveryId,
 			exportedAt: now().toISOString(),
 			bytes: {
 				mp4: entry.written.get("mp4") ?? 0,
 				srt: entry.written.get("srt") ?? 0,
 			},
 		};
-		const history = await readHistory();
-		await rename(join(entry.dir, "mp4"), video);
-		try {
-			await rename(join(entry.dir, "srt"), captions);
-			await writeHistory([...history, record]);
-		} catch (error) {
-			// Without both files and their record the pair isn't published.
-			await Promise.all([unlink(video), unlink(captions)].map((p) => p.catch(() => {})));
-			throw error;
-		}
-		pending.delete(id);
-		await rm(entry.dir, { recursive: true, force: true });
+		// Nothing outside staging changes until the folder moves in whole.
+		for (const kind of EXPORT_FILE_KINDS)
+			await rename(join(entry.dir, kind), join(entry.dir, `${stem}.${kind}`));
+		await writeFile(
+			join(entry.dir, RECORD_FILE),
+			JSON.stringify(record, null, 2),
+		);
+		await rename(entry.dir, join(folder, stem));
 		return record;
 	}
 
 	return {
 		folder,
 
-		async begin(params: unknown) {
+		/**
+		 * Starts an export, or, when this Export click already published its
+		 * pair, returns that pair as `committed` instead of starting another.
+		 */
+		async begin(
+			params: unknown,
+		): Promise<{ exportId: string } | { committed: ExportRecord }> {
 			const parsed = beginExportRequestSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
+			await publishing;
+			const earlier = await committed(parsed.data.deliveryId);
+			if (earlier) return { committed: earlier };
 			// Staged files nothing waits for any more are temporary renders.
 			if (pending.size === 0)
 				await rm(staging, { recursive: true, force: true });
@@ -230,9 +297,20 @@ export function createExportStore({
 			return { bytes: offset + data.length };
 		},
 
-		publish(params: unknown): Promise<ExportRecord> {
+		async publish(params: unknown): Promise<ExportRecord> {
 			const [id, entry] = pendingExport(params);
-			const run = publishing.then(() => publish({ id, entry }));
+			for (const kind of EXPORT_FILE_KINDS)
+				if (!entry.written.has(kind))
+					throw invalidParams(`The ${kind.toUpperCase()} was not written yet.`);
+			if (!entry.written.get("mp4")) throw invalidParams("The MP4 is empty.");
+			// Publishing owns the staged files now; a late abort or write can't
+			// touch them.
+			pending.delete(id);
+			const run = publishing.then(() =>
+				publish(entry).finally(() =>
+					rm(entry.dir, { recursive: true, force: true }).catch(() => {}),
+				),
+			);
 			publishing = run.catch(() => {});
 			return run;
 		},
@@ -251,21 +329,18 @@ export function createExportStore({
 			const parsed = exportsListRequestSchema.safeParse(params ?? {});
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const { projectId } = parsed.data;
-			const records = (await readHistory())
-				.filter((record) => !projectId || record.projectId === projectId)
+			const published = (await readPublished())
+				.filter(({ record }) => !projectId || record.projectId === projectId)
 				.reverse();
 			return {
 				folder,
 				exports: await Promise.all(
-					records.map(async (record) => ({
+					published.map(async ({ record, files }) => ({
 						...record,
-						files: {
-							mp4: `${record.stem}.mp4`,
-							srt: `${record.stem}.srt`,
-						},
+						files,
 						present:
-							(await exists(join(folder, `${record.stem}.mp4`))) &&
-							(await exists(join(folder, `${record.stem}.srt`))),
+							(await exists(join(folder, files.mp4))) &&
+							(await exists(join(folder, files.srt))),
 					})),
 				),
 			};

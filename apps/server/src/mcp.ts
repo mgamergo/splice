@@ -782,7 +782,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "List exported MP4/SRT pairs",
 			description:
-				"Lists the MP4/SRT pairs Splice published under its Exports folder, newest first: project, sequence, the editor revision and content fingerprint each came from, when, file names and whether both files are still there. Exporting is the creator's decision in the editor; agents can't start one.",
+				"Lists the MP4/SRT pairs Splice published under its Exports folder, newest first: project, sequence, the editor revision and content fingerprint each came from, when, file paths under Exports (each pair has a folder of its own) and whether both files are still there. Exporting is the creator's decision in the editor; agents can't start one.",
 			inputSchema: exportsListRequestSchema.shape,
 		},
 		(args) =>
