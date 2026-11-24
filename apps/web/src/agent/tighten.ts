@@ -137,6 +137,33 @@ export function subtractSpans({
 	return unionSpans(within).flatMap((area) => outsideHoles({ area, holes }));
 }
 
+/** The parts of `spans` inside any span in `within`, sorted and disjoint. */
+export function intersectSpans<T extends Span>({
+	spans,
+	within,
+}: {
+	spans: T[];
+	within: T[];
+}): T[] {
+	const inside = unionSpans(within);
+	return unionSpans(spans).flatMap((span) => {
+		const kept: T[] = [];
+		for (
+			let i = firstEndingAfter({ spans: inside, at: span.start });
+			i < inside.length && inside[i].start < span.end;
+			i++
+		) {
+			const { start, end } = inside[i];
+			kept.push({
+				...span,
+				start: start > span.start ? start : span.start,
+				end: end < span.end ? end : span.end,
+			});
+		}
+		return kept;
+	});
+}
+
 /** Index of the first of the sorted, disjoint `spans` that ends after `at`. */
 function firstEndingAfter({ spans, at }: { spans: Span[]; at: number }) {
 	let low = 0;

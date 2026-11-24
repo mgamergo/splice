@@ -710,4 +710,86 @@ describe("pauses follow what plays", () => {
 		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(1.197, 3);
 		expect(result.durationSeconds).toBeCloseTo(22.803, 3);
 	});
+
+	test("cuts a pause only at the placement where every recording is silent", () => {
+		// The first recording's opening 6 s plays again at 24 s, under the
+		// scratch recording.
+		const seconds = (value: number) => mediaTimeFromSeconds({ seconds: value });
+		const repeat = buildClipFromMedia({
+			mediaId: first,
+			mediaType: "video",
+			name: first,
+			duration: seconds(12),
+			startTime: seconds(24),
+		});
+		if (repeat.type !== "video") throw new Error("Not a video clip");
+		const { tracks } = active();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [
+					...tracks.main.clips,
+					{
+						...repeat,
+						id: "repeat-clip",
+						duration: seconds(6),
+						trimEnd: seconds(6),
+					},
+				],
+			},
+		});
+		addScratch({ muted: false });
+		const { tracks: withScratch } = active();
+		editor.timeline.updateTracks({
+			...withScratch,
+			audio: withScratch.audio.map((track) => ({
+				...track,
+				clips: track.clips.map((clip) =>
+					clip.id === "scratch-clip"
+						? { ...clip, startTime: seconds(24), duration: seconds(6) }
+						: clip,
+				),
+			})),
+		});
+		/** How much of the scratch recording the new Rough Cut keeps. */
+		const scratchLength = () => {
+			const cutSequence = active();
+			expect(cutSequence.name).toStartWith("Rough Cut");
+			return cutSequence.tracks.audio
+				.flatMap((track) => track.clips)
+				.filter((clip) => "mediaId" in clip && clip.mediaId === scratch)
+				.reduce(
+					(sum, clip) => sum + mediaTimeToSeconds({ time: clip.duration }),
+					0,
+				);
+		};
+		const pauseOnly = cut([at([first, 2, 4.5])]);
+		expect(pauseOnly).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 1 } },
+		});
+		if (!pauseOnly.ok || !("tightening" in pauseOnly))
+			throw new Error("No cut");
+		expect(pauseOnly.tightening.pauses.removedSeconds).toBeCloseTo(2.1, 3);
+		expect(pauseOnly.durationSeconds).toBeCloseTo(27.9, 3);
+		expect(scratchLength()).toBeCloseTo(6, 3);
+
+		// A filler that snaps to the pause takes the pause only where it is
+		// silent; at the second placement only the filler goes.
+		const withFiller = api.roughCut({
+			expectedRevision: api.getRevision(),
+			pauses: [at([first, 2, 4.5])],
+			fillerWords: [at([first, 4.5, 4.8])],
+		});
+		expect(withFiller).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 1 }, fillerWords: { count: 1 } },
+		});
+		if (!withFiller.ok || !("tightening" in withFiller))
+			throw new Error("No cut");
+		expect(withFiller.tightening.removedSeconds).toBeCloseTo(2.9, 3);
+		expect(withFiller.durationSeconds).toBeCloseTo(27.1, 3);
+		expect(scratchLength()).toBeCloseTo(5.7, 3);
+	});
 });

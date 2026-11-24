@@ -3,6 +3,7 @@ import { audibleClips } from "@/agent/loudness";
 import {
 	closeSlivers,
 	countOverlapping,
+	intersectSpans,
 	measureSpans,
 	outsideHoles,
 	planTightenCuts,
@@ -120,18 +121,14 @@ function clampToItems({
 	});
 }
 
-/** The sequence with only the clips whose recording is heard. */
-function heardTracks({
+/** The sequence with only the clips `keep` accepts, on tracks that can be heard. */
+function keepClips({
 	tracks,
-	projectItems,
+	keep,
 }: {
 	tracks: SequenceTracks;
-	projectItems: ProjectItem[];
+	keep: (clip: TimelineClip) => boolean;
 }): SequenceTracks {
-	const heard = new Set(
-		audibleClips({ tracks, projectItems }).map(({ clip }) => clip.id),
-	);
-	const keep = (clip: TimelineClip) => heard.has(clip.id);
 	return {
 		main: { ...tracks.main, clips: tracks.main.clips.filter(keep) },
 		overlay: tracks.overlay.flatMap((track) =>
@@ -146,11 +143,21 @@ function heardTracks({
 	};
 }
 
+/** A part of a pause that is silent at one placement of its recording. */
+export type SilentPart = ItemRange & {
+	/** Index of the pause in the list given to `audiblePauses`. */
+	pauseIndex: number;
+	/** The clip whose placement was checked. */
+	clipId: string;
+};
+
 /**
  * The parts of each pause where every recording heard on the sequence is
- * silent, in source seconds, one list per pause. A ripple delete cuts every
- * track, so a pause in a muted clip, or under another recording's sound,
- * isn't cut.
+ * silent, in source seconds, each with the clip it is silent in. A ripple
+ * delete cuts every track, so a pause in a muted clip, or under another
+ * recording's sound, isn't cut. The same source time can be silent at one
+ * placement of a recording and under another recording's sound at the next,
+ * so a part only holds for its own clip.
  */
 export function audiblePauses({
 	tracks,
@@ -160,7 +167,7 @@ export function audiblePauses({
 	tracks: SequenceTracks;
 	pauses: ItemRange[];
 	projectItems: ProjectItem[];
-}): ItemRange[][] {
+}): SilentPart[] {
 	const placed = audibleClips({ tracks, projectItems }).map(({ clip }) => {
 		const { startTime, trimStart, retime } = clip;
 		const toSequence = (source: number) =>
@@ -200,24 +207,44 @@ export function audiblePauses({
 		});
 		const span = { start: startTime, end: startTime + clip.duration };
 		return {
+			clipId: clip.id,
 			toSource,
 			silent,
 			sounding: subtractSpans({ within: [span], without: silent }),
 		};
 	});
 	const holes = unionSpans(placed.flatMap(({ sounding }) => sounding));
-	const pieces: Array<Array<{ start: number; end: number }>> = pauses.map(
+	return placed.flatMap(({ clipId, toSource, silent }) =>
+		silent.flatMap((window) =>
+			outsideHoles({ area: window, holes }).map(({ start, end }) => ({
+				projectItemId: pauses[window.index].projectItemId,
+				sourceIn: start === window.start ? window.sourceIn : toSource(start),
+				sourceOut: end === window.end ? window.sourceOut : toSource(end),
+				pauseIndex: window.index,
+				clipId,
+			})),
+		),
+	);
+}
+
+/**
+ * Each pause's silent parts in source seconds, joined across placements, so
+ * tightening plans one cut for a pause split across a razor.
+ */
+function pausesInSource({
+	parts,
+	pauses,
+}: {
+	parts: SilentPart[];
+	pauses: ItemRange[];
+}): ItemRange[] {
+	const spans: Array<Array<{ start: number; end: number }>> = pauses.map(
 		() => [],
 	);
-	for (const { toSource, silent } of placed)
-		for (const window of silent)
-			for (const { start, end } of outsideHoles({ area: window, holes }))
-				pieces[window.index].push({
-					start: start === window.start ? window.sourceIn : toSource(start),
-					end: end === window.end ? window.sourceOut : toSource(end),
-				});
-	return pieces.map((spans, index) =>
-		unionSpans(spans).map(({ start, end }) => ({
+	for (const { pauseIndex, sourceIn, sourceOut } of parts)
+		spans[pauseIndex].push({ start: sourceIn, end: sourceOut });
+	return spans.flatMap((found, index) =>
+		unionSpans(found).map(({ start, end }) => ({
 			projectItemId: pauses[index].projectItemId,
 			sourceIn: start,
 			sourceOut: end,
@@ -322,9 +349,24 @@ export function buildRoughCut({
 		fillerWords: clampToItems({ ranges: plan.fillerWords, projectItems }),
 	};
 	// Tightening cuts what plays, so a recording's muted copy elsewhere isn't cut.
-	const heard = heardTracks({ tracks: source.tracks, projectItems });
-	const map = ({ ranges, context }: { ranges: ItemRange[]; context: string }) =>
-		mapSourceRanges({ tracks: heard, ranges, projectItems, context });
+	const heardIds = new Set(
+		audibleClips({ tracks: source.tracks, projectItems }).map(
+			({ clip }) => clip.id,
+		),
+	);
+	const heard = keepClips({
+		tracks: source.tracks,
+		keep: ({ id }) => heardIds.has(id),
+	});
+	const map = ({
+		ranges,
+		context,
+		tracks = heard,
+	}: {
+		ranges: ItemRange[];
+		context: string;
+		tracks?: SequenceTracks;
+	}) => mapSourceRanges({ tracks, ranges, projectItems, context });
 	const falseStarts = map({
 		ranges: clamped.falseStarts,
 		context: "False start",
@@ -339,25 +381,38 @@ export function buildRoughCut({
 		ranges: clamped.fillerWords,
 		context: "Filler word",
 	});
-	const silent = audiblePauses({
+	const silentParts = audiblePauses({
 		tracks: source.tracks,
 		pauses: clamped.pauses,
 		projectItems,
 	});
-	const pieces = map({ ranges: silent.flat(), context: "Pause" });
-	let piece = 0;
-	// One group per pause, however many silent parts it has.
-	const pauses = silent.map(({ length }) =>
-		pieces.slice(piece, (piece += length)).flat(),
-	);
-	const tightening = map({
-		ranges: planTightenCuts({
-			...clamped,
-			pauses: silent.flat(),
-			paddingSeconds: plan.pausePaddingSeconds,
-		}),
-		context: "Cut",
-	}).flat();
+	// Each silent part maps only through the clip it was checked on, never to
+	// another placement of the same source time. One group per pause, however
+	// many silent parts it has.
+	const pauses: Window[][] = clamped.pauses.map(() => []);
+	const partsByClip = Map.groupBy(silentParts, ({ clipId }) => clipId);
+	for (const [clipId, parts] of partsByClip)
+		map({
+			ranges: parts,
+			context: "Pause",
+			tracks: keepClips({ tracks: heard, keep: ({ id }) => id === clipId }),
+		}).forEach((found, index) =>
+			pauses[parts[index].pauseIndex].push(...found),
+		);
+	// Planned in source seconds, so padding and filler edges follow the audio,
+	// then kept only where a pause is silent at that placement or where a false
+	// start or filler is.
+	const tightening = intersectSpans({
+		spans: map({
+			ranges: planTightenCuts({
+				...clamped,
+				pauses: pausesInSource({ parts: silentParts, pauses: clamped.pauses }),
+				paddingSeconds: plan.pausePaddingSeconds,
+			}),
+			context: "Cut",
+		}).flat(),
+		within: [...pauses.flat(), ...falseStarts.flat(), ...fillerWords.flat()],
+	});
 	const takeCuts: Window[] = mapped.flatMap((section) => section.cuts);
 	const clips = [
 		source.tracks.main,
