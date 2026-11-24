@@ -226,6 +226,8 @@ export class ProjectManager {
 			? IDLE_EXPORT_STATE
 			: { isExporting: false, progress: this.exportState.progress, result };
 		this.notify();
+		// A subscriber can start another export from inside notify().
+		if (!isCurrent()) return { success: false, cancelled: true };
 		if (result.success && result.buffer) {
 			onExported?.({ buffer: result.buffer });
 		}

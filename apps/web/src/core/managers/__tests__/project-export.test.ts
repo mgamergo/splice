@@ -151,6 +151,42 @@ describe("ProjectManager export", () => {
 		});
 	});
 
+	test("an export a subscriber replaces while it publishes leaves the download to the replacement", async () => {
+		const { project, exports } = setup();
+		const downloaded: ArrayBuffer[] = [];
+		const onExported = ({ buffer }: { buffer: ArrayBuffer }) => {
+			downloaded.push(buffer);
+		};
+		// A subscriber that starts another export as soon as one finishes.
+		const replacements: Promise<ExportResult>[] = [];
+		project.subscribe(() => {
+			const { result } = project.getExportState();
+			if (result?.success && replacements.length === 0) {
+				replacements.push(project.export({ options: OPTIONS, onExported }));
+			}
+		});
+
+		const first = project.export({ options: OPTIONS, onExported });
+		await flush();
+		exports[0].finish({ success: true, buffer: new ArrayBuffer(8) });
+
+		expect(await first).toEqual({ success: false, cancelled: true });
+		expect(replacements).toHaveLength(1);
+		expect(downloaded).toHaveLength(0);
+		expect(project.getExportState()).toEqual({
+			isExporting: true,
+			progress: 0,
+			result: null,
+		});
+
+		await flush();
+		expect(exports).toHaveLength(2);
+		const buffer = new ArrayBuffer(16);
+		exports[1].finish({ success: true, buffer });
+		expect(await replacements[0]).toEqual({ success: true, buffer });
+		expect(downloaded).toEqual([buffer]);
+	});
+
 	test("cancelling one export leaves the next one's signal alone", async () => {
 		const { project, exports } = setup();
 

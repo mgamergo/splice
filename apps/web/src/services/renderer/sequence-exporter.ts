@@ -19,6 +19,7 @@ import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
 import type { ExportFormat, ExportQuality } from "@/export";
 import { CanvasRenderer } from "./canvas-renderer";
+import { writeOutput } from "./export-output";
 import { VideoCache } from "@/services/video-cache/service";
 
 type ExportParams = {
@@ -142,45 +143,50 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			output.addAudioTrack(audioSource);
 		}
 
-		await output.start();
+		return writeOutput({
+			output,
+			write: async () => {
+				await output.start();
 
-		if (audioSource && this.audioBuffer) {
-			await audioSource.add(this.audioBuffer);
-			audioSource.close();
-		}
+				if (audioSource && this.audioBuffer) {
+					await audioSource.add(this.audioBuffer);
+					audioSource.close();
+				}
 
-		for (let i = 0; i < frameCount; i++) {
-			if (this.signal.aborted) {
-				await output.cancel();
-				this.emit("cancelled");
-				return null;
-			}
+				for (let i = 0; i < frameCount; i++) {
+					if (this.signal.aborted) {
+						await output.cancel();
+						this.emit("cancelled");
+						return null;
+					}
 
-			const timeTicks = i * ticksPerFrame;
-			const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
-			await this.renderer.render({ node: rootNode, time: timeTicks });
-			await videoSource.add(timeSeconds, 1 / fpsFloat);
+					const timeTicks = i * ticksPerFrame;
+					const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
+					await this.renderer.render({ node: rootNode, time: timeTicks });
+					await videoSource.add(timeSeconds, 1 / fpsFloat);
 
-			this.emit("progress", i / frameCount);
-		}
+					this.emit("progress", i / frameCount);
+				}
 
-		if (this.signal.aborted) {
-			await output.cancel();
-			this.emit("cancelled");
-			return null;
-		}
+				if (this.signal.aborted) {
+					await output.cancel();
+					this.emit("cancelled");
+					return null;
+				}
 
-		videoSource.close();
-		await output.finalize();
-		this.emit("progress", 1);
+				videoSource.close();
+				await output.finalize();
+				this.emit("progress", 1);
 
-		const buffer = output.target.buffer;
-		if (!buffer) {
-			this.emit("error", new Error("Failed to export video"));
-			return null;
-		}
+				const buffer = output.target.buffer;
+				if (!buffer) {
+					this.emit("error", new Error("Failed to export video"));
+					return null;
+				}
 
-		this.emit("complete", buffer);
-		return buffer;
+				this.emit("complete", buffer);
+				return buffer;
+			},
+		});
 	}
 }
