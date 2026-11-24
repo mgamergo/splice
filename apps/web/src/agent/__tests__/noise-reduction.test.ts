@@ -9,7 +9,7 @@ import { collectAudioClipSources } from "@/media/audio";
 import type { ProjectItem } from "@/media/types";
 import type { TimelineClip } from "@/timeline";
 import type { VideoClip } from "@/timeline/types";
-import { addMediaTime, ZERO_MEDIA_TIME } from "@/wasm";
+import { addMediaTime, mediaTimeToSeconds, ZERO_MEDIA_TIME } from "@/wasm";
 
 const first = "recording-1";
 const second = "recording-2";
@@ -623,3 +623,170 @@ for (const { name, swapped, remaining, saved } of swapBackCases)
 			back.params.volume,
 		]).toEqual([first, swapped.noiseReduction, swapped.volume]);
 	});
+
+for (const extract of [false, true])
+	test(`a take split into a denoised +7 dB clip and a plain -5 dB clip swaps and restores as it played${extract ? ", with extracted audio" : ""}`, () => {
+		const { tracks } = active();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [
+					{
+						...videoClip({ id: "loud", start: 0, duration: 1, trimStart: 4 }),
+						mediaId: first,
+						params: { noiseReduction: true, volume: 7 },
+					},
+					{
+						...videoClip({ id: "plain", start: 1, duration: 1, trimStart: 5 }),
+						mediaId: first,
+						params: { volume: -5 },
+					},
+				],
+			},
+			audio: tracks.audio.map((track) => ({ ...track, clips: [] })),
+		});
+		if (extract)
+			for (const clipId of ["loud", "plain"])
+				editor.command.execute({
+					command: new ToggleSourceAudioSeparationCommand({
+						trackId: tracks.main.id,
+						clipId,
+					}),
+				});
+		expect(
+			api.apply({
+				sequenceId: active().id,
+				expectedRevision: api.getRevision(),
+				label: "Marker",
+				ops: [
+					{
+						op: "add_marker",
+						at: { seconds: 1 },
+						data: {
+							kind: "removal",
+							sectionName: "Intro",
+							bestTake: { projectItemId: first, sourceIn: 4, sourceOut: 6 },
+							badTakes: [{ projectItemId: second, sourceIn: 0, sourceOut: 3 }],
+						},
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		const [marker] = active().markers;
+		const edit = (op: "swap_take" | "restore_takes") =>
+			api.apply({
+				sequenceId: active().id,
+				expectedRevision: api.getRevision(),
+				label: "Take",
+				ops: [{ op, markerId: marker.id, takeIndex: 0 }],
+			});
+		const heard = () =>
+			(extract
+				? active().tracks.audio.flatMap(({ clips }) => clips)
+				: active().tracks.main.clips
+			)
+				.filter((clip) => "mediaId" in clip && clip.mediaId === first)
+				.sort((a, b) => a.startTime - b.startTime)
+				.map((clip) => [
+					mediaTimeToSeconds({ time: clip.trimStart }),
+					mediaTimeToSeconds({ time: clip.duration }),
+					clip.params.noiseReduction ?? false,
+					clip.params.volume,
+				]);
+		const asPlayed = [
+			[4, 1, true, 7],
+			[5, 1, false, -5],
+		];
+		expect(heard()).toEqual(asPlayed);
+
+		expect(edit("swap_take")).toMatchObject({ ok: true });
+		expect(heard()).toEqual([]);
+		expect(active().markers[0]?.data?.badTakePlacements).toEqual([
+			[
+				{
+					trackId: expect.any(String),
+					...(extract && { audioTrackId: expect.any(String) }),
+					volume: 7,
+					noiseReduction: true,
+					audioSegments: [
+						{ from: 4, volume: 7, noiseReduction: true },
+						{ from: 5, volume: -5, noiseReduction: false },
+					],
+				},
+			],
+		]);
+
+		expect(edit("swap_take")).toMatchObject({ ok: true });
+		expect(heard()).toEqual(asPlayed);
+		editor.command.undo();
+
+		expect(edit("restore_takes")).toMatchObject({ ok: true });
+		expect(heard()).toEqual(asPlayed);
+	});
+
+test("takes saved before per-stretch audio restore with their saved gain or track alone", () => {
+	const { tracks } = active();
+	editor.timeline.updateTracks({
+		...tracks,
+		main: {
+			...tracks.main,
+			clips: [
+				{
+					...videoClip({ id: "kept", start: 0, duration: 2, trimStart: 8 }),
+					mediaId: first,
+					params: { noiseReduction: true, volume: 4 },
+				},
+			],
+		},
+		audio: tracks.audio.map((track) => ({ ...track, clips: [] })),
+	});
+	expect(
+		api.apply({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			label: "Marker",
+			ops: [
+				{
+					op: "add_marker",
+					at: { seconds: 2 },
+					data: {
+						kind: "removal",
+						sectionName: "Intro",
+						bestTake: { projectItemId: first, sourceIn: 8, sourceOut: 10 },
+						badTakes: [
+							{ projectItemId: first, sourceIn: 0, sourceOut: 2 },
+							{ projectItemId: first, sourceIn: 2, sourceOut: 4 },
+						],
+						badTakePlacements: [
+							[{ trackId: tracks.main.id, volume: -3 }],
+							[{ trackId: tracks.main.id }],
+						],
+					},
+				},
+			],
+		}),
+	).toMatchObject({ ok: true });
+	const [marker] = active().markers;
+	expect(
+		api.apply({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			label: "Restore",
+			ops: [{ op: "restore_takes", markerId: marker.id }],
+		}),
+	).toMatchObject({ ok: true });
+	expect(
+		active().tracks.main.clips.map((clip) => [
+			mediaTimeToSeconds({ time: clip.trimStart }),
+			clip.params.noiseReduction ?? false,
+			clip.params.volume,
+		]),
+	).toEqual([
+		[8, true, 4],
+		// A saved gain alone played without noise reduction.
+		[0, false, -3],
+		// A saved track alone plays as the recording does elsewhere.
+		[2, true, 4],
+	]);
+});

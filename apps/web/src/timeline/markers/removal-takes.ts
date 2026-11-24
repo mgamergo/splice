@@ -1,4 +1,9 @@
-import type { Take, TakePlacement, TakeSourceRange } from "@splice/bridge/ops";
+import type {
+	Take,
+	TakeAudioSegment,
+	TakePlacement,
+	TakeSourceRange,
+} from "@splice/bridge/ops";
 import type { ProjectItem } from "@/media/types";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import {
@@ -29,6 +34,7 @@ import { generateUUID } from "@/utils/id";
 import {
 	type MediaTime,
 	mediaTimeFromSeconds,
+	mediaTimeToSeconds,
 	roundMediaTime,
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
@@ -174,20 +180,112 @@ function takesAudio({
 function takeAudio({
 	take,
 	audioByItem,
+	saved,
+}: {
+	take: ResolvedRange;
+	audioByItem: Map<string, TakeAudio>;
+	saved?: Pick<TakePlacement, "volume" | "noiseReduction">;
+}): TakeAudio {
+	const audio = audioByItem.get(take.item.id);
+	if (saved?.noiseReduction === undefined && saved?.volume === undefined)
+		return audio ?? { noiseReduction: false };
+	const noiseReduction = saved.noiseReduction === true;
+	const volume =
+		saved.volume ??
+		(audio?.noiseReduction === noiseReduction ? audio.volume : undefined);
+	return { noiseReduction, ...(volume !== undefined && { volume }) };
+}
+
+/**
+ * The take's range split where its saved audio changes, each stretch with its
+ * own audio. Placements saved before per-stretch audio play as one stretch.
+ */
+function takeStretches({
+	take,
+	audioByItem,
 	placement,
 }: {
 	take: ResolvedRange;
 	audioByItem: Map<string, TakeAudio>;
 	placement?: TakePlacement;
-}): TakeAudio {
-	const audio = audioByItem.get(take.item.id);
-	if (placement?.noiseReduction === undefined && placement?.volume === undefined)
-		return audio ?? { noiseReduction: false };
-	const noiseReduction = placement.noiseReduction === true;
-	const volume =
-		placement.volume ??
-		(audio?.noiseReduction === noiseReduction ? audio.volume : undefined);
-	return { noiseReduction, ...(volume !== undefined && { volume }) };
+}): Array<{ range: ResolvedRange; audio: TakeAudio }> {
+	const segments = placement?.audioSegments;
+	if (!segments)
+		return [
+			{
+				range: take,
+				audio: takeAudio({ take, audioByItem, saved: placement }),
+			},
+		];
+	const starts = segments.map(({ from }, index) => {
+		const start = mediaTimeFromSeconds({ seconds: from });
+		return index === 0 || start < take.sourceIn ? take.sourceIn : start;
+	});
+	return segments.flatMap((segment, index) => {
+		const sourceIn = starts[index];
+		const next = starts[index + 1];
+		const sourceOut =
+			next === undefined || next > take.sourceOut ? take.sourceOut : next;
+		return sourceOut > sourceIn
+			? [
+					{
+						range: { ...take, sourceIn, sourceOut },
+						audio: takeAudio({ take, audioByItem, saved: segment }),
+					},
+				]
+			: [];
+	});
+}
+
+/**
+ * Where the take's audio changes partway, as when it was split into a
+ * denoised clip and a plain one: each setting in source order. Undefined when
+ * the whole take plays one way.
+ */
+function audioSegments({
+	clips,
+	range,
+}: {
+	clips: TimelineClip[];
+	range: ResolvedRange;
+}): TakeAudioSegment[] | undefined {
+	const heard = clips
+		.flatMap((clip) =>
+			canClipHaveAudio(clip) &&
+			hasMediaId(clip) &&
+			clip.mediaId === range.item.id &&
+			doesClipHaveEnabledAudio({ clip, projectItem: range.item })
+				? [
+						{
+							sourceIn:
+								clip.trimStart > range.sourceIn
+									? clip.trimStart
+									: range.sourceIn,
+							volume: hasAnimatedVolume({ clip })
+								? undefined
+								: getClipVolume({ clip }),
+							noiseReduction: isNoiseReduced({ clip }),
+						},
+					]
+				: [],
+		)
+		.sort((a, b) => a.sourceIn - b.sourceIn);
+	const segments: TakeAudioSegment[] = [];
+	for (const { sourceIn, volume, noiseReduction } of heard) {
+		const last = segments.at(-1);
+		if (
+			last &&
+			last.volume === volume &&
+			last.noiseReduction === noiseReduction
+		)
+			continue;
+		segments.push({
+			from: mediaTimeToSeconds({ time: sourceIn }),
+			...(volume !== undefined && { volume }),
+			noiseReduction,
+		});
+	}
+	return segments.length > 1 ? segments : undefined;
 }
 
 function createTakeClip({
@@ -618,38 +716,44 @@ export function restoreTakeClips({
 	for (const { take, placements } of takes) {
 		for (const [index, range] of take.entries()) {
 			const placement = placements?.[index];
-			const clip = createTakeClip({
+			for (const stretch of takeStretches({
 				take: range,
-				at: end,
-				audio: takeAudio({ take: range, audioByItem, placement }),
-			});
-			end = roundMediaTime({ time: end + clip.duration });
-			if (clip.type === "audio") {
-				audio.push({
-					clip,
-					trackId: audioTrack(placement?.trackId) ?? tracks.audio[0]?.id,
+				audioByItem,
+				placement,
+			})) {
+				const clip = createTakeClip({
+					take: stretch.range,
+					at: end,
+					audio: stretch.audio,
 				});
-				continue;
+				end = roundMediaTime({ time: end + clip.duration });
+				if (clip.type === "audio") {
+					audio.push({
+						clip,
+						trackId: audioTrack(placement?.trackId) ?? tracks.audio[0]?.id,
+					});
+					continue;
+				}
+				const trackId = videoTrack(placement?.trackId) ?? tracks.main.id;
+				const audioTrackId = audioTrack(placement?.audioTrackId);
+				if (!audioTrackId || range.item.hasAudio === false) {
+					video.push({ clip, trackId });
+					continue;
+				}
+				const paired = {
+					...clip,
+					isSourceAudioEnabled: false,
+					sourceAudioGroupId: generateUUID(),
+				};
+				video.push({ clip: paired, trackId });
+				audio.push({
+					clip: {
+						...buildSeparatedAudioClip({ sourceClip: paired }),
+						id: generateUUID(),
+					},
+					trackId: audioTrackId,
+				});
 			}
-			const trackId = videoTrack(placement?.trackId) ?? tracks.main.id;
-			const audioTrackId = audioTrack(placement?.audioTrackId);
-			if (!audioTrackId || range.item.hasAudio === false) {
-				video.push({ clip, trackId });
-				continue;
-			}
-			const paired = {
-				...clip,
-				isSourceAudioEnabled: false,
-				sourceAudioGroupId: generateUUID(),
-			};
-			video.push({ clip: paired, trackId });
-			audio.push({
-				clip: {
-					...buildSeparatedAudioClip({ sourceClip: paired }),
-					id: generateUUID(),
-				},
-				trackId: audioTrackId,
-			});
 		}
 	}
 	const delta = end - at;
@@ -821,53 +925,68 @@ export function swapTakeClips({
 	let audioIndex = 0;
 	for (const [index, range] of chosen.entries()) {
 		const placement = chosenPlacements?.[index];
-		const clip = {
-			...createTakeClip({
-				take: range,
-				at: replacementEnd,
-				audio: takeAudio({ take: range, audioByItem, placement }),
-			}),
-			bestTakeMarkerIds: [marker.id],
-		};
-		replacementEnd = roundMediaTime({ time: replacementEnd + clip.duration });
-		if (clip.type === "audio") {
-			const partIndex = Math.min(audioIndex++, audioParts.length - 1);
-			const trackId =
-				tracks.audio.find(({ id }) => id === placement?.trackId)?.id ??
-				audioParts[partIndex]?.trackId ??
-				linkedAudio[0]?.trackId;
-			audio.push({ clip, trackId });
-			continue;
-		}
-		const partIndex = Math.min(videoIndex++, videoParts.length - 1);
-		const trackId =
-			[tracks.main, ...tracks.overlay].find(
-				({ id, type }) => id === placement?.trackId && type === "video",
-			)?.id ??
-			videoParts[partIndex]?.trackId ??
-			(tracks.main.clips.length === 0 ? tracks.main.id : undefined);
-		const audioTrackId =
-			placement && !placement.audioTrackId
-				? undefined
-				: (tracks.audio.find(({ id }) => id === placement?.audioTrackId)?.id ??
-					audioForVideo.get(videoParts[partIndex])?.[0]?.trackId ??
-					linkedAudio[0]?.trackId);
-		if (audioTrackId && range.item.hasAudio !== false) {
-			const paired = {
-				...clip,
-				isSourceAudioEnabled: false,
-				sourceAudioGroupId: generateUUID(),
+		// Stretches of one range all go where the part they replace was.
+		const isAudio = range.item.type === "audio";
+		const audioPart = isAudio
+			? audioParts.at(Math.min(audioIndex++, audioParts.length - 1))
+			: undefined;
+		const videoPart = isAudio
+			? undefined
+			: videoParts.at(Math.min(videoIndex++, videoParts.length - 1));
+		for (const stretch of takeStretches({
+			take: range,
+			audioByItem,
+			placement,
+		})) {
+			const clip = {
+				...createTakeClip({
+					take: stretch.range,
+					at: replacementEnd,
+					audio: stretch.audio,
+				}),
+				bestTakeMarkerIds: [marker.id],
 			};
-			video.push({ clip: paired, trackId });
-			audio.push({
-				clip: {
-					...buildSeparatedAudioClip({ sourceClip: paired }),
-					id: generateUUID(),
-				},
-				trackId: audioTrackId,
+			replacementEnd = roundMediaTime({
+				time: replacementEnd + clip.duration,
 			});
-		} else {
-			video.push({ clip, trackId });
+			if (clip.type === "audio") {
+				const trackId =
+					tracks.audio.find(({ id }) => id === placement?.trackId)?.id ??
+					audioPart?.trackId ??
+					linkedAudio[0]?.trackId;
+				audio.push({ clip, trackId });
+				continue;
+			}
+			const trackId =
+				[tracks.main, ...tracks.overlay].find(
+					({ id, type }) => id === placement?.trackId && type === "video",
+				)?.id ??
+				videoPart?.trackId ??
+				(tracks.main.clips.length === 0 ? tracks.main.id : undefined);
+			const audioTrackId =
+				placement && !placement.audioTrackId
+					? undefined
+					: (tracks.audio.find(({ id }) => id === placement?.audioTrackId)
+							?.id ??
+						(videoPart && audioForVideo.get(videoPart)?.[0]?.trackId) ??
+						linkedAudio[0]?.trackId);
+			if (audioTrackId && range.item.hasAudio !== false) {
+				const paired = {
+					...clip,
+					isSourceAudioEnabled: false,
+					sourceAudioGroupId: generateUUID(),
+				};
+				video.push({ clip: paired, trackId });
+				audio.push({
+					clip: {
+						...buildSeparatedAudioClip({ sourceClip: paired }),
+						id: generateUUID(),
+					},
+					trackId: audioTrackId,
+				});
+			} else {
+				video.push({ clip, trackId });
+			}
 		}
 	}
 
@@ -934,10 +1053,12 @@ export function swapTakeClips({
 			const clipIds = new Set(
 				[part, ...linked].flatMap(({ clipIds }) => clipIds),
 			);
+			const clips = allClips(tracks).filter(({ id }) => clipIds.has(id));
 			const audio = itemAudio({
-				clips: allClips(tracks).filter(({ id }) => clipIds.has(id)),
+				clips,
 				items: new Map([[part.range.item.id, part.range.item]]),
 			}).get(part.range.item.id);
+			const segments = audioSegments({ clips, range: part.range });
 			return {
 				trackId: part.trackId,
 				...(audioTrackId ? { audioTrackId } : {}),
@@ -947,6 +1068,7 @@ export function swapTakeClips({
 					...(audio.volume !== undefined && { volume: audio.volume }),
 					noiseReduction: audio.noiseReduction,
 				}),
+				...(segments && { audioSegments: segments }),
 			};
 		}),
 		tracks: insertTakeClips({

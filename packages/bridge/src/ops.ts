@@ -39,6 +39,13 @@ const takeSchema = z.union([
 	}),
 ]);
 
+const takeAudioSegmentSchema = z.strictObject({
+	/** Source time in seconds this audio plays from, until the next segment's. */
+	from: z.number().nonnegative(),
+	volume: z.number().optional(),
+	noiseReduction: z.boolean(),
+});
+
 const takePlacementSchema = z.strictObject({
 	trackId: z.string().min(1),
 	audioTrackId: z.string().min(1).optional(),
@@ -49,6 +56,13 @@ const takePlacementSchema = z.strictObject({
 	volume: z.number().optional(),
 	/** Whether the take played noise-reduced when it was swapped out. */
 	noiseReduction: z.boolean().optional(),
+	/**
+	 * Set when the take's audio changed partway, such as a take split into a
+	 * denoised clip and a plain one: each setting in source order, so swapping
+	 * back plays each stretch as it did. `volume` and `noiseReduction` still
+	 * hold the take's most common setting.
+	 */
+	audioSegments: z.array(takeAudioSegmentSchema).min(2).optional(),
 });
 
 export const removalMarkerDataSchema = z.strictObject({
@@ -356,6 +370,7 @@ export const takesListRequestSchema = z.strictObject({
 });
 
 export type TakePlacement = z.infer<typeof takePlacementSchema>;
+export type TakeAudioSegment = z.infer<typeof takeAudioSegmentSchema>;
 export type Take = z.infer<typeof takeSchema>;
 export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
 export type SourceGain = z.infer<typeof sourceGainSchema>;
