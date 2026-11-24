@@ -151,8 +151,8 @@ export function startServer({
 	});
 	const noiseReduction = createNoiseReducer({ root });
 	const loudness = createLoudnessMeter({ root, noiseReduction });
-	// `signal` aborts when the caller hangs up, so an FFmpeg scan nobody
-	// waits for stops.
+	// `signal` aborts when the caller hangs up, so FFmpeg work nobody waits
+	// for stops.
 	const serverJobs = new Map<
 		string,
 		(request: { params: unknown; signal: AbortSignal }) => Promise<unknown>
@@ -162,7 +162,7 @@ export function startServer({
 		["transcript.words", ({ params }) => transcription.words(params)],
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
-		["noiseReduction.render", ({ params }) => noiseReduction.render(params)],
+		["noiseReduction.render", (request) => noiseReduction.render(request)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
@@ -404,7 +404,10 @@ export function startServer({
 		if (!wantsDenoisedAudio(url))
 			return serveFile({ request, absolutePath, contentType });
 		try {
-			const { file } = await noiseReduction.ensure({ path });
+			const { file } = await noiseReduction.ensure({
+				path,
+				signal: request.signal,
+			});
 			return serveFile({
 				request,
 				absolutePath: file,

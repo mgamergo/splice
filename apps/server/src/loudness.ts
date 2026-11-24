@@ -350,7 +350,9 @@ async function audioOnly({
 }): Promise<string> {
 	if (mediaTypeForPath(source)?.startsWith("audio/")) return source;
 	const key = createHash("sha256")
-		.update(JSON.stringify([resolve(source), ...fileIdentity(await stat(source))]))
+		.update(
+			JSON.stringify([resolve(source), ...fileIdentity(await stat(source))]),
+		)
 		.digest("hex");
 	const audio = join(cacheDir, `audio-${key}.mka`);
 	if (
@@ -470,13 +472,22 @@ export function createLoudnessMeter({
 		denoised: boolean;
 	};
 
-	/** What to measure: the recording, or with noise reduction on, its render. */
-	async function identify({ path, ranges, denoised }: Target) {
+	/**
+	 * What to measure: the recording, or with noise reduction on, its render.
+	 * `signal` ends this request's wait for the render.
+	 */
+	async function identify({
+		target: { path, ranges, denoised },
+		signal,
+	}: {
+		target: Target;
+		signal?: AbortSignal;
+	}) {
 		const { source, info } = await resolveRecording({ root, path });
 		let input = source;
 		let render: { name: string; info: FileIdentity } | undefined;
 		if (denoised) {
-			input = (await noiseReduction.ensure({ path })).file;
+			input = (await noiseReduction.ensure({ path, signal })).file;
 			render = { name: basename(input), info: await stat(input) };
 		}
 		const key = loudnessCacheKey({ path, info, ranges, render });
@@ -558,7 +569,7 @@ export function createLoudnessMeter({
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
 			const target = { path, ranges, denoised };
-			const identified = await identify(target);
+			const identified = await identify({ target, signal });
 			stop.signal.throwIfAborted();
 			const measured = await active.run({
 				key: identified.key,

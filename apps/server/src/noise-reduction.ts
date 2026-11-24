@@ -11,6 +11,7 @@ import {
 	run,
 } from "./transcription-tools";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import { createSharedWork } from "./shared-work";
 
 export const renderNoiseReductionInput = { path: footagePath };
 const renderSchema = z.object(renderNoiseReductionInput);
@@ -260,7 +261,16 @@ export function denoiseArgs({
 }): string[] {
 	const head = ["-nostdin", "-hide_banner", "-loglevel", "error", "-nostats"];
 	// RF64 once the render passes WAV's 4 GiB limit.
-	const tail = ["-c:a", "pcm_s16le", "-f", "wav", "-rf64", "auto", "-y", output];
+	const tail = [
+		"-c:a",
+		"pcm_s16le",
+		"-f",
+		"wav",
+		"-rf64",
+		"auto",
+		"-y",
+		output,
+	];
 	const padEnd = `apad=pad_len=${AFFTDN_LATENCY_SAMPLES}`;
 	if (!profile)
 		return [
@@ -381,9 +391,8 @@ export function createNoiseReducer({
 	render?: RenderDenoised;
 }) {
 	const stop = new AbortController();
-	const signal = stop.signal;
 	const cacheDir = join(root, "Cache", "noise-reduction");
-	const active = new Map<string, Promise<DenoisedAudio>>();
+	const renders = createSharedWork<DenoisedAudio>({ stop: stop.signal });
 
 	async function identify(path: string) {
 		const { source, info } = await resolveRecording({ root, path });
@@ -396,11 +405,13 @@ export function createNoiseReducer({
 		source,
 		key,
 		file,
+		signal,
 	}: {
 		path: string;
 		source: string;
 		key: string;
 		file: string;
+		signal: AbortSignal;
 	}): Promise<DenoisedAudio> {
 		if (await Bun.file(file).exists()) return { file, cached: true };
 		await mkdir(cacheDir, { recursive: true });
@@ -427,29 +438,42 @@ export function createNoiseReducer({
 		}
 	}
 
-	async function ensure({ path }: { path: string }): Promise<DenoisedAudio> {
+	/**
+	 * Every request for a file shares one render. `signal` ends this request's
+	 * wait, and the render once no request waits for it.
+	 */
+	async function ensure({
+		path,
+		signal,
+	}: {
+		path: string;
+		signal?: AbortSignal;
+	}): Promise<DenoisedAudio> {
 		const identity = await identify(path);
-		signal.throwIfAborted();
-		let pending = active.get(identity.key);
-		if (!pending) {
-			pending = renderAndCache({ path, ...identity });
-			active.set(identity.key, pending);
-			void pending
-				.catch(() => undefined)
-				.finally(() => active.delete(identity.key));
-		}
-		return pending;
+		stop.signal.throwIfAborted();
+		return renders.run({
+			key: identity.key,
+			signal,
+			work: (jobSignal) =>
+				renderAndCache({ path, ...identity, signal: jobSignal }),
+		});
 	}
 
 	return {
 		ensure,
 
 		/** The `noiseReduction.render` RPC: renders ahead, so playback starts at once. */
-		async render(params: unknown) {
+		async render({
+			params,
+			signal,
+		}: {
+			params: unknown;
+			signal?: AbortSignal;
+		}) {
 			const parsed = renderSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const { path } = parsed.data;
-			const { cached, noiseWindow } = await ensure({ path });
+			const { cached, noiseWindow } = await ensure({ path, signal });
 			return {
 				path,
 				cached,
@@ -463,7 +487,7 @@ export function createNoiseReducer({
 
 		async stop() {
 			stop.abort();
-			await Promise.allSettled(active.values());
+			await renders.settled();
 		},
 	};
 }

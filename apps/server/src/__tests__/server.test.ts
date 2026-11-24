@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	BRIDGE_PATHS,
+	denoisedAudioUrlForPath,
 	RPC_ERRORS,
 	STATE_CHANGED,
 	TAB_CLOSE_CODES,
@@ -116,6 +117,109 @@ async function rpc({
 		headers,
 		body: JSON.stringify(body),
 	});
+}
+
+/**
+ * Runs `body` against a splice whose fake FFmpeg stalls in a pause scan or a
+ * noise-reduction scan after writing its process ID, for a recording
+ * Footage/talk.wav.
+ */
+async function withStallingFfmpeg(
+	body: (context: {
+		server: RunningServer;
+		scanPid: () => Promise<number>;
+		isRunning: (pid: number) => boolean;
+	}) => Promise<void>,
+) {
+	const root = await mkdtemp(join(tmpdir(), "splice-hang-up-"));
+	const pidFile = join(root, "scan.pid");
+	const isRunning = (pid: number) => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	try {
+		await mkdir(join(root, "Footage"));
+		await Bun.write(join(root, "Footage", "talk.wav"), "");
+		const ffmpeg = join(root, "Tools", "ffmpeg");
+		await Bun.write(
+			ffmpeg,
+			[
+				"#!/bin/sh",
+				'case "$*" in',
+				`*silencedetect*|*astats*) echo $$ > '${pidFile}'; exec sleep 60 ;;`,
+				'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
+				'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
+				"esac",
+				"",
+			].join("\n"),
+		);
+		await chmod(ffmpeg, 0o755);
+		const server = startServer({ port: 0, token: TOKEN, root, upstream: null });
+		running.push(server);
+		await body({
+			server,
+			isRunning,
+			async scanPid() {
+				let pid = 0;
+				for (let tries = 0; !pid && tries < 100; tries++) {
+					await Bun.sleep(50);
+					pid = Number(
+						await Bun.file(pidFile)
+							.text()
+							.catch(() => "0"),
+					);
+				}
+				return pid;
+			},
+		});
+	} finally {
+		// Leave no fake FFmpeg behind, even when an assertion failed.
+		const pid = Number(
+			await Bun.file(pidFile)
+				.text()
+				.catch(() => "0"),
+		);
+		if (pid && isRunning(pid)) process.kill(pid);
+		await rm(root, { recursive: true, force: true });
+	}
+}
+
+function rpcCall({
+	server,
+	method,
+	params,
+	signal,
+}: {
+	server: RunningServer;
+	method: string;
+	params: unknown;
+	signal: AbortSignal;
+}) {
+	const call = fetch(`${server.origin}${BRIDGE_PATHS.rpc}`, {
+		method: "POST",
+		headers: { authorization: `Bearer ${TOKEN}` },
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+		signal,
+	});
+	call.catch(() => {});
+	return call;
+}
+
+/** Whether the process exits within 5 s. */
+async function stopped({
+	pid,
+	isRunning,
+}: {
+	pid: number;
+	isRunning: (pid: number) => boolean;
+}) {
+	for (let tries = 0; isRunning(pid) && tries < 100; tries++)
+		await Bun.sleep(50);
+	return !isRunning(pid);
 }
 
 describe("host and origin checks", () => {
@@ -373,75 +477,71 @@ describe("rpc endpoint", () => {
 		}
 	}, 20_000);
 
-	test("stops a pause scan's FFmpeg when its caller hangs up", async () => {
-		const root = await mkdtemp(join(tmpdir(), "splice-hang-up-"));
-		try {
-			await mkdir(join(root, "Footage"));
-			await Bun.write(join(root, "Footage", "talk.wav"), "");
-			// A fake FFmpeg whose silence scan stalls after writing its process ID.
-			const pidFile = join(root, "scan.pid");
-			const ffmpeg = join(root, "Tools", "ffmpeg");
-			await Bun.write(
-				ffmpeg,
-				[
-					"#!/bin/sh",
-					'case "$*" in',
-					`*silencedetect*) echo $$ > '${pidFile}'; exec sleep 60 ;;`,
-					'*) echo "  Duration: 00:00:05.00, start: 0.000000" >&2',
-					'  echo "  Stream #0:0: Audio: pcm_s16le, 48000 Hz, mono" >&2 ;;',
-					"esac",
-					"",
-				].join("\n"),
-			);
-			await chmod(ffmpeg, 0o755);
-			const server = startServer({
-				port: 0,
-				token: TOKEN,
-				root,
-				upstream: null,
-			});
-			running.push(server);
-			const hangUp = new AbortController();
-			const call = fetch(`${server.origin}${BRIDGE_PATHS.rpc}`, {
-				method: "POST",
-				headers: { authorization: `Bearer ${TOKEN}` },
-				body: JSON.stringify({
-					jsonrpc: "2.0",
-					id: 1,
-					method: "pauses.detect",
-					params: { path: "talk.wav" },
-				}),
-				signal: hangUp.signal,
-			});
-			call.catch(() => {});
-			const isRunning = (pid: number) => {
-				try {
-					process.kill(pid, 0);
-					return true;
-				} catch {
-					return false;
-				}
-			};
-			let pid = 0;
-			for (let tries = 0; !pid && tries < 100; tries++) {
-				await Bun.sleep(50);
-				pid = Number(
-					await Bun.file(pidFile)
-						.text()
-						.catch(() => "0"),
-				);
-			}
-			expect(isRunning(pid)).toBe(true);
+	test.each([
+		["a pause scan", "pauses.detect", {}],
+		["a noise-reduction render", "noiseReduction.render", {}],
+		[
+			"the render a cold measurement waits for",
+			"loudness.measure",
+			{ noiseReduction: true },
+		],
+	])(
+		"stops %s when its caller hangs up",
+		(_name: string, method: string, params: object) =>
+			withStallingFfmpeg(async ({ server, scanPid, isRunning }) => {
+				const hangUp = new AbortController();
+				const call = rpcCall({
+					server,
+					method,
+					params: { path: "talk.wav", ...params },
+					signal: hangUp.signal,
+				});
+				const pid = await scanPid();
+				expect(isRunning(pid)).toBe(true);
 
-			hangUp.abort();
-			await expect(call).rejects.toThrow();
-			for (let tries = 0; isRunning(pid) && tries < 100; tries++)
-				await Bun.sleep(50);
-			expect(isRunning(pid)).toBe(false);
-		} finally {
-			await rm(root, { recursive: true, force: true });
-		}
-	}, 20_000);
+				hangUp.abort();
+				await expect(call).rejects.toThrow();
+				expect(await stopped({ pid, isRunning })).toBe(true);
+			}),
+		20_000,
+	);
+
+	test(
+		"a render RPC and a media request share one render, stopped once both hang up",
+		() =>
+			withStallingFfmpeg(async ({ server, scanPid, isRunning }) => {
+				const rpcHangUp = new AbortController();
+				const mediaHangUp = new AbortController();
+				const render = rpcCall({
+					server,
+					method: "noiseReduction.render",
+					params: { path: "talk.wav" },
+					signal: rpcHangUp.signal,
+				});
+				const pid = await scanPid();
+				const media = fetch(
+					`${server.origin}${denoisedAudioUrlForPath("talk.wav")}`,
+					{
+						headers: { authorization: `Bearer ${TOKEN}` },
+						signal: mediaHangUp.signal,
+					},
+				);
+				media.catch(() => {});
+				// Let the media request join the render before the RPC leaves it.
+				await Bun.sleep(500);
+
+				rpcHangUp.abort();
+				await expect(render).rejects.toThrow();
+				// The media request still waits, so the render runs on.
+				await Bun.sleep(300);
+				expect(isRunning(pid)).toBe(true);
+
+				mediaHangUp.abort();
+				await expect(media).rejects.toThrow();
+				expect(await stopped({ pid, isRunning })).toBe(true);
+			}),
+		20_000,
+	);
 
 	test("status tracks the revision the tab reports", async () => {
 		const server = start();

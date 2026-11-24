@@ -909,9 +909,7 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction can target one recording, keep gains, or turn off without rendering", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(
-			fakeSplice({ calls, denoisedNow: ["rec-1"] }),
-		);
+		const client = await connect(fakeSplice({ calls, denoisedNow: ["rec-1"] }));
 		await client.callTool({
 			name: "noise_reduction",
 			arguments: {
@@ -1011,9 +1009,7 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction leaves recordings already set that way, their gains included", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(
-			fakeSplice({ calls, denoisedNow: ["rec-1"] }),
-		);
+		const client = await connect(fakeSplice({ calls, denoisedNow: ["rec-1"] }));
 		const result = await client.callTool({
 			name: "noise_reduction",
 			arguments: { expectedRevision: 7, enabled: true },
@@ -1080,7 +1076,7 @@ describe("noise reduction tools", () => {
 				calls,
 				// As splice answers the RPC.
 				renderNoiseReduction: (params) =>
-					reducer.render(params).catch((error: unknown) => {
+					reducer.render({ params }).catch((error: unknown) => {
 						if (!(error instanceof BridgeError)) throw error;
 						throw new RpcCallError({
 							code: error.code,
@@ -1125,7 +1121,10 @@ describe("noise reduction tools", () => {
 		// Any other render error still fails the tool.
 		const failing = await connect(async (call) => {
 			if (call.method === "noiseReduction.render")
-				throw new RpcCallError({ code: -32603, message: "ffmpeg exited with 1." });
+				throw new RpcCallError({
+					code: -32603,
+					message: "ffmpeg exited with 1.",
+				});
 			return fakeSplice({ calls: [] })(call);
 		});
 		const failed = await failing.callTool({

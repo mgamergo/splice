@@ -208,14 +208,18 @@ describe("noise reducer", () => {
 				basename(first.file),
 			]);
 
-			expect(await reducer.render({ path: "Day 1/take.wav" })).toEqual({
+			expect(
+				await reducer.render({ params: { path: "Day 1/take.wav" } }),
+			).toEqual({
 				path: "Day 1/take.wav",
 				cached: true,
 			});
 			expect(renders).toHaveLength(1);
 
 			await utimes(footage, new Date(), new Date(Date.now() + 10_000));
-			expect(await reducer.render({ path: "Day 1/take.wav" })).toEqual({
+			expect(
+				await reducer.render({ params: { path: "Day 1/take.wav" } }),
+			).toEqual({
 				path: "Day 1/take.wav",
 				cached: false,
 				noiseProfile: { sampledAt: 3, rmsDb: -52 },
@@ -227,7 +231,9 @@ describe("noise reducer", () => {
 			await Bun.sleep(10);
 			await writeFile(footage, "other audio!");
 			await utimes(footage, atime, mtime);
-			expect(await reducer.render({ path: "Day 1/take.wav" })).toMatchObject({
+			expect(
+				await reducer.render({ params: { path: "Day 1/take.wav" } }),
+			).toMatchObject({
 				cached: false,
 			});
 			expect(renders).toHaveLength(3);
@@ -245,11 +251,15 @@ describe("noise reducer", () => {
 					return { noiseWindow: null };
 				},
 			});
-			expect(await reducer.render({ path: "talk.wav" })).toMatchObject({
+			expect(
+				await reducer.render({ params: { path: "talk.wav" } }),
+			).toMatchObject({
 				noiseProfile: "tracked",
 			});
 			for (const path of ["still.png", "../talk.wav", "missing.wav"])
-				await expect(reducer.render({ path })).rejects.toMatchObject({
+				await expect(
+					reducer.render({ params: { path } }),
+				).rejects.toMatchObject({
 					code: RPC_ERRORS.INVALID_PARAMS,
 				});
 		}));
@@ -287,7 +297,9 @@ describe("noise reducer", () => {
 					throw new Error("ffmpeg exited with 1.");
 				},
 			});
-			await expect(reducer.render({ path: "take.wav" })).rejects.toMatchObject({
+			await expect(
+				reducer.render({ params: { path: "take.wav" } }),
+			).rejects.toMatchObject({
 				code: RPC_ERRORS.INVALID_PARAMS,
 				data: { missingFootage: true },
 			});
@@ -575,7 +587,10 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 					signal: new AbortController().signal,
 				});
 				for (const profile of [null, { file, window }]) {
-					const output = join(root, `denoised-${profile ? "sampled" : "tracked"}.wav`);
+					const output = join(
+						root,
+						`denoised-${profile ? "sampled" : "tracked"}.wav`,
+					);
 					await ffmpegLog(denoiseArgs({ source: footage, output, profile }));
 					const denoised = await decodeSamples(output);
 					expect(denoised.length).toBe(source.length);
