@@ -166,8 +166,10 @@ function takesAudio({
 }
 
 /**
- * A take's audio: how its recording plays elsewhere in the sequence, else how
- * it played when it was swapped out.
+ * A take's audio: how it played when it was swapped out, else how its
+ * recording plays elsewhere in the sequence. A saved gain stays paired with
+ * its saved noise reduction; without one (keyframed volume), the recording's
+ * gain is used only when its clips share that noise reduction.
  */
 function takeAudio({
 	take,
@@ -179,12 +181,13 @@ function takeAudio({
 	placement?: TakePlacement;
 }): TakeAudio {
 	const audio = audioByItem.get(take.item.id);
-	const volume = audio?.volume ?? placement?.volume;
-	return {
-		...(volume !== undefined && { volume }),
-		noiseReduction:
-			audio?.noiseReduction ?? placement?.noiseReduction === true,
-	};
+	if (placement?.noiseReduction === undefined && placement?.volume === undefined)
+		return audio ?? { noiseReduction: false };
+	const noiseReduction = placement.noiseReduction === true;
+	const volume =
+		placement.volume ??
+		(audio?.noiseReduction === noiseReduction ? audio.volume : undefined);
+	return { noiseReduction, ...(volume !== undefined && { volume }) };
 }
 
 function createTakeClip({
@@ -938,9 +941,12 @@ export function swapTakeClips({
 			return {
 				trackId: part.trackId,
 				...(audioTrackId ? { audioTrackId } : {}),
-				// 0 dB and no noise reduction are the defaults, so need no record.
-				...(audio?.volume ? { volume: audio.volume } : {}),
-				...(audio?.noiseReduction ? { noiseReduction: true } : {}),
+				// Saved even at 0 dB and off, so swapping back restores them
+				// rather than taking another clip's noise reduction and gain.
+				...(audio && {
+					...(audio.volume !== undefined && { volume: audio.volume }),
+					noiseReduction: audio.noiseReduction,
+				}),
 			};
 		}),
 		tracks: insertTakeClips({

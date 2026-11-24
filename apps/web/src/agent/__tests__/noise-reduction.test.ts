@@ -429,7 +429,7 @@ test("a take swapped out and back keeps its noise reduction when no other clip o
 	expect(swap()).toMatchObject({ ok: true });
 	expect(flags()).toEqual([[second, false]]);
 	expect(active().markers[0]?.data?.badTakePlacements).toEqual([
-		[{ trackId: expect.any(String), noiseReduction: true }],
+		[{ trackId: expect.any(String), volume: 0, noiseReduction: true }],
 	]);
 	expect(swap()).toMatchObject({ ok: true });
 	expect(flags()).toEqual([[first, true]]);
@@ -520,3 +520,100 @@ test("a take with extracted audio and keyframed volume keeps its noise reduction
 	expect(flags()).toEqual([[first, true]]);
 	expect(extracted()).toMatchObject([{ params: { noiseReduction: true } }]);
 });
+
+const keyframedVolume = {
+	volume: {
+		keys: [
+			{
+				id: "key",
+				time: ZERO_MEDIA_TIME,
+				value: -6,
+				segmentToNext: "linear",
+				tangentMode: "auto",
+			},
+		],
+	},
+} satisfies ClipAnimations;
+
+test.each([
+	{
+		name: "denoised at +7 dB beside a plain -5 dB clip",
+		swapped: { noiseReduction: true, volume: 7 },
+		remaining: { params: { volume: -5 } },
+		saved: { volume: 7, noiseReduction: true },
+	},
+	{
+		name: "denoised at +7 dB beside a plain clip with keyframed volume",
+		swapped: { noiseReduction: true, volume: 7 },
+		remaining: { animations: keyframedVolume },
+		saved: { volume: 7, noiseReduction: true },
+	},
+	{
+		name: "plain at 0 dB beside a denoised +7 dB clip",
+		swapped: { noiseReduction: false, volume: 0 },
+		remaining: { params: { noiseReduction: true, volume: 7 } },
+		saved: { volume: 0, noiseReduction: false },
+	},
+])(
+	"a take swapped out and back plays as it did, $name of its recording",
+	({ swapped, remaining, saved }) => {
+		const { tracks } = active();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [
+					{
+						...videoClip({ id: "best", start: 0, duration: 2, trimStart: 4 }),
+						mediaId: first,
+						params: swapped,
+					},
+					{
+						...videoClip({ id: "later", start: 5, duration: 2, trimStart: 8 }),
+						mediaId: first,
+						...remaining,
+					},
+				],
+			},
+			audio: tracks.audio.map((track) => ({ ...track, clips: [] })),
+		});
+		expect(
+			api.apply({
+				sequenceId: active().id,
+				expectedRevision: api.getRevision(),
+				label: "Marker",
+				ops: [
+					{
+						op: "add_marker",
+						at: { seconds: 1 },
+						data: {
+							kind: "removal",
+							sectionName: "Intro",
+							bestTake: { projectItemId: first, sourceIn: 4, sourceOut: 6 },
+							badTakes: [{ projectItemId: second, sourceIn: 0, sourceOut: 3 }],
+						},
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		const [marker] = active().markers;
+		const swap = () =>
+			api.apply({
+				sequenceId: active().id,
+				expectedRevision: api.getRevision(),
+				label: "Swap",
+				ops: [{ op: "swap_take", markerId: marker.id, takeIndex: 0 }],
+			});
+		expect(swap()).toMatchObject({ ok: true });
+		expect(active().markers[0]?.data?.badTakePlacements).toEqual([
+			[{ trackId: expect.any(String), ...saved }],
+		]);
+		expect(swap()).toMatchObject({ ok: true });
+		const [back] = active().tracks.main.clips;
+		expect([
+			"mediaId" in back ? back.mediaId : null,
+			back.params.noiseReduction ?? false,
+			back.params.volume,
+		]).toEqual([first, swapped.noiseReduction, swapped.volume]);
+	},
+);
