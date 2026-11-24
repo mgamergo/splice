@@ -417,7 +417,13 @@ function peakNear({
  * hum at a home mic's level: a noise floor near -46 dBFS. Clicks, if given,
  * are at those sample indexes.
  */
-async function writeNoisyRecording(file: string, clicks: number[] = []) {
+async function writeNoisyRecording({
+	file,
+	clicks = [],
+}: {
+	file: string;
+	clicks?: number[];
+}) {
 	const voice = [
 		"0.25*sin(2*PI*180*t)*(0.6+0.4*sin(2*PI*4*t))*(lt(t,4)+gte(t,8))+0.12*sin(2*PI*540*t)*(lt(t,4)+gte(t,8))",
 		...clicks.map((index) => `0.6*eq(n,${index})`),
@@ -454,7 +460,7 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 				const footage = join(root, "Footage", "take.wav");
 				// Near the start and in the last 25 ms, which afftdn would drop.
 				const clicks = [6_000, 575_500];
-				await writeNoisyRecording(footage, clicks);
+				await writeNoisyRecording({ file: footage, clicks });
 				const source = await decodeSamples(footage);
 				expect(AFFTDN_LATENCY_SAMPLES).toBe(1_200);
 				for (const window of [null, { start: 5, rmsDb: -46 }]) {
@@ -476,7 +482,7 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 		() =>
 			withRoot(async (root) => {
 				const footage = join(root, "Footage", "Day 1", "take.wav");
-				await writeNoisyRecording(footage);
+				await writeNoisyRecording({ file: footage });
 				const before = await Bun.file(footage).bytes();
 				const reducer = createNoiseReducer({ root });
 				const { file, noiseWindow } = await reducer.ensure({
@@ -517,7 +523,7 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 		"loudness with noise reduction measures the render's ranges through the same ffconcat meter",
 		() =>
 			withRoot(async (root) => {
-				await writeNoisyRecording(join(root, "Footage", "take.wav"));
+				await writeNoisyRecording({ file: join(root, "Footage", "take.wav") });
 				const reducer = createNoiseReducer({ root });
 				const meter = createLoudnessMeter({ root, noiseReduction: reducer });
 				// Mostly the pause, where noise reduction changes the most.
@@ -555,7 +561,9 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 		"the media route serves the denoised WAV with ranges, rendering it on first request",
 		() =>
 			withRoot(async (root) => {
-				await writeNoisyRecording(join(root, "Footage", "Day 1", "take.wav"));
+				await writeNoisyRecording({
+					file: join(root, "Footage", "Day 1", "take.wav"),
+				});
 				await writeFile(join(root, "Footage", "still.png"), "image");
 				const server = startServer({
 					port: 0,
