@@ -1,6 +1,5 @@
 import { DENOISED_AUDIO } from "@splice/bridge";
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -12,6 +11,7 @@ import {
 } from "./transcription-tools";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
 import { createSharedWork } from "./shared-work";
+import { type FileIdentity, fileIdentity } from "./file-identity";
 
 export const renderNoiseReductionInput = { path: footagePath };
 const renderSchema = z.object(renderNoiseReductionInput);
@@ -58,34 +58,6 @@ const TRACKED_DENOISE_FILTER = "afftdn=nr=12:nf=-50:tn=1";
 export interface NoiseWindow {
 	start: number;
 	rmsDb: number;
-}
-
-/** A file's size, times and inode, which change when it is rewritten. */
-export type FileIdentity = Pick<Stats, "size" | "mtimeMs" | "ctimeMs" | "ino">;
-
-/**
- * The parts of a file's identity cache keys use. The inode and change time
- * also catch rewrites that keep the size and restore the modified time, since
- * nothing can set the change time back.
- */
-export function fileIdentity({
-	size,
-	mtimeMs,
-	ctimeMs,
-	ino,
-}: FileIdentity): number[] {
-	return [size, mtimeMs, ctimeMs, ino];
-}
-
-/** Whether two stats describe the same file, unchanged. */
-export function sameFileIdentity({
-	a,
-	b,
-}: {
-	a: FileIdentity;
-	b: FileIdentity;
-}): boolean {
-	return fileIdentity(a).join() === fileIdentity(b).join();
 }
 
 /** Identifies a render by the source file's path and identity. */

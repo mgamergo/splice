@@ -31,9 +31,9 @@ import { createSharedWork } from "./shared-work";
 import {
 	type FileIdentity,
 	fileIdentity,
-	type NoiseReducer,
 	sameFileIdentity,
-} from "./noise-reduction";
+} from "./file-identity";
+import type { NoiseReducer } from "./noise-reduction";
 
 const rangesSchema = z.array(sourceRangeSchema).min(1);
 const RANGES_DESCRIPTION =

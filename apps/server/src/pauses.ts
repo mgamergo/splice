@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
 import { createSharedWork } from "./shared-work";
-import { fileIdentity, sameFileIdentity } from "./noise-reduction";
+import { fileIdentity, sameFileIdentity } from "./file-identity";
 import {
 	ffmpegInputArgs,
 	findFfmpeg,

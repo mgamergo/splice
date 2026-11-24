@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { mediaTypeForPath, resolveFootagePath } from "./footage";
 import { BridgeError } from "./tab-bridge";
+import { type FileIdentity, fileIdentity } from "./file-identity";
 import { normalizeTranscript, transcriptSchema } from "./transcript";
 import {
 	createWhisperTools,
@@ -56,20 +57,22 @@ type Job = {
 	finished: Promise<void>;
 };
 
+/**
+ * Keyed on the recording's whole identity, so a file replaced with one of the
+ * same size and modified time isn't given the old file's word times.
+ */
 export function transcriptCacheKey({
 	path,
-	size,
-	mtimeMs,
+	info,
 	model,
 }: {
 	path: string;
-	size: number;
-	mtimeMs: number;
+	info: FileIdentity;
 	model: string;
 }): string {
 	// Bump the version when cached transcript semantics change.
 	return createHash("sha256")
-		.update(JSON.stringify([4, path, size, mtimeMs, model]))
+		.update(JSON.stringify([4, path, ...fileIdentity(info), model]))
 		.digest("hex");
 }
 
@@ -154,12 +157,7 @@ export function createTranscriptionJobs({
 	async function identifySource({ path }: { path: string }) {
 		const { source, info } = await resolveRecording({ root, path });
 		const model = await identifyModel({ root });
-		const key = transcriptCacheKey({
-			path,
-			size: info.size,
-			mtimeMs: info.mtimeMs,
-			model: model.fingerprint,
-		});
+		const key = transcriptCacheKey({ path, info, model: model.fingerprint });
 		return { source, model, key, cachePath: join(cacheDir, `${key}.json`) };
 	}
 
