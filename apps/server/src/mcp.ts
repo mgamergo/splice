@@ -402,7 +402,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					.describe("Short projects only: style for the burned-in captions"),
 			},
 		},
-		({ captionStyle, loudness, ...args }) =>
+		({ captionStyle, loudness, pauses, ...args }) =>
 			guard(async () => {
 				const { project } = stateSchema.parse(
 					await rpc({ method: "editor.getState" }),
@@ -411,10 +411,11 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					project?.format === "short"
 						? await captionSources({ rpc })
 						: undefined;
-				const request = {
+				const cut = {
 					...args,
 					captions: found && { sources: found.sources, style: captionStyle },
 				};
+				const request = { ...cut, pauses };
 				const pathById = found?.pathById ?? new Map<string, string>();
 				if (loudness === false)
 					return editorResult(
@@ -437,13 +438,11 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					targetLufs,
 					measure,
 				});
+				// `tightening` carries the pauses the plan resolved, so explicit
+				// ones aren't sent a second time.
 				const result = await rpc({
 					method: "editor.roughCut",
-					params: {
-						...request,
-						sourceGains,
-						tightening,
-					},
+					params: { ...cut, sourceGains, tightening },
 				});
 				if (!isOk(result)) return editorResult(result);
 				return text({
