@@ -77,7 +77,10 @@ test("plays the ranges in order from an ffconcat list, as dual mono, on the tran
 		"outpoint 4.000000",
 		"",
 	]);
-	const args = ebur128Args({ source: "Cache/loudness/ranges.ffconcat", concat: true });
+	const args = ebur128Args({
+		source: "Cache/loudness/ranges.ffconcat",
+		concat: true,
+	});
 	expect(args.slice(args.indexOf("-format_whitelist"))).toEqual([
 		"-format_whitelist",
 		"concat,mov,matroska,webm,wav,mp3,aac,flac,ogg",
@@ -236,8 +239,8 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 			{ start: 1.5, end: 3 },
 		];
 		const [first, joined] = await Promise.all([
-			meter.measure({ path: "take.wav", ranges }),
-			meter.measure({ path: "take.wav", ranges }),
+			meter.measure({ params: { path: "take.wav", ranges } }),
+			meter.measure({ params: { path: "take.wav", ranges } }),
 		]);
 		expect(first).toEqual({
 			path: "take.wav",
@@ -250,20 +253,28 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		});
 		expect(joined).toEqual(first);
 		expect(
-			await meter.measure({ path: "take.wav", ranges: ranges.map((r) => ({ ...r })) }),
+			await meter.measure({
+				params: { path: "take.wav", ranges: ranges.map((r) => ({ ...r })) },
+			}),
 		).toMatchObject({ integratedLufs: -20, cached: true });
 		// Played in another order, the joins differ, so it's measured again.
 		expect(
-			await meter.measure({ path: "take.wav", ranges: [...ranges].reverse() }),
+			await meter.measure({
+				params: { path: "take.wav", ranges: [...ranges].reverse() },
+			}),
 		).toMatchObject({ cached: false });
-		expect(await meter.measure({ path: "take.wav" })).toMatchObject({
-			ranges: null,
-			cached: false,
-		});
+		expect(await meter.measure({ params: { path: "take.wav" } })).toMatchObject(
+			{
+				ranges: null,
+				cached: false,
+			},
+		);
 		expect(calls).toHaveLength(3);
 
 		await utimes(file, new Date(), new Date(Date.now() + 10_000));
-		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
+		expect(
+			await meter.measure({ params: { path: "take.wav", ranges } }),
+		).toMatchObject({
 			cached: false,
 		});
 		expect(calls).toHaveLength(4);
@@ -274,7 +285,9 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		await rm(file);
 		await writeFile(file, "AUDIO");
 		await utimes(file, atime, mtime);
-		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
+		expect(
+			await meter.measure({ params: { path: "take.wav", ranges } }),
+		).toMatchObject({
 			cached: false,
 		});
 		expect(calls).toHaveLength(5);
@@ -297,18 +310,22 @@ test("refuses paths outside Footage and files that aren't audio or video", async
 			},
 		});
 		for (const path of ["../secret.wav", "notes.txt"]) {
-			await expect(meter.measure({ path })).rejects.toMatchObject({
+			await expect(meter.measure({ params: { path } })).rejects.toMatchObject({
 				code: RPC_ERRORS.INVALID_PARAMS,
 				data: undefined,
 			});
 		}
 		// A recording that left Footage says so, so normalizing can skip it.
-		await expect(meter.measure({ path: "missing.wav" })).rejects.toMatchObject({
+		await expect(
+			meter.measure({ params: { path: "missing.wav" } }),
+		).rejects.toMatchObject({
 			code: RPC_ERRORS.INVALID_PARAMS,
 			data: { missingFootage: true },
 		});
 		await expect(
-			meter.measure({ path: "a.wav", ranges: [{ start: 2, end: 1 }] }),
+			meter.measure({
+				params: { path: "a.wav", ranges: [{ start: 2, end: 1 }] },
+			}),
 		).rejects.toMatchObject({ code: RPC_ERRORS.INVALID_PARAMS });
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -538,6 +555,44 @@ test.skipIf(!ffmpeg)(
 		}),
 );
 
+test.skipIf(!ffmpeg)(
+	"measures a tightened cut's thousands of ranges, more than the measure_loudness tool takes",
+	() =>
+		ffmpegMeter(async ({ root, generate }) => {
+			// Quiet for 3 s, then loud for 3 s.
+			await generate(
+				"steps.wav",
+				"if(lt(t\\,3)\\,0.05\\,0.5)*sin(2*PI*997*t)",
+				6,
+			);
+			// 5,001 kept ranges, as tightening leaves between pauses.
+			const ranges = Array.from({ length: 5_001 }, (_, index) => ({
+				start: (index * 6) / 5_001,
+				end: ((index + 0.5) * 6) / 5_001,
+			}));
+			const meter = createLoudnessMeter({ root, noiseReduction: noRenders });
+			try {
+				const forward = await meter.measure({
+					params: { path: "steps.wav", ranges },
+				});
+				// The loud half alone peaks 20 dB above the quiet half.
+				const loudHalf = await meter.measure({
+					params: { path: "steps.wav", ranges: ranges.slice(2_501) },
+				});
+				expect(forward).toMatchObject({ cached: false, ranges });
+				expect(forward.truePeakDbtp).toBe(loudHalf.truePeakDbtp);
+				// The quiet ranges count too.
+				expect(forward.integratedLufs ?? 0).toBeLessThan(
+					loudHalf.integratedLufs ?? 0,
+				);
+				expect(forward.lraLu).toBeGreaterThan(loudHalf.lraLu);
+			} finally {
+				await meter.stop();
+			}
+		}),
+	60_000,
+);
+
 test.skipIf(!ffmpeg)("counts audio once for every clip that plays it", () =>
 	ffmpegMeter(async ({ generate, measure, reference }) => {
 		const source = await generate(
@@ -636,13 +691,17 @@ test.skipIf(!ffmpeg)(
 			expect(measured.truePeakDbtp ?? -Infinity).toBeGreaterThanOrEqual(
 				(exact.peak ?? 0) - 0.1,
 			);
-			const copies = [...new Bun.Glob("audio-*.mka").scanSync(
-				join(root, "Cache", "loudness"),
-			)];
+			const copies = [
+				...new Bun.Glob("audio-*.mka").scanSync(
+					join(root, "Cache", "loudness"),
+				),
+			];
 			expect(copies).toHaveLength(1);
 			await measure(source, [{ start: 0, end: 1 }]);
 			expect([
-				...new Bun.Glob("audio-*.mka").scanSync(join(root, "Cache", "loudness")),
+				...new Bun.Glob("audio-*.mka").scanSync(
+					join(root, "Cache", "loudness"),
+				),
 			]).toEqual(copies);
 		}),
 	60_000,

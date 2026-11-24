@@ -72,6 +72,7 @@ function setUp(handlers: Partial<TabHandlers> = {}) {
 			"editor.rawSequence": () => ({ ok: true }),
 			"editor.addCaptions": () => ({ ok: true }),
 			"editor.roughCut": () => ({ ok: true }),
+			"editor.roughCutSources": () => ({ ok: true, items: [] }),
 			"editor.takesList": () => ({ ok: true, markers: [] }),
 			"editor.audioSources": () => ({ ok: true, audioSources: [] }),
 			...handlers,

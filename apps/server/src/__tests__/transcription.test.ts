@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcClient } from "../rpc-client";
 import { startServer } from "../server";
-import { extractAudio, ffmpegArgs, whisperArgs } from "../transcription-tools";
+import {
+	DISFLUENCY_PROMPT,
+	extractAudio,
+	ffmpegArgs,
+	whisperArgs,
+} from "../transcription-tools";
 import { createTranscriptionJobs, transcriptCacheKey } from "../transcription";
 import { normalizeTranscript } from "../transcript";
 import whisperOutput from "./fixtures/whisper-base-en.json";
@@ -58,6 +63,8 @@ test("builds shell-free FFmpeg and whisper.cpp arguments", () => {
 		"-of",
 		"working dir/whisper",
 		"-pp",
+		"--prompt",
+		DISFLUENCY_PROMPT,
 	]);
 	expect(
 		whisperArgs({ wav, output: "working dir/whisper", model, cpu: true }),
@@ -98,14 +105,18 @@ test("normalizes full whisper.cpp v1.9.2 JSON captured from synthetic speech", (
 	).toThrow();
 });
 
-test("cache key includes path, size, mtime and model", () => {
-	const input = { path: source, size: 123, mtimeMs: 456.5, model: "base.en" };
+test("cache key includes path, file identity and model", () => {
+	const info = { size: 123, mtimeMs: 456.5, ctimeMs: 789.5, ino: 42 };
+	const input = { path: source, info, model: "base.en" };
 	const key = transcriptCacheKey(input);
-	expect(transcriptCacheKey({ ...input })).toBe(key);
+	expect(transcriptCacheKey({ ...input, info: { ...info } })).toBe(key);
 	for (const modification of [
 		{ path: "different.m4a" },
-		{ size: 124 },
-		{ mtimeMs: 456.6 },
+		{ info: { ...info, size: 124 } },
+		{ info: { ...info, mtimeMs: 456.6 } },
+		// A file replaced with the same size and modified time.
+		{ info: { ...info, ctimeMs: 790 } },
+		{ info: { ...info, ino: 43 } },
 		{ model: "small.en" },
 	]) {
 		expect(transcriptCacheKey({ ...input, ...modification })).not.toBe(key);

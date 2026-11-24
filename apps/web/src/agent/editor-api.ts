@@ -1,6 +1,7 @@
 import {
 	buildRawSequence,
 	buildRoughCut,
+	playedClips,
 	RAW_SEQUENCE_NAME,
 	sequenceDurationSeconds,
 } from "@/agent/rough-cut";
@@ -19,6 +20,7 @@ import { isDiskMedia } from "@/media/media-data";
 import { canClipHaveAudio, hasMediaId } from "@/timeline/clip-utils";
 import { hasAnimatedVolume } from "@/timeline/audio-state";
 import { buildSequenceDigest } from "@/agent/digest";
+import type { RoughCutSources } from "@splice/bridge";
 import {
 	type ApplyRequest,
 	applyRequestSchema,
@@ -26,6 +28,7 @@ import {
 	audioSourcesRequestSchema,
 	type EditOp,
 	rawSequenceRequestSchema,
+	roughCutSourcesRequestSchema,
 	roughCutTabRequestSchema,
 	takesListRequestSchema,
 } from "@splice/bridge/ops";
@@ -38,6 +41,7 @@ import {
 	markBestTake,
 	resolveTake,
 } from "@/timeline/markers/removal-takes";
+import { summarizeItem } from "@/media/import-disk";
 import { generateUUID } from "@/utils/id";
 import { AddMarkerCommand } from "@/commands/sequence/add-marker";
 import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
@@ -152,44 +156,95 @@ export class EditorApi {
 		}
 	}
 
+	/** The sequence a rough cut copies: `sequenceId`, or the one named Raw. */
+	private findRoughCutSource({
+		sequenceId,
+	}: {
+		sequenceId?: string;
+	}): TSequence | EditorError {
+		const sources = this.editor.sequences
+			.getSequences()
+			.filter((sequence) =>
+				sequenceId
+					? sequence.id === sequenceId
+					: sequence.name === RAW_SEQUENCE_NAME,
+			);
+		if (sources.length > 1)
+			return this.invalidOp(
+				"More than one sequence is named Raw. Pass the source sequenceId from sequence_get.",
+			);
+		return (
+			sources[0] ??
+			this.invalidOp(
+				sequenceId
+					? `Unknown source sequence ${sequenceId}. Read the sequence ID from sequence_get.`
+					: "No sequence named Raw. Run raw_sequence or provide a source sequenceId.",
+			)
+		);
+	}
+
+	/**
+	 * The recordings heard on a rough cut's source sequence, so `splice` can
+	 * find their pauses. A recording only on muted tracks or clips, or with its
+	 * audio turned off, isn't listed: its silences say nothing about what plays.
+	 * Nor is a missing recording, which playback skips.
+	 */
+	roughCutSources(request: unknown): RoughCutSources {
+		const parsed = roughCutSourcesRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const source = this.findRoughCutSource(parsed.data);
+		if ("ok" in source) return source;
+		const projectItems = this.editor.media.getProjectItems();
+		const heard = new Set(
+			playedClips({ tracks: source.tracks, projectItems }).map(
+				({ clip }) => clip.mediaId,
+			),
+		);
+		return {
+			ok: true,
+			sequenceId: source.id,
+			items: projectItems
+				.filter(({ id }) => heard.has(id))
+				.map((item) => {
+					const { id, name, path } = summarizeItem(item);
+					return { id, name, path };
+				}),
+		};
+	}
+
 	roughCut(request: unknown) {
 		const parsed = roughCutTabRequestSchema.safeParse(request);
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const conflict = this.checkWrite(parsed.data);
 		if (conflict) return conflict;
 		const {
-			sequenceId,
-			sections,
-			captions,
 			label = "Agent: rough cut",
+			captions,
 			plan,
 			sourceGains,
 			noiseReduction = false,
+			...cutPlan
 		} = parsed.data;
-		const sequences = this.editor.sequences.getSequences();
-		const sources = sequences.filter((sequence) =>
-			sequenceId
-				? sequence.id === sequenceId
-				: sequence.name === RAW_SEQUENCE_NAME,
+		const source = this.findRoughCutSource(cutPlan);
+		if ("ok" in source) return source;
+		const names = new Set(
+			this.editor.sequences.getSequences().map(({ name }) => name),
 		);
-		if (sources.length > 1)
-			return this.invalidOp(
-				"More than one sequence is named Raw. Pass the source sequenceId from sequence_get.",
-			);
-		const [source] = sources;
-		if (!source)
-			return this.invalidOp(
-				sequenceId
-					? `Unknown source sequence ${sequenceId}. Read the sequence ID from sequence_get.`
-					: "No sequence named Raw. Run raw_sequence or provide a source sequenceId.",
-			);
-		const names = new Set(sequences.map(({ name }) => name));
 		let name = "Rough Cut";
 		for (let suffix = 2; names.has(name); suffix++)
 			name = `Rough Cut ${suffix}`;
 		try {
 			const projectItems = this.editor.media.getProjectItems();
-			const cut = buildRoughCut({ source, name, sections, projectItems });
+			const cut = buildRoughCut({
+				source,
+				name,
+				plan: cutPlan,
+				projectItems,
+				sliverDuration: resolveTimeSpec({
+					spec: { frame: 2 },
+					fps: this.editor.project.getActive().settings.fps,
+				}),
+			});
 			// Noise reduction goes on first, so the plan reports which audio
 			// `splice` must measure denoised.
 			const tracks = noiseReduction
@@ -223,6 +278,7 @@ export class EditorApi {
 			return {
 				...this.addPreparedSequence({ sequence, label }),
 				sections: cut.sections,
+				tightening: cut.tightening,
 				...(captioned && {
 					captionCount: captioned.captionCount,
 					uncaptionedItemIds: captioned.uncaptionedItemIds,

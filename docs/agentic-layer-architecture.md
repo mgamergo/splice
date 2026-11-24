@@ -127,13 +127,13 @@ project items: rec-01.mkv (42:10, 1080p, audio), rec-02.mkv (06:30)
 | --- | --- | --- |
 | Order the recordings | `splice` | Probe the files and sort them by recording time into one continuous **raw sequence**. |
 | Transcribe | `splice` | whisper.cpp with word timestamps, cached in `Cache\`. CUDA on the laptop, CPU elsewhere. |
-| Find pauses | `splice` | FFmpeg `silencedetect` combined with the transcript gaps. |
+| Find pauses | `splice` | FFmpeg `silencedetect`, cached in `Cache\`. The transcript only joins silences around a click: Whisper's word times drift, so pause edges always come from the audio. |
 | Find sections and takes | agent | From the transcript: restarts of the same passage are takes of one section. |
 | Rank takes | agent | Completeness, then fluency, then pacing, guided by `profile.md`. |
-| Find false starts and filler words | agent and `splice` | Transcript patterns plus word timings. |
-| Build the cut | tab | Create the **Rough Cut** sequence from the raw sequence with one `apply()`: ripple deletes plus removal markers. |
+| Find false starts and filler words | agent and `splice` | The agent finds false starts in the transcript. `splice` finds English filler words and moves them to their sound between two silences, leaving any filler whose sound could be a real word. |
+| Build the cut | tab | Create the **Rough Cut** sequence from the raw sequence in one undo step: ripple deletes plus removal markers for bad takes; pauses (keeping 0.2 s of breath per side), false starts and filler words are ripple deleted without markers. |
 | Noise reduction (off by default) | `splice` and tab | FFmpeg renders a cleaned WAV of each recording into `Cache\`; a clip param makes playback and export read it. |
-| Loudness | `splice` and tab | FFmpeg `ebur128` measures, after noise reduction when it's on; a gain param applies the correction. |
+| Loudness | `splice` and tab | FFmpeg `ebur128` measures the tightened cut, after noise reduction when it's on; a gain param applies the correction. |
 | Captions (Shorts) | tab | Word-by-word captions from the same transcript. |
 
 A **removal marker** stores the bad takes it replaced, as source ranges. **Restore** and **Swap** apply ordinary undoable edits built from that data, so they keep working after any amount of later editing.

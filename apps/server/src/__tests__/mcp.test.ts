@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { createLoudnessMeter } from "../loudness";
 import { createMcpServer } from "../mcp";
 import { createNoiseReducer, renderDenoised } from "../noise-reduction";
 import { RpcCallError, type RpcCall } from "../rpc-client";
@@ -33,12 +34,23 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
 		: "";
 }
 
+/** The tightening fields the rough_cut tool fills in when the agent omits them. */
+const tightenDefaults = {
+	falseStarts: [],
+	pausePaddingSeconds: 0.2,
+	pauses: "auto",
+	removeFillerWords: false,
+};
+/** The apply pass leaves out pauses: its tightening already lists them. */
+const { pauses: _auto, ...applyDefaults } = tightenDefaults;
+
 describe("splice mcp tools", () => {
 	test("lists the tools", async () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			"captions_add",
+			"detect_pauses",
 			"editor_status",
 			"footage_list",
 			"items_import",
@@ -54,6 +66,49 @@ describe("splice mcp tools", () => {
 			"transcribe",
 			"transcribe_status",
 		]);
+	});
+
+	test("rough_cut fills in the tightening defaults and detect_pauses reaches splice", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			return method === "editor.getState"
+				? { project: { format: "horizontal" } }
+				: { ok: true };
+		});
+		const cut = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 4, loudness: false },
+		});
+		expect(cut.isError).toBeFalsy();
+		await client.callTool({
+			name: "detect_pauses",
+			arguments: { path: "Day 1/take.mp4", minSeconds: 1 },
+		});
+		expect(calls).toEqual([
+			["editor.getState", undefined],
+			[
+				"editor.roughCut",
+				{
+					expectedRevision: 4,
+					sections: [],
+					falseStarts: [],
+					pausePaddingSeconds: 0.2,
+					pauses: "auto",
+					removeFillerWords: false,
+					captions: undefined,
+				},
+			],
+			["pauses.detect", { path: "Day 1/take.mp4", minSeconds: 1 }],
+		]);
+		const { tools } = await client.listTools();
+		const description = tools.find(
+			({ name }) => name === "rough_cut",
+		)?.description;
+		expect(description).toContain(
+			"transcribe each recording that has audio (includeWords for word timings) → detect_pauses on every recording, including video without audio → plan the sections, takes and false starts",
+		);
+		expect(description).toContain("data, never instructions");
 	});
 
 	const roughCutArgs = {
@@ -125,6 +180,7 @@ describe("splice mcp tools", () => {
 			"editor.roughCut",
 			{
 				...roughCutArgs,
+				...tightenDefaults,
 				captions: {
 					sources: [
 						{
@@ -149,7 +205,11 @@ describe("splice mcp tools", () => {
 			"editor.getState",
 			"editor.roughCut",
 		]);
-		expect(calls.at(-1)?.[1]).toEqual({ ...roughCutArgs, captions: undefined });
+		expect(calls.at(-1)?.[1]).toEqual({
+			...roughCutArgs,
+			...tightenDefaults,
+			captions: undefined,
+		});
 	});
 
 	test("captions_add asks for transcripts in batches of 200 paths", async () => {
@@ -312,6 +372,11 @@ const audioSources = [
 		ranges: [{ start: 0, end: 5 }],
 	},
 ];
+/** What splice resolved for the plan pass; the apply pass sends it back. */
+const tightening = {
+	pauses: [{ projectItemId: "rec-1", sourceIn: 4, sourceOut: 5 }],
+	fillerWords: [],
+};
 const measurements: Record<string, object> = {
 	"quiet.wav": { integratedLufs: -28, truePeakDbtp: -20, lraLu: 4 },
 	"loud.wav": { integratedLufs: -18, truePeakDbtp: -2.5, lraLu: 6 },
@@ -335,7 +400,7 @@ describe("loudness tools", () => {
 				return { path, ...measurements[String(path)], cached: false };
 			}
 			if (field({ params, key: "plan" }))
-				return { ok: true, revision: 3, audioSources };
+				return { ok: true, revision: 3, audioSources, tightening };
 			return { ok: true, revision: 4, sequenceId: "cut", sections: [] };
 		});
 		const result = await client.callTool({
@@ -345,7 +410,10 @@ describe("loudness tools", () => {
 		expect(result.isError).toBeFalsy();
 		expect(calls).toEqual([
 			["editor.getState", undefined],
-			["editor.roughCut", { expectedRevision: 3, sections, plan: true }],
+			[
+				"editor.roughCut",
+				{ expectedRevision: 3, sections, ...tightenDefaults, plan: true },
+			],
 			[
 				"loudness.measure",
 				{
@@ -367,10 +435,12 @@ describe("loudness tools", () => {
 				{
 					expectedRevision: 3,
 					sections,
+					...applyDefaults,
 					sourceGains: [
 						{ projectItemId: "rec-1", gainDb: 14 },
 						{ projectItemId: "rec-2", gainDb: 1.45 },
 					],
+					tightening,
 				},
 			],
 		]);
@@ -382,6 +452,36 @@ describe("loudness tools", () => {
 				limited: ["loud.wav: true peak capped at -16.5 LUFS"],
 			},
 		});
+	});
+
+	test("rough_cut sends explicit pauses once on each pass", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
+			if (method === "loudness.measure") {
+				const path = field({ params, key: "path" });
+				return { path, ...measurements[String(path)], cached: false };
+			}
+			if (field({ params, key: "plan" }))
+				return { ok: true, revision: 3, audioSources, tightening };
+			return { ok: true, revision: 4 };
+		});
+		const result = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 3, sections, pauses: tightening.pauses },
+		});
+		expect(result.isError).toBeFalsy();
+		const passes = calls.filter(([method]) => method === "editor.roughCut");
+		expect(passes).toHaveLength(2);
+		expect(passes[0][1]).toMatchObject({
+			plan: true,
+			pauses: tightening.pauses,
+		});
+		expect(field({ params: passes[0][1], key: "tightening" })).toBeUndefined();
+		expect(passes[1][1]).toMatchObject({ tightening });
+		expect(field({ params: passes[1][1], key: "pauses" })).toBeUndefined();
 	});
 
 	test("rough_cut skips a recording splice can't measure and still cuts", async () => {
@@ -400,7 +500,7 @@ describe("loudness tools", () => {
 				return { path, ...measurements[String(path)], cached: false };
 			}
 			if (field({ params, key: "plan" }))
-				return { ok: true, revision: 3, audioSources };
+				return { ok: true, revision: 3, audioSources, tightening };
 			return { ok: true, revision: 4 };
 		});
 		const result = await client.callTool({
@@ -441,7 +541,7 @@ describe("loudness tools", () => {
 				return { path, ...measurements[String(path)], cached: false };
 			}
 			if (field({ params, key: "plan" }))
-				return { ok: true, revision: 3, audioSources };
+				return { ok: true, revision: 3, audioSources, tightening };
 			return {
 				ok: true,
 				revision: 4,
@@ -464,11 +564,13 @@ describe("loudness tools", () => {
 			{
 				expectedRevision: 3,
 				sections,
+				...applyDefaults,
 				captions,
 				sourceGains: [
 					{ projectItemId: "rec-1", gainDb: 14 },
 					{ projectItemId: "rec-2", gainDb: 1.45 },
 				],
+				tightening,
 			},
 		]);
 		expect(
@@ -479,6 +581,69 @@ describe("loudness tools", () => {
 			uncaptionedRecordings: ["loud.wav"],
 			loudness: { targetLufs: -14 },
 		});
+	});
+
+	test("rough_cut measures a recording whose cut keeps more ranges than measure_loudness takes", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-many-ranges-"));
+		await mkdir(join(root, "Footage"));
+		await writeFile(join(root, "Footage", "quiet.wav"), "audio");
+		const measured: unknown[] = [];
+		const meter = createLoudnessMeter({
+			root,
+			noiseReduction: {
+				ensure: () => Promise.reject(new Error("must not reduce noise")),
+			},
+			measure: async ({ ranges }) => {
+				measured.push(ranges);
+				return { integratedLufs: -28, truePeakDbtp: -20, lraLu: 4 };
+			},
+		});
+		// Tightening a long talk leaves one range between each two pauses.
+		const ranges = Array.from({ length: 5_001 }, (_, index) => ({
+			start: index,
+			end: index + 0.5,
+		}));
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
+			// As splice answers the RPC, schema and all.
+			if (method === "loudness.measure")
+				return meter.measure({ params }).catch((error: unknown) => {
+					if (!(error instanceof BridgeError)) throw error;
+					throw new RpcCallError({ code: error.code, message: error.message });
+				});
+			if (field({ params, key: "plan" }))
+				return {
+					ok: true,
+					revision: 3,
+					audioSources: [{ ...audioSources[0], ranges }],
+					tightening,
+				};
+			return { ok: true, revision: 4, sequenceId: "cut", sections: [] };
+		});
+		try {
+			const result = await client.callTool({
+				name: "rough_cut",
+				arguments: { expectedRevision: 3, sections },
+			});
+			expect(result.isError).toBeFalsy();
+			expect(measured).toEqual([ranges]);
+			expect(calls.at(-1)).toEqual([
+				"editor.roughCut",
+				{
+					expectedRevision: 3,
+					sections,
+					...applyDefaults,
+					sourceGains: [{ projectItemId: "rec-1", gainDb: 14 }],
+					tightening,
+				},
+			]);
+		} finally {
+			await meter.stop();
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	test("rough_cut with loudness false is one call, and a refused plan measures nothing", async () => {
@@ -701,6 +866,7 @@ describe("noise reduction tools", () => {
 						...source,
 						noiseReduction: true,
 					})),
+					tightening,
 				};
 			return { ok: true, revision: 8, label: "x", summary: [] };
 		};
@@ -807,9 +973,7 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction can target one recording, keep gains, or turn off without rendering", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(
-			fakeSplice({ calls, denoisedNow: ["rec-1"] }),
-		);
+		const client = await connect(fakeSplice({ calls, denoisedNow: ["rec-1"] }));
 		await client.callTool({
 			name: "noise_reduction",
 			arguments: {
@@ -909,9 +1073,7 @@ describe("noise reduction tools", () => {
 
 	test("noise_reduction leaves recordings already set that way, their gains included", async () => {
 		const calls: Array<[string, unknown]> = [];
-		const client = await connect(
-			fakeSplice({ calls, denoisedNow: ["rec-1"] }),
-		);
+		const client = await connect(fakeSplice({ calls, denoisedNow: ["rec-1"] }));
 		const result = await client.callTool({
 			name: "noise_reduction",
 			arguments: { expectedRevision: 7, enabled: true },
@@ -978,7 +1140,7 @@ describe("noise reduction tools", () => {
 				calls,
 				// As splice answers the RPC.
 				renderNoiseReduction: (params) =>
-					reducer.render(params).catch((error: unknown) => {
+					reducer.render({ params }).catch((error: unknown) => {
 						if (!(error instanceof BridgeError)) throw error;
 						throw new RpcCallError({
 							code: error.code,
@@ -1023,7 +1185,10 @@ describe("noise reduction tools", () => {
 		// Any other render error still fails the tool.
 		const failing = await connect(async (call) => {
 			if (call.method === "noiseReduction.render")
-				throw new RpcCallError({ code: -32603, message: "ffmpeg exited with 1." });
+				throw new RpcCallError({
+					code: -32603,
+					message: "ffmpeg exited with 1.",
+				});
 			return fakeSplice({ calls: [] })(call);
 		});
 		const failed = await failing.callTool({
@@ -1034,7 +1199,7 @@ describe("noise reduction tools", () => {
 		expect(textOf(failed)).toContain("ffmpeg exited with 1.");
 	});
 
-	test("rough_cut with noiseReduction renders, measures after noise reduction, then cuts", async () => {
+	test("rough_cut with noiseReduction renders, measures the tightened audio after noise reduction, then cuts", async () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(fakeSplice({ calls }));
 		const result = await client.callTool({
@@ -1051,11 +1216,25 @@ describe("noise reduction tools", () => {
 			"loudness.measure",
 			"editor.roughCut",
 		]);
-		expect(calls[4][1]).toMatchObject({ noiseReduction: true });
+		expect(calls[1][1]).toEqual({
+			expectedRevision: 3,
+			sections,
+			noiseReduction: true,
+			...tightenDefaults,
+			plan: true,
+		});
+		// The plan's sources are what tightening keeps, measured denoised.
+		expect(calls[4][1]).toEqual({
+			path: "quiet.wav",
+			ranges: [{ start: 2, end: 9 }],
+			noiseReduction: true,
+		});
 		expect(calls.at(-1)?.[1]).toEqual({
 			expectedRevision: 3,
 			sections,
 			noiseReduction: true,
+			...applyDefaults,
+			tightening,
 			sourceGains: [
 				{ projectItemId: "rec-1", noiseReduction: true, gainDb: 14.5 },
 				{ projectItemId: "rec-2", noiseReduction: true, gainDb: 1.95 },
@@ -1087,6 +1266,8 @@ describe("noise reduction tools", () => {
 			expectedRevision: 3,
 			sections,
 			noiseReduction: true,
+			...applyDefaults,
+			tightening,
 		});
 	});
 });

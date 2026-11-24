@@ -505,8 +505,6 @@ function takeWindows({
 	markerId?: string;
 	complete?: boolean;
 }): TakeWindow[] {
-	const [first, ...rest] = take;
-	if (!first) return [];
 	const forRange = (range: ResolvedRange) => {
 		const candidates =
 			range.item.type === "video"
@@ -521,10 +519,15 @@ function takeWindows({
 	};
 	// Count routes per candidate (capped at 2) instead of listing every path:
 	// duplicated cuts on parallel tracks would otherwise grow 2^ranges paths.
-	let nodes: PathNode[] = forRange(first).map((part) => ({ part, routes: 1 }));
-	for (const range of rest) {
+	let nodes: PathNode[] | undefined;
+	for (const range of take) {
+		const parts = forRange(range);
+		// A range that shows nowhere was cut whole, say as a false start by
+		// Tighten. The surviving ranges still form the take.
+		if (!complete && !parts.length) continue;
 		const previous = nodes;
-		nodes = forRange(range).flatMap((part) => {
+		nodes = parts.flatMap((part) => {
+			if (!previous) return [{ part, routes: 1 }];
 			const joins = previous.filter((node) => node.part.end === part.start);
 			if (!joins.length) return [];
 			const routes = Math.min(
@@ -534,7 +537,7 @@ function takeWindows({
 			return [{ part, routes, previous: joins[0] }];
 		});
 	}
-	return nodes.flatMap((node) => {
+	return (nodes ?? []).flatMap((node) => {
 		const parts: RangeWindow[] = [];
 		for (let step: PathNode | undefined = node; step; step = step.previous)
 			parts.unshift(step.part);
@@ -545,6 +548,21 @@ function takeWindows({
 }
 
 type PathNode = { part: RangeWindow; routes: number; previous?: PathNode };
+
+/** Every contiguous run of the sequence, on any track, that shows part of `range`. */
+export function mapSourceRangeToSequence({
+	tracks,
+	range,
+}: {
+	tracks: SequenceTracks;
+	range: ResolvedRange;
+}): Array<{ start: MediaTime; end: MediaTime }> {
+	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+		findTakeWindows({ track, take: range, complete: false }).map(
+			({ start, end }) => ({ start, end }),
+		),
+	);
+}
 
 /** Resolve a take only when its entire source maps to one contiguous window. */
 export function mapTakeToSequence({
@@ -917,6 +935,37 @@ export function tagBestTake({
 	});
 }
 
+/**
+ * Where a range that Tighten cut whole goes back: on the tracks of the
+ * nearest surviving range, preferring one of the same kind, with its own
+ * recording's gain and noise reduction.
+ */
+function neighborPlacement({
+	take,
+	index,
+	placed,
+}: {
+	take: ResolvedTake;
+	index: number;
+	placed: Map<ResolvedRange, TakePlacement>;
+}): TakePlacement {
+	const kind = take[index].item.type;
+	const rank = (at: number) =>
+		Math.abs(at - index) + (take[at].item.type === kind ? 0 : take.length);
+	const [nearest] = take
+		.flatMap((range, at) => {
+			const placement = placed.get(range);
+			return placement ? [{ placement, at }] : [];
+		})
+		.sort((a, b) => rank(a.at) - rank(b.at));
+	if (!nearest)
+		throw new RemovalTakeError(
+			"Could not identify the best take near this marker.",
+		);
+	const { trackId, audioTrackId } = nearest.placement;
+	return { trackId, ...(audioTrackId ? { audioTrackId } : {}) };
+}
+
 export function swapTakeClips({
 	tracks,
 	marker,
@@ -1081,10 +1130,8 @@ export function swapTakeClips({
 		},
 	});
 
-	// Saved even for one track, so swapping back can return to an overlay
-	// that would otherwise be pruned once it's empty.
-	return {
-		previousPlacements: parts.map((part): TakePlacement => {
+	const placed = new Map(
+		parts.map((part): [ResolvedRange, TakePlacement] => {
 			const linked = audioForVideo.get(part) ?? [];
 			const audioTrackId = linked[0]?.trackId;
 			const clipIds = new Set(
@@ -1098,18 +1145,30 @@ export function swapTakeClips({
 				items: new Map([[part.range.item.id, part.range.item]]),
 			}).get(part.range.item.id);
 			const segments = audioSegments({ clips, range: part.range });
-			return {
-				trackId: part.trackId,
-				...(audioTrackId ? { audioTrackId } : {}),
-				// Saved even at 0 dB and off, so swapping back restores them
-				// rather than taking another clip's noise reduction and gain.
-				...(audio && {
-					...(audio.volume !== undefined && { volume: audio.volume }),
-					noiseReduction: audio.noiseReduction,
-				}),
-				...(segments && { audioSegments: segments }),
-			};
+			return [
+				part.range,
+				{
+					trackId: part.trackId,
+					...(audioTrackId ? { audioTrackId } : {}),
+					// Saved even at 0 dB and off, so swapping back restores them
+					// rather than taking another clip's noise reduction and gain.
+					...(audio && {
+						...(audio.volume !== undefined && { volume: audio.volume }),
+						noiseReduction: audio.noiseReduction,
+					}),
+					...(segments && { audioSegments: segments }),
+				},
+			];
 		}),
+	);
+	// Saved even for one track, so swapping back can return to an overlay
+	// that would otherwise be pruned once it's empty. Placements follow the
+	// take's ranges, which is how restoring reads them.
+	return {
+		previousPlacements: best.map(
+			(range, index): TakePlacement =>
+				placed.get(range) ?? neighborPlacement({ take: best, index, placed }),
+		),
 		tracks: insertTakeClips({
 			tracks: clearBestTake({ tracks: shifted, markerId: marker.id }),
 			video,

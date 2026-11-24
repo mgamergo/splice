@@ -61,6 +61,11 @@ export class TabBridge {
 		return this.revision;
 	}
 
+	/** The attached tab, so a later call can check the same tab still answers. */
+	currentTab(): TabSocket | null {
+		return this.tab;
+	}
+
 	attach(socket: TabSocket): void {
 		if (this.tab && this.tab !== socket) {
 			const previous = this.tab;

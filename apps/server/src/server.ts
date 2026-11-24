@@ -12,7 +12,12 @@ import {
 	type RpcId,
 	type RpcResponse,
 	type ServerStatus,
+	type TabMethod,
 } from "@splice/bridge";
+import {
+	type RoughCutTightening,
+	roughCutSourcesSchema,
+} from "@splice/bridge/ops";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	FOOTAGE_FOLDER,
@@ -21,8 +26,16 @@ import {
 	resolveFootagePath,
 	serveFile,
 } from "./footage";
+import { createPauseDetector } from "./pauses";
+import { resolveRoughCutRequest } from "./rough-cut";
 import { createToken, tokensMatch } from "./session";
-import { BridgeError, TabBridge } from "./tab-bridge";
+import { isLongMethod, rpcDeadlineMs } from "./rpc-client";
+import {
+	BridgeError,
+	DEFAULT_CALL_TIMEOUT_MS,
+	TabBridge,
+	type TabSocket,
+} from "./tab-bridge";
 import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
@@ -52,6 +65,8 @@ export interface StartServerOptions {
 	upstream: string | null;
 	/** While false, editor pages answer 503 "starting". */
 	isUpstreamReady?: () => boolean;
+	/** Seconds a connection may sit idle. RPC requests are exempt. Tests shorten it. */
+	idleTimeoutSeconds?: number;
 }
 
 export interface RunningServer {
@@ -127,23 +142,44 @@ export function isAllowedOrigin({
 	);
 }
 
+/**
+ * How long the tab may take to answer a call relayed from `splice mcp`. A
+ * long method, such as an import probing every file, waits as long as
+ * `splice mcp` does, so the bridge never gives up on work its caller still
+ * waits for.
+ */
+export function tabCallTimeoutMs(method: TabMethod): number {
+	return isLongMethod(method) ? rpcDeadlineMs(method) : DEFAULT_CALL_TIMEOUT_MS;
+}
+
 export function startServer({
 	port,
 	token,
 	root,
 	upstream,
 	isUpstreamReady = () => true,
+	idleTimeoutSeconds = 120,
 }: StartServerOptions): RunningServer {
 	const bridge = new TabBridge();
 	const transcription = createTranscriptionJobs({ root });
+	const pauses = createPauseDetector({
+		root,
+		readTranscript: transcription.cached,
+	});
 	const noiseReduction = createNoiseReducer({ root });
 	const loudness = createLoudnessMeter({ root, noiseReduction });
-	const serverJobs = new Map<string, (params: unknown) => Promise<unknown>>([
-		["transcribe.start", (params) => transcription.start(params)],
-		["transcribe.status", (params) => transcription.status(params)],
-		["transcript.words", (params) => transcription.words(params)],
-		["loudness.measure", (params) => loudness.measure(params)],
-		["noiseReduction.render", (params) => noiseReduction.render(params)],
+	// `signal` aborts when the caller hangs up, so FFmpeg work nobody waits
+	// for stops.
+	const serverJobs = new Map<
+		string,
+		(request: { params: unknown; signal: AbortSignal }) => Promise<unknown>
+	>([
+		["transcribe.start", ({ params }) => transcription.start(params)],
+		["transcribe.status", ({ params }) => transcription.status(params)],
+		["transcript.words", ({ params }) => transcription.words(params)],
+		["loudness.measure", (request) => loudness.measure(request)],
+		["pauses.detect", (request) => pauses.detect(request)],
+		["noiseReduction.render", (request) => noiseReduction.render(request)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
@@ -203,7 +239,7 @@ export function startServer({
 		const job = serverJobs.get(method);
 		if (job) {
 			try {
-				const result = await job(params);
+				const result = await job({ params, signal: request.signal });
 				return Response.json(rpcResult({ id, result }));
 			} catch (error) {
 				return Response.json(
@@ -235,13 +271,61 @@ export function startServer({
 			);
 		}
 		try {
+			let forwarded = params;
+			let tightening: RoughCutTightening | undefined;
+			if (method === "editor.roughCut") {
+				let measuredTab: TabSocket | null | undefined;
+				const resolved = await resolveRoughCutRequest({
+					params,
+					listSources: async (sourceParams) => {
+						measuredTab = bridge.currentTab();
+						return roughCutSourcesSchema.parse(
+							await bridge.call({
+								method: "editor.roughCutSources",
+								params: sourceParams,
+							}),
+						);
+					},
+					pauseRanges: (scan) =>
+						pauses.pauseRanges({ ...scan, signal: request.signal }),
+					fillerCuts: (scan) =>
+						pauses.fillerCuts({ ...scan, signal: request.signal }),
+				}).catch((error: unknown) => {
+					throw error instanceof BridgeError
+						? error
+						: new BridgeError({
+								code: RPC_ERRORS.INTERNAL,
+								message: `Couldn't prepare the rough cut: ${error instanceof Error ? error.message : String(error)}`,
+							});
+				});
+				if ("result" in resolved)
+					return Response.json(rpcResult({ id, result: resolved.result }));
+				// A tab that connected during the scan can hold the same sequence
+				// and revision with different edits, so only the measured tab cuts.
+				if (measuredTab !== undefined && bridge.currentTab() !== measuredTab)
+					throw new BridgeError({
+						code: RPC_ERRORS.TAB_DISCONNECTED,
+						message:
+							"Another editor tab connected while Splice found the pauses, so nothing was cut. Run rough_cut again.",
+					});
+				forwarded = resolved.plan;
+				tightening = resolved.tightening;
+			}
 			const result = await bridge.call({
 				method,
-				params,
-				// Importing probes every file, which can take minutes for long recordings.
-				timeoutMs: method === "editor.importItems" ? 10 * 60_000 : undefined,
+				params: forwarded,
+				timeoutMs: tabCallTimeoutMs(method),
 			});
-			return Response.json(rpcResult({ id, result }));
+			return Response.json(
+				rpcResult({
+					id,
+					// The apply pass sends these back to cut what the plan measured.
+					result:
+						tightening && typeof result === "object" && result !== null
+							? { ...result, tightening }
+							: result,
+				}),
+			);
 		} catch (error) {
 			if (error instanceof BridgeError) {
 				return Response.json(
@@ -347,7 +431,10 @@ export function startServer({
 		if (!wantsDenoisedAudio(url))
 			return serveFile({ request, absolutePath, contentType });
 		try {
-			const { file } = await noiseReduction.ensure({ path });
+			const { file } = await noiseReduction.ensure({
+				path,
+				signal: request.signal,
+			});
 			return serveFile({
 				request,
 				absolutePath: file,
@@ -482,7 +569,7 @@ export function startServer({
 	const server = Bun.serve<SocketData>({
 		hostname: "127.0.0.1",
 		port,
-		idleTimeout: 120,
+		idleTimeout: idleTimeoutSeconds,
 		async fetch(request, srv) {
 			const url = new URL(request.url);
 			const actualPort = srv.port ?? port;
@@ -514,7 +601,10 @@ export function startServer({
 					: new Response("Upgrade failed", { status: 400 });
 			}
 			if (url.pathname === BRIDGE_PATHS.rpc) {
-				// Imports can outlast Bun's idle timeout; the bridge call has its own deadline.
+				// Imports and a rough cut's uncached pause scans send nothing until
+				// they finish, which can outlast Bun's idle timeout. Bridge calls have
+				// their own deadlines, `splice mcp` gives each call one, and an FFmpeg
+				// scan stops once no caller waits for it.
 				srv.timeout(request, 0);
 				return handleRpc(request);
 			}
@@ -601,6 +691,7 @@ export function startServer({
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
 			await Promise.all([
+				pauses.stop(),
 				transcription.stop(),
 				loudness.stop(),
 				noiseReduction.stop(),

@@ -1,7 +1,4 @@
-import {
-	type AudioSource,
-	type SourceGain,
-} from "@splice/bridge/ops";
+import { type AudioSource, type SourceGain } from "@splice/bridge/ops";
 import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
 import { getSourceSpanAtClipTime } from "@/retime";
@@ -32,6 +29,34 @@ export function formatGain(gainDb: number): string {
 
 export type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
 
+/**
+ * Clips whose audio reaches playback and export, in track order, including
+ * library audio, which has no project item.
+ */
+export function heardClips({
+	tracks,
+	projectItems,
+}: {
+	tracks: SequenceTracks;
+	projectItems: ProjectItem[];
+}): Array<{ trackId: string; clip: AudioClip | VideoClip }> {
+	const items = new Map(projectItems.map((item) => [item.id, item]));
+	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) => {
+		if (canTrackHaveAudio(track) && track.muted) return [];
+		return track.clips
+			.filter(
+				(clip: TimelineClip): clip is AudioClip | VideoClip =>
+					canClipHaveAudio(clip) &&
+					!isClipMuted({ clip }) &&
+					doesClipHaveEnabledAudio({
+						clip,
+						projectItem: hasMediaId(clip) ? items.get(clip.mediaId) : undefined,
+					}),
+			)
+			.map((clip) => ({ trackId: track.id, clip }));
+	});
+}
+
 /** Clips whose project item audio reaches playback and export, in track order. */
 export function audibleClips({
 	tracks,
@@ -40,22 +65,9 @@ export function audibleClips({
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 }): Array<{ trackId: string; clip: AudibleClip }> {
-	const items = new Map(projectItems.map((item) => [item.id, item]));
-	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) => {
-		if (canTrackHaveAudio(track) && track.muted) return [];
-		return track.clips
-			.filter(
-				(clip: TimelineClip): clip is AudibleClip =>
-					canClipHaveAudio(clip) &&
-					hasMediaId(clip) &&
-					!isClipMuted({ clip }) &&
-					doesClipHaveEnabledAudio({
-						clip,
-						projectItem: items.get(clip.mediaId),
-					}),
-			)
-			.map((clip) => ({ trackId: track.id, clip }));
-	});
+	return heardClips({ tracks, projectItems }).flatMap(({ trackId, clip }) =>
+		hasMediaId(clip) ? [{ trackId, clip }] : [],
+	);
 }
 
 function footagePath(item: ProjectItem | undefined): string | null {

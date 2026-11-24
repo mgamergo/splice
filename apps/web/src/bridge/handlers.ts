@@ -63,6 +63,7 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.roughCut(params);
 		},
+		"editor.roughCutSources": (params) => api.roughCutSources(params),
 		"editor.addCaptions": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.addCaptions(params);
