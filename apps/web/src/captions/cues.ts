@@ -31,7 +31,7 @@ const MIN_SPLIT_CHARS = 24;
 /** Cues starting this close together are shown as one (stacked word times). */
 const SAME_START_SECONDS = 0.05;
 
-const SENTENCE_END = /[.!?…]["'’”)\]]*$/u;
+export const SENTENCE_END = /[.!?…]["'’”)\]]*$/u;
 const CLAUSE_END = /[,;:—–]["'’”)\]]*$/u;
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu;
 /** Words a phrase can start with, so a long cue may break before them. */
@@ -297,7 +297,8 @@ function groupTokens(tokens: Token[]): Token[][] {
 	return merged;
 }
 
-function cueIds(cues: Array<{ words: CaptionWordRef[] }>): string[] {
+/** Ids from the words each range covers, numbering repeats of one source range. */
+export function cueIds(cues: Array<{ words: CaptionWordRef[] }>): string[] {
 	const seen = new Map<string, number>();
 	return cues.map(({ words: refs }) => {
 		const first = refs[0];
