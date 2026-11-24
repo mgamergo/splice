@@ -30,6 +30,17 @@ Stream mapping:
 [out#0/null @ 0x55d0c1f29e40] video:0KiB audio:4519KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
 size=N/A time=00:00:48.20 bitrate=N/A speed= 412x`;
 
+// Captured from FFmpeg 8.1, which logs events under the filter instance's name.
+const silencedetectOutput8 = `Input #0, wav, from 'gen.wav':
+  Duration: 00:00:04.50, bitrate: 705 kb/s
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 44100 Hz, mono, s16, 705 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_s16le (native))
+[Parsed_silencedetect_1 @ 0x7f6354012e80] silence_start: 1.999955
+[Parsed_silencedetect_1 @ 0x7f6354012e80] silence_end: 3.500068 | silence_duration: 1.500113
+[out#0/null @ 0x55d4a150b840] video:0KiB audio:388KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+size=N/A time=00:00:04.50 bitrate=N/A speed=2.2e+03x elapsed=0:00:00.00`;
+
 const word = ([text, start, end]: [string, number, number]) => ({
 	text,
 	start,
@@ -62,6 +73,16 @@ test("parses silencedetect output, clamping negative starts and closing a silenc
 			{ start: 46.6012, end: 48.2 },
 		],
 	});
+	expect(parseSilencedetect({ output: silencedetectOutput8 })).toEqual({
+		durationSeconds: 4.5,
+		silences: [{ start: 1.999955, end: 3.500068 }],
+	});
+	expect(
+		parseSilencedetect({
+			output:
+				"[Parsed_silenceremove_0 @ 0x1] silence_start: 1\n[Parsed_silenceremove_0 @ 0x1] silence_end: 2",
+		}).silences,
+	).toEqual([]);
 	expect(parseSilencedetect({ output: "garbage\nsilence_end: 3" })).toEqual({
 		durationSeconds: null,
 		silences: [],

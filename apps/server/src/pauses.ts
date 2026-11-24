@@ -24,7 +24,7 @@ const SCAN_MIN_SILENCE_SECONDS = 0.1;
 /** A sound between two silences that is shorter than this and holds no word is a click, not speech. */
 const BRIDGE_SECONDS = 0.12;
 /** Bump when cached pause semantics change. */
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 export const FILLER_WORDS: ReadonlySet<string> = new Set([
 	"um",
@@ -115,8 +115,12 @@ export function parseSilencedetect({
 				Number(duration[3]);
 			continue;
 		}
+		// FFmpeg 8 logs under the filter instance's name, such as
+		// `Parsed_silencedetect_1`; older versions log under the filter's.
 		const event =
-			/\[silencedetect @ [^\]]+\] silence_(start|end): (-?[\d.]+)/.exec(line);
+			/\[(?:Parsed_)?silencedetect(?:_\d+)? @ [^\]]+\] silence_(start|end): (-?[\d.]+)/.exec(
+				line,
+			);
 		if (!event) continue;
 		const time = Math.max(0, Number(event[2]));
 		if (!Number.isFinite(time)) continue;
