@@ -193,15 +193,22 @@ export class ProjectManager {
 	}
 
 	/**
-	 * Exports the active sequence. Starting an export cancels one still running;
-	 * the export superseded that way resolves as cancelled and leaves the
-	 * export state to the new one.
+	 * Exports the active sequence and hands a finished file to `onExported`.
+	 * Starting an export cancels one still running; the export replaced that
+	 * way, even one that already finished, resolves as cancelled and leaves the
+	 * export state and the download to the new one.
 	 */
-	async export({ options }: { options: ExportOptions }): Promise<ExportResult> {
+	async export({
+		options,
+		onExported,
+	}: {
+		options: ExportOptions;
+		onExported?: ({ buffer }: { buffer: ArrayBuffer }) => void;
+	}): Promise<ExportResult> {
 		this.exportState = { isExporting: true, progress: 0, result: null };
 		this.notify();
 
-		const { result, superseded } = await this.exportJobs.start({
+		const { result, isCurrent } = await this.exportJobs.start({
 			run: ({ signal, isCurrent }) =>
 				this.editor.renderer.exportProject({
 					options,
@@ -213,12 +220,15 @@ export class ProjectManager {
 					},
 				}),
 		});
-		if (superseded) return { success: false, cancelled: true };
+		if (!isCurrent()) return { success: false, cancelled: true };
 
 		this.exportState = result.cancelled
 			? IDLE_EXPORT_STATE
 			: { isExporting: false, progress: this.exportState.progress, result };
 		this.notify();
+		if (result.success && result.buffer) {
+			onExported?.({ buffer: result.buffer });
+		}
 		return result;
 	}
 

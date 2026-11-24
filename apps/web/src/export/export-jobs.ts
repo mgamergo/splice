@@ -2,7 +2,10 @@
 export interface ExportJob {
 	/** Aborts when the job is cancelled or another export supersedes it. */
 	signal: AbortSignal;
-	/** False once another export has started; a superseded job's progress is stale. */
+	/**
+	 * False once another export has started. It stays true after the job ends,
+	 * so its result is published only while no other export has replaced it.
+	 */
 	isCurrent: () => boolean;
 }
 
@@ -13,6 +16,8 @@ export interface ExportJob {
  */
 export class ExportJobs {
 	private current: AbortController | null = null;
+	/** Counts every start, so a job knows whether a later one replaced it. */
+	private startedJobs = 0;
 	private running = 0;
 	/** Settles once the most recently started job, and so every job, has finished. */
 	private settled: Promise<void> = Promise.resolve();
@@ -28,17 +33,19 @@ export class ExportJobs {
 
 	/**
 	 * Cancels the current export and runs `run` once every earlier one has
-	 * finished. `superseded` says another export started before this one ended.
+	 * finished. Check `isCurrent` before acting on the result: another export
+	 * can start between this one finishing and its caller resuming.
 	 */
 	async start<T>({
 		run,
 	}: {
 		run: (job: ExportJob) => Promise<T>;
-	}): Promise<{ result: T; superseded: boolean }> {
+	}): Promise<{ result: T; isCurrent: () => boolean }> {
 		this.current?.abort();
 		const controller = new AbortController();
 		this.current = controller;
-		const isCurrent = () => this.current === controller;
+		const jobId = ++this.startedJobs;
+		const isCurrent = () => this.startedJobs === jobId;
 
 		const previous = this.settled;
 		let release = () => {};
@@ -49,9 +56,9 @@ export class ExportJobs {
 		try {
 			await previous;
 			const result = await run({ signal: controller.signal, isCurrent });
-			return { result, superseded: !isCurrent() };
+			return { result, isCurrent };
 		} finally {
-			if (isCurrent()) this.current = null;
+			if (this.current === controller) this.current = null;
 			this.running--;
 			release();
 		}

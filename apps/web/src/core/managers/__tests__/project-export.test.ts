@@ -114,6 +114,43 @@ describe("ProjectManager export", () => {
 		});
 	});
 
+	test("a finished export replaced before it publishes leaves the state and download to the replacement", async () => {
+		const { project, exports } = setup();
+		const downloaded: ArrayBuffer[] = [];
+		const onExported = ({ buffer }: { buffer: ArrayBuffer }) => {
+			downloaded.push(buffer);
+		};
+
+		const first = project.export({ options: OPTIONS, onExported });
+		await flush();
+		exports[0].finish({ success: true, buffer: new ArrayBuffer(8) });
+		// The second export starts after the first one's renderer finished but
+		// before the first resumes to publish its result.
+		const replacements: Promise<ExportResult>[] = [];
+		queueMicrotask(() => {
+			replacements.push(project.export({ options: OPTIONS, onExported }));
+		});
+
+		expect(await first).toEqual({ success: false, cancelled: true });
+		expect(downloaded).toHaveLength(0);
+		expect(project.getExportState()).toEqual({
+			isExporting: true,
+			progress: 0,
+			result: null,
+		});
+
+		await flush();
+		expect(exports).toHaveLength(2);
+		const buffer = new ArrayBuffer(16);
+		exports[1].finish({ success: true, buffer });
+		expect(await replacements[0]).toEqual({ success: true, buffer });
+		expect(downloaded).toEqual([buffer]);
+		expect(project.getExportState()).toMatchObject({
+			isExporting: false,
+			result: { success: true },
+		});
+	});
+
 	test("cancelling one export leaves the next one's signal alone", async () => {
 		const { project, exports } = setup();
 
