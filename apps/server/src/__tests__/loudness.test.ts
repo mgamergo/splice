@@ -555,6 +555,44 @@ test.skipIf(!ffmpeg)(
 		}),
 );
 
+test.skipIf(!ffmpeg)(
+	"measures a tightened cut's thousands of ranges, more than the measure_loudness tool takes",
+	() =>
+		ffmpegMeter(async ({ root, generate }) => {
+			// Quiet for 3 s, then loud for 3 s.
+			await generate(
+				"steps.wav",
+				"if(lt(t\\,3)\\,0.05\\,0.5)*sin(2*PI*997*t)",
+				6,
+			);
+			// 5,001 kept ranges, as tightening leaves between pauses.
+			const ranges = Array.from({ length: 5_001 }, (_, index) => ({
+				start: (index * 6) / 5_001,
+				end: ((index + 0.5) * 6) / 5_001,
+			}));
+			const meter = createLoudnessMeter({ root, noiseReduction: noRenders });
+			try {
+				const forward = await meter.measure({
+					params: { path: "steps.wav", ranges },
+				});
+				// The loud half alone peaks 20 dB above the quiet half.
+				const loudHalf = await meter.measure({
+					params: { path: "steps.wav", ranges: ranges.slice(2_501) },
+				});
+				expect(forward).toMatchObject({ cached: false, ranges });
+				expect(forward.truePeakDbtp).toBe(loudHalf.truePeakDbtp);
+				// The quiet ranges count too.
+				expect(forward.integratedLufs ?? 0).toBeLessThan(
+					loudHalf.integratedLufs ?? 0,
+				);
+				expect(forward.lraLu).toBeGreaterThan(loudHalf.lraLu);
+			} finally {
+				await meter.stop();
+			}
+		}),
+	60_000,
+);
+
 test.skipIf(!ffmpeg)("counts audio once for every clip that plays it", () =>
 	ffmpegMeter(async ({ generate, measure, reference }) => {
 		const source = await generate(

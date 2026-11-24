@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { createLoudnessMeter } from "../loudness";
 import { createMcpServer } from "../mcp";
 import { createNoiseReducer, renderDenoised } from "../noise-reduction";
 import { RpcCallError, type RpcCall } from "../rpc-client";
@@ -580,6 +581,69 @@ describe("loudness tools", () => {
 			uncaptionedRecordings: ["loud.wav"],
 			loudness: { targetLufs: -14 },
 		});
+	});
+
+	test("rough_cut measures a recording whose cut keeps more ranges than measure_loudness takes", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-many-ranges-"));
+		await mkdir(join(root, "Footage"));
+		await writeFile(join(root, "Footage", "quiet.wav"), "audio");
+		const measured: unknown[] = [];
+		const meter = createLoudnessMeter({
+			root,
+			noiseReduction: {
+				ensure: () => Promise.reject(new Error("must not reduce noise")),
+			},
+			measure: async ({ ranges }) => {
+				measured.push(ranges);
+				return { integratedLufs: -28, truePeakDbtp: -20, lraLu: 4 };
+			},
+		});
+		// Tightening a long talk leaves one range between each two pauses.
+		const ranges = Array.from({ length: 5_001 }, (_, index) => ({
+			start: index,
+			end: index + 0.5,
+		}));
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
+			// As splice answers the RPC, schema and all.
+			if (method === "loudness.measure")
+				return meter.measure({ params }).catch((error: unknown) => {
+					if (!(error instanceof BridgeError)) throw error;
+					throw new RpcCallError({ code: error.code, message: error.message });
+				});
+			if (field({ params, key: "plan" }))
+				return {
+					ok: true,
+					revision: 3,
+					audioSources: [{ ...audioSources[0], ranges }],
+					tightening,
+				};
+			return { ok: true, revision: 4, sequenceId: "cut", sections: [] };
+		});
+		try {
+			const result = await client.callTool({
+				name: "rough_cut",
+				arguments: { expectedRevision: 3, sections },
+			});
+			expect(result.isError).toBeFalsy();
+			expect(measured).toEqual([ranges]);
+			expect(calls.at(-1)).toEqual([
+				"editor.roughCut",
+				{
+					expectedRevision: 3,
+					sections,
+					...applyDefaults,
+					sourceGains: [{ projectItemId: "rec-1", gainDb: 14 }],
+					tightening,
+				},
+			]);
+		} finally {
+			await meter.stop();
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	test("rough_cut with loudness false is one call, and a refused plan measures nothing", async () => {

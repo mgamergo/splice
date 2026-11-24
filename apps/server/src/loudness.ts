@@ -35,16 +35,14 @@ import {
 	sameFileIdentity,
 } from "./noise-reduction";
 
+const rangesSchema = z.array(sourceRangeSchema).min(1);
+const RANGES_DESCRIPTION =
+	"Source ranges in seconds to measure together, e.g. what a cut keeps, one per clip: a range listed twice counts twice. Defaults to the whole file.";
+
+/** What the `measure_loudness` tool takes from an agent. */
 export const measureLoudnessInput = {
 	path: footagePath,
-	ranges: z
-		.array(sourceRangeSchema)
-		.min(1)
-		.max(5000)
-		.optional()
-		.describe(
-			"Source ranges in seconds to measure together, e.g. what a cut keeps, one per clip: a range listed twice counts twice. Defaults to the whole file.",
-		),
+	ranges: rangesSchema.max(5000).optional().describe(RANGES_DESCRIPTION),
 	noiseReduction: z
 		.boolean()
 		.optional()
@@ -52,7 +50,15 @@ export const measureLoudnessInput = {
 			"Measure the audio after noise reduction, as clips with it on play and export.",
 		),
 };
-const measureSchema = z.object(measureLoudnessInput);
+/**
+ * The `loudness.measure` RPC also measures what rough_cut and
+ * normalize_loudness keep, which can be any number of ranges: a tightened
+ * cut keeps one per stretch between pauses. The RPC body limit bounds them.
+ */
+const measureSchema = z.object({
+	...measureLoudnessInput,
+	ranges: rangesSchema.optional(),
+});
 
 /** EBU R128 loudness of a recording, or of the ranges measured. */
 export const loudnessMeasurementSchema = z.object({
