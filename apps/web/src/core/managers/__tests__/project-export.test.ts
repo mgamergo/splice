@@ -187,6 +187,30 @@ describe("ProjectManager export", () => {
 		expect(downloaded).toEqual([buffer]);
 	});
 
+	test("a subscriber that cancels when an export starts cancels that export", async () => {
+		const { project, exports } = setup();
+		const downloaded: ArrayBuffer[] = [];
+		let cancelled = false;
+		project.subscribe(() => {
+			if (project.getExportState().isExporting && !cancelled) {
+				cancelled = true;
+				project.cancelExport();
+			}
+		});
+
+		const started = project.export({
+			options: OPTIONS,
+			onExported: ({ buffer }) => downloaded.push(buffer),
+		});
+		await flush();
+		expect(exports).toHaveLength(1);
+		expect(exports[0].signal.aborted).toBe(true);
+
+		exports[0].finish({ success: false, cancelled: true });
+		expect(await started).toEqual({ success: false, cancelled: true });
+		expect(downloaded).toHaveLength(0);
+	});
+
 	test("cancelling one export leaves the next one's signal alone", async () => {
 		const { project, exports } = setup();
 
