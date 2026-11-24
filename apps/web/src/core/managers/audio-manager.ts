@@ -625,7 +625,7 @@ export class AudioManager {
 
 		try {
 			const input = new Input({
-				source: createMediaSource(clip.file),
+				source: createMediaSource({ data: clip.file }),
 				formats: ALL_FORMATS,
 			});
 			const audioTrack = await input.getPrimaryAudioTrack();

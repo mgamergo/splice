@@ -264,7 +264,7 @@ export class VideoCache {
 		file: MediaData;
 	}): Promise<void> {
 		const input = new Input({
-			source: createMediaSource(file),
+			source: createMediaSource({ data: file }),
 			formats: ALL_FORMATS,
 		});
 

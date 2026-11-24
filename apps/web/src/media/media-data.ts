@@ -7,16 +7,36 @@ export function isDiskMedia(data: MediaData): data is DiskMedia {
 	return !(data instanceof Blob) && data.kind === "disk";
 }
 
-/** A mediabunny source that reads the bytes where they live. */
-export function createMediaSource(data: MediaData): Source {
-	return isDiskMedia(data)
-		? new UrlSource(data.url, {
-				requestInit: { credentials: "same-origin" },
-				// The default retries forever, which a missing file would hit.
-				getRetryDelay: (previousAttempts) =>
-					previousAttempts < 3 ? 0.5 : null,
-			})
-		: new BlobSource(data);
+/**
+ * A mediabunny source that reads the bytes where they live. `signal` stops its
+ * requests: disposing the Input alone leaves a request that is still waiting
+ * on its headers running.
+ */
+export function createMediaSource({
+	data,
+	signal,
+}: {
+	data: MediaData;
+	signal?: AbortSignal;
+}): Source {
+	if (!isDiskMedia(data)) return new BlobSource(data);
+	return new UrlSource(data.url, {
+		requestInit: { credentials: "same-origin" },
+		// The default retries forever, which a missing file would hit.
+		getRetryDelay: (previousAttempts) =>
+			!signal?.aborted && previousAttempts < 3 ? 0.5 : null,
+		...(signal && { fetchFn: createAbortableFetch({ signal }) }),
+	});
+}
+
+/** fetch, also stopped by `signal` on top of the signal each request brings. */
+function createAbortableFetch({ signal }: { signal: AbortSignal }): typeof fetch {
+	const abortableFetch = (...[input, init]: Parameters<typeof fetch>) =>
+		fetch(input, {
+			...init,
+			signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+		});
+	return Object.assign(abortableFetch, { preconnect: fetch.preconnect });
 }
 
 /**

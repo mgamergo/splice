@@ -326,7 +326,7 @@ export async function decodeAudioRange({
 }): Promise<AudioBuffer | null> {
 	if (range.end <= range.start) return null;
 	const input = new Input({
-		source: createMediaSource(file),
+		source: createMediaSource({ data: file, signal }),
 		formats: ALL_FORMATS,
 	});
 	// Disposing the input rejects a read that is still waiting on the file.

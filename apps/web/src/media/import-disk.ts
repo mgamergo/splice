@@ -30,7 +30,7 @@ async function readAudioDuration({
 	media: DiskMedia;
 }): Promise<number> {
 	const input = new Input({
-		source: createMediaSource(media),
+		source: createMediaSource({ data: media }),
 		formats: ALL_FORMATS,
 	});
 	try {

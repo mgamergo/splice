@@ -99,7 +99,7 @@ async function buildDiskWaveformSummary({
 	sourceKey: string;
 	source: MediaData;
 }): Promise<SourceWaveformSummary> {
-	const input = new Input({ source: createMediaSource(source), formats: ALL_FORMATS });
+	const input = new Input({ source: createMediaSource({ data: source }), formats: ALL_FORMATS });
 	try {
 		const track = await input.getPrimaryAudioTrack();
 		if (!track) {
