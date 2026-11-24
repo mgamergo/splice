@@ -329,6 +329,9 @@ export async function decodeAudioRange({
 		source: createMediaSource(file),
 		formats: ALL_FORMATS,
 	});
+	// Disposing the input rejects a read that is still waiting on the file.
+	const disposeInput = () => input.dispose();
+	signal?.addEventListener("abort", disposeInput, { once: true });
 
 	try {
 		const audioTrack = await input.getPrimaryAudioTrack();
@@ -369,7 +372,11 @@ export async function decodeAudioRange({
 		sourceNode.connect(offlineContext.destination);
 		sourceNode.start(0);
 		return await offlineContext.startRendering();
+	} catch (error) {
+		signal?.throwIfAborted();
+		throw error;
 	} finally {
+		signal?.removeEventListener("abort", disposeInput);
 		input.dispose();
 	}
 }
