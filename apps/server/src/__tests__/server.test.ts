@@ -20,6 +20,7 @@ import {
 	tabCallTimeoutMs,
 	type RunningServer,
 } from "../server";
+import * as sharedWork from "../shared-work";
 import { DEFAULT_CALL_TIMEOUT_MS } from "../tab-bridge";
 
 const TOKEN = "test-token";
@@ -577,8 +578,25 @@ describe("rpc endpoint", () => {
 
 	test(
 		"a render RPC and a media request share one render, stopped once both hang up",
-		() =>
-			withStallingFfmpeg(async ({ server, scanPid, isRunning }) => {
+		async () => {
+			// Counts requests that joined shared work, so the RPC leaves only
+			// once the media request waits on the render too.
+			let joined = 0;
+			const create = sharedWork.createSharedWork;
+			const spy = spyOn(sharedWork, "createSharedWork").mockImplementation(
+				(options) => {
+					const shared = create(options);
+					return {
+						...shared,
+						run: (request) => {
+							joined++;
+							return shared.run(request);
+						},
+					};
+				},
+			);
+			try {
+				await withStallingFfmpeg(async ({ server, scanPid, isRunning }) => {
 				const rpcHangUp = new AbortController();
 				const mediaHangUp = new AbortController();
 				const render = rpcCall({
@@ -596,8 +614,9 @@ describe("rpc endpoint", () => {
 					},
 				);
 				media.catch(() => {});
-				// Let the media request join the render before the RPC leaves it.
-				await Bun.sleep(500);
+				for (let tries = 0; joined < 2 && tries < 100; tries++)
+					await Bun.sleep(50);
+				expect(joined).toBe(2);
 
 				rpcHangUp.abort();
 				await expect(render).rejects.toThrow();
@@ -608,7 +627,11 @@ describe("rpc endpoint", () => {
 				mediaHangUp.abort();
 				await expect(media).rejects.toThrow();
 				expect(await stopped({ pid, isRunning })).toBe(true);
-			}),
+				});
+			} finally {
+				spy.mockRestore();
+			}
+		},
 		20_000,
 	);
 
