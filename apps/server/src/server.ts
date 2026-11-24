@@ -660,8 +660,8 @@ export function startServer({
 		async stop() {
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
-			await pauses.stop();
 			await Promise.all([
+				pauses.stop(),
 				transcription.stop(),
 				loudness.stop(),
 				noiseReduction.stop(),

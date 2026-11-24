@@ -11,7 +11,10 @@ type Running<T> = {
  * and the next request for the key starts it again.
  */
 export function createSharedWork<T>({ stop }: { stop: AbortSignal }) {
+	/** Work a new request for its key joins. */
 	const running = new Map<string, Running<T>>();
+	/** All work until it settles, including aborted work still cleaning up. */
+	const unsettled = new Set<Promise<unknown>>();
 	return {
 		run({
 			key,
@@ -31,11 +34,13 @@ export function createSharedWork<T>({ stop }: { stop: AbortSignal }) {
 					waiting: 0,
 					result: work(AbortSignal.any([stop, abort.signal])),
 				};
-				void created.result
+				const settled = created.result
 					.catch(() => undefined)
 					.finally(() => {
 						if (running.get(key) === created) running.delete(key);
+						unsettled.delete(settled);
 					});
+				unsettled.add(settled);
 				running.set(key, created);
 				job = created;
 			}
@@ -70,11 +75,12 @@ export function createSharedWork<T>({ stop }: { stop: AbortSignal }) {
 			});
 		},
 
-		/** Settles once all the work running now has. */
+		/**
+		 * Settles once all the work running now has, including aborted work
+		 * no request waits for any more, so its cleanup has finished.
+		 */
 		async settled(): Promise<void> {
-			await Promise.allSettled(
-				Array.from(running.values(), ({ result }) => result),
-			);
+			await Promise.all(unsettled);
 		},
 	};
 }

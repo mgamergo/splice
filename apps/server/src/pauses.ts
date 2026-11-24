@@ -572,8 +572,10 @@ export function createPauseDetector({
 			});
 		},
 
-		stop() {
+		/** Stops every scan and waits for them to clean up. */
+		async stop() {
 			stop.abort();
+			await scans.settled();
 		},
 	};
 }

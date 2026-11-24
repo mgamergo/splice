@@ -606,7 +606,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				}),
 			).rejects.toThrow("screen.mp4 has no audio track");
 		} finally {
-			detector.stop();
+			await detector.stop();
 			await rm(root, { recursive: true, force: true });
 		}
 	},
@@ -881,7 +881,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				detector.fillerCuts({ path: "click.wav", paddingSeconds: 0.2 }),
 			).rejects.toThrow("SPLICE_WHISPER_MODEL is not a file");
 		} finally {
-			detector.stop();
+			await detector.stop();
 			await rm(root, { recursive: true, force: true });
 		}
 	},

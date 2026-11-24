@@ -71,3 +71,39 @@ test("a finished run answers every waiter, and stop aborts what runs", async () 
 		"already gone",
 	);
 });
+
+test("settled waits for work every waiter left until it has cleaned up", async () => {
+	const shared = createSharedWork<string>({
+		stop: new AbortController().signal,
+	});
+	let cleanUp = () => {};
+	let cleanedUp = false;
+	const work = (signal: AbortSignal) =>
+		new Promise<string>((_, reject) =>
+			signal.addEventListener(
+				"abort",
+				() => {
+					// Cleanup that outlasts the abort, like removing a temporary folder.
+					cleanUp = () => {
+						cleanedUp = true;
+						reject(signal.reason);
+					};
+				},
+				{ once: true },
+			),
+		);
+	const hangUp = new AbortController();
+	const waiter = shared.run({ key: "take.wav", signal: hangUp.signal, work });
+	hangUp.abort(new Error("hung up"));
+	await expect(waiter).rejects.toThrow("hung up");
+
+	let settled = false;
+	const done = shared.settled().then(() => {
+		settled = true;
+	});
+	await Bun.sleep(10);
+	expect(settled).toBe(false);
+	cleanUp();
+	await done;
+	expect(cleanedUp).toBe(true);
+});
