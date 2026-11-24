@@ -51,7 +51,8 @@ test("a cancelled export stops mixing audio instead of decoding the clips left",
 	const started = new Promise<void>((resolve) => {
 		fetchStarted = resolve;
 	});
-	const pendingFetch = (_input: RequestInfo | URL, init?: RequestInit) => {
+	// fetch's own signature, so positional.
+	const pendingFetch = (...[, init]: Parameters<typeof fetch>) => {
 		fetchStarted();
 		const signal = init?.signal;
 		return new Promise<Response>((_resolve, reject) => {
