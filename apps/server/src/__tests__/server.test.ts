@@ -581,16 +581,16 @@ describe("rpc endpoint", () => {
 		// once the media request waits on the render too.
 		let joined = 0;
 		const create = sharedWork.createSharedWork;
-		const counting: typeof create = <T,>(options: { stop: AbortSignal }) => {
+		function counting<T>(options: { stop: AbortSignal }) {
 			const shared = create<T>(options);
 			return {
 				...shared,
-				run: (request) => {
+				run(request: Parameters<typeof shared.run>[0]) {
 					joined++;
 					return shared.run(request);
 				},
 			};
-		};
+		}
 		const spy = spyOn(sharedWork, "createSharedWork").mockImplementation(
 			counting,
 		);
