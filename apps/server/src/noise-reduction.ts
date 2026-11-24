@@ -1,5 +1,6 @@
 import { DENOISED_AUDIO } from "@splice/bridge";
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -8,7 +9,6 @@ import {
 	ffmpegInputArgs,
 	findFfmpeg,
 	run,
-	SOURCE_TIMELINE_FILTER,
 } from "./transcription-tools";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
 
@@ -16,14 +16,24 @@ export const renderNoiseReductionInput = { path: footagePath };
 const renderSchema = z.object(renderNoiseReductionInput);
 
 /** Bump when the filters change, so earlier renders aren't reused. */
-export const NOISE_REDUCTION_VERSION = 2;
+export const NOISE_REDUCTION_VERSION = 3;
 /** Length of the quiet stretch the noise profile is learned from. */
 export const NOISE_WINDOW_SECONDS = 1;
 /** The quietest window counts as noise only this far below the loud windows. */
 const MIN_NOISE_CONTRAST_DB = 15;
 /** Quieter windows are digital silence (a muted mic), with no noise to learn. */
 const DIGITAL_SILENCE_DB = -90;
-const SCAN_SAMPLE_RATE = 48_000;
+/** Recordings are scanned and rendered at this rate, so sample counts are fixed. */
+const SAMPLE_RATE = 48_000;
+const WINDOW_SAMPLES = SAMPLE_RATE * NOISE_WINDOW_SECONDS;
+/**
+ * afftdn's output lags its input by this many samples at 48 kHz, and it drops
+ * the input's last ones. Renders pad the end and trim the start by this much,
+ * so the audio stays on the source timeline.
+ */
+export const AFFTDN_LATENCY_SAMPLES = 1_200;
+/** Starts the first audio stream at 0, fills gaps, and resamples to 48 kHz. */
+const TIMELINE_FILTER = `aresample=${SAMPLE_RATE}:async=1:first_pts=0`;
 
 /**
  * A 4-pole high-pass at 80 Hz, below the voice: removes mains hum
@@ -49,17 +59,30 @@ export interface NoiseWindow {
 	rmsDb: number;
 }
 
+/**
+ * Identifies a render by the file's size and times. The inode and change time
+ * also catch rewrites that keep the size and restore the modified time, since
+ * nothing can set the change time back.
+ */
 export function denoiseCacheKey({
 	path,
-	size,
-	mtimeMs,
+	info,
 }: {
 	path: string;
-	size: number;
-	mtimeMs: number;
+	info: Pick<Stats, "size" | "mtimeMs" | "ctimeMs" | "ino">;
 }): string {
+	const { size, mtimeMs, ctimeMs, ino } = info;
 	return createHash("sha256")
-		.update(JSON.stringify([NOISE_REDUCTION_VERSION, path, size, mtimeMs]))
+		.update(
+			JSON.stringify([
+				NOISE_REDUCTION_VERSION,
+				path,
+				size,
+				mtimeMs,
+				ctimeMs,
+				ino,
+			]),
+		)
 		.digest("hex");
 }
 
@@ -67,7 +90,7 @@ function seconds(value: number): string {
 	return value.toFixed(6);
 }
 
-/** Logs the RMS level of each window of the recording, in order. */
+/** Logs the RMS level and sample count of each window of the recording, in order. */
 export function noiseScanArgs({ source }: { source: string }): string[] {
 	return [
 		"-nostdin",
@@ -79,10 +102,10 @@ export function noiseScanArgs({ source }: { source: string }): string[] {
 		"0:a:0",
 		"-af",
 		[
-			`aresample=${SCAN_SAMPLE_RATE}:async=1:first_pts=0`,
-			`asetnsamples=n=${SCAN_SAMPLE_RATE * NOISE_WINDOW_SECONDS}:p=0`,
-			"astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level",
-			"ametadata=mode=print:key=lavfi.astats.Overall.RMS_level",
+			TIMELINE_FILTER,
+			`asetnsamples=n=${WINDOW_SAMPLES}:p=0`,
+			"astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level+Number_of_samples",
+			"ametadata=mode=print",
 		].join(","),
 		"-f",
 		"null",
@@ -90,28 +113,46 @@ export function noiseScanArgs({ source }: { source: string }): string[] {
 	];
 }
 
-const RMS_LINE = /lavfi\.astats\.Overall\.RMS_level=(-inf|-?\d+(?:\.\d+)?)/;
+const SCAN_LINE =
+	/lavfi\.astats\.Overall\.(RMS_level|Number_of_samples)=(-inf|-?\d+(?:\.\d+)?)/;
 
-/** The window level in a line of `noiseScanArgs` output, if it holds one. */
-export function parseNoiseScanLine(line: string): number | null {
-	const match = RMS_LINE.exec(line)?.[1];
-	if (match === undefined) return null;
-	return match === "-inf" ? -Infinity : Number(match);
+/** One window's measurements in a line of `noiseScanArgs` output, if any. */
+export function parseNoiseScanLine(
+	line: string,
+): { rmsDb: number } | { samples: number } | null {
+	const match = SCAN_LINE.exec(line);
+	if (!match) return null;
+	const value = match[2] === "-inf" ? -Infinity : Number(match[2]);
+	return match[1] === "RMS_level" ? { rmsDb: value } : { samples: value };
+}
+
+/** A scanned window: its RMS level and how many samples it holds. */
+export interface ScannedWindow {
+	rmsDb: number;
+	samples: number;
 }
 
 /**
  * The quietest window that still holds noise, or null when no window is
  * clearly quieter than the speech (nothing but talking, or too short).
  */
-export function pickNoiseWindow(levels: number[]): NoiseWindow | null {
-	// The last window can be partial.
-	const windows = levels
-		.slice(0, -1)
-		.map((rmsDb, index) => ({ start: index * NOISE_WINDOW_SECONDS, rmsDb }))
-		.filter(({ rmsDb }) => rmsDb > DIGITAL_SILENCE_DB);
+export function pickNoiseWindow(scanned: ScannedWindow[]): NoiseWindow | null {
+	const windows = scanned
+		.map(({ rmsDb, samples }, index) => ({
+			start: index * NOISE_WINDOW_SECONDS,
+			rmsDb,
+			samples,
+		}))
+		// The last window can be partial, too short to learn a profile from.
+		.filter(
+			({ rmsDb, samples }) =>
+				samples >= WINDOW_SAMPLES && rmsDb > DIGITAL_SILENCE_DB,
+		)
+		.map(({ start, rmsDb }) => ({ start, rmsDb }));
 	if (windows.length < 2) return null;
 	const sorted = windows.map(({ rmsDb }) => rmsDb).sort((a, b) => a - b);
-	const loud = sorted[Math.floor((sorted.length - 1) * 0.9)];
+	// The 90th percentile by nearest rank, so of two windows it's the louder.
+	const loud = sorted[Math.round((sorted.length - 1) * 0.9)];
 	const quietest = windows.reduce((best, window) =>
 		window.rmsDb < best.rmsDb ? window : best,
 	);
@@ -133,7 +174,9 @@ export function denoiseArgs({
 	window: NoiseWindow | null;
 }): string[] {
 	const head = ["-nostdin", "-hide_banner", "-loglevel", "error", "-nostats"];
-	const tail = ["-c:a", "pcm_s16le", "-f", "wav", "-y", output];
+	// RF64 once the render passes WAV's 4 GiB limit.
+	const tail = ["-c:a", "pcm_s16le", "-f", "wav", "-rf64", "auto", "-y", output];
+	const padEnd = `apad=pad_len=${AFFTDN_LATENCY_SAMPLES}`;
 	if (!window)
 		return [
 			...head,
@@ -141,7 +184,14 @@ export function denoiseArgs({
 			"-map",
 			"0:a:0",
 			"-af",
-			[SOURCE_TIMELINE_FILTER, RUMBLE_FILTER, TRACKED_DENOISE_FILTER].join(","),
+			[
+				TIMELINE_FILTER,
+				RUMBLE_FILTER,
+				padEnd,
+				TRACKED_DENOISE_FILTER,
+				`atrim=start_sample=${AFFTDN_LATENCY_SAMPLES}`,
+				"asetpts=PTS-STARTPTS",
+			].join(","),
 			...tail,
 		];
 	const length = seconds(NOISE_WINDOW_SECONDS);
@@ -154,14 +204,15 @@ export function denoiseArgs({
 		...ffmpegInput({ source }),
 		"-filter_complex",
 		[
-			`[0:a:0]atrim=duration=${length},asetpts=PTS-STARTPTS[noise]`,
-			`[1:a:0]${SOURCE_TIMELINE_FILTER}[recording]`,
+			`[0:a:0]aresample=${SAMPLE_RATE},atrim=end_sample=${WINDOW_SAMPLES},asetpts=PTS-STARTPTS[noise]`,
+			`[1:a:0]${TIMELINE_FILTER}[recording]`,
 			[
 				"[noise][recording]concat=n=2:v=0:a=1",
 				RUMBLE_FILTER,
+				padEnd,
 				`asendcmd=c='0 afftdn sn start;${length} afftdn sn stop'`,
 				sampledDenoiseFilter(window),
-				`atrim=start=${length}`,
+				`atrim=start_sample=${WINDOW_SAMPLES + AFFTDN_LATENCY_SAMPLES}`,
 				"asetpts=PTS-STARTPTS[out]",
 			].join(","),
 		].join(";"),
@@ -186,16 +237,24 @@ export const renderDenoised: RenderDenoised = async ({
 }) => {
 	const command = await findFfmpeg({ root });
 	const levels: number[] = [];
+	const sampleCounts: number[] = [];
 	await run({
 		command,
 		args: noiseScanArgs({ source }),
 		signal,
 		onLine(line) {
-			const level = parseNoiseScanLine(line);
-			if (level !== null) levels.push(level);
+			const parsed = parseNoiseScanLine(line);
+			if (parsed && "rmsDb" in parsed) levels.push(parsed.rmsDb);
+			if (parsed && "samples" in parsed) sampleCounts.push(parsed.samples);
 		},
 	});
-	const noiseWindow = pickNoiseWindow(levels);
+	// Each window logs both, in order.
+	const noiseWindow = pickNoiseWindow(
+		levels.map((rmsDb, index) => ({
+			rmsDb,
+			samples: sampleCounts[index] ?? 0,
+		})),
+	);
 	await run({
 		command,
 		args: denoiseArgs({ source, output, window: noiseWindow }),
@@ -232,11 +291,7 @@ export function createNoiseReducer({
 
 	async function identify(path: string) {
 		const { source, info } = await resolveRecording({ root, path });
-		const key = denoiseCacheKey({
-			path,
-			size: info.size,
-			mtimeMs: info.mtimeMs,
-		});
+		const key = denoiseCacheKey({ path, info });
 		return { source, key, file: join(cacheDir, `${key}.wav`) };
 	}
 

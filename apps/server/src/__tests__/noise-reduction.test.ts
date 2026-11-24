@@ -10,6 +10,7 @@ import {
 	mkdtemp,
 	readdir,
 	rm,
+	stat,
 	utimes,
 	writeFile,
 } from "node:fs/promises";
@@ -17,8 +18,10 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createLoudnessMeter, loudnessCacheKey, runEbur128 } from "../loudness";
 import {
+	AFFTDN_LATENCY_SAMPLES,
 	createNoiseReducer,
 	denoiseArgs,
+	denoiseCacheKey,
 	NOISE_WINDOW_SECONDS,
 	noiseScanArgs,
 	parseNoiseScanLine,
@@ -38,27 +41,62 @@ async function withRoot(run: (root: string) => Promise<void>) {
 	}
 }
 
-test("reads each window's RMS level from FFmpeg's metadata log", () => {
+test("reads each window's RMS level and sample count from FFmpeg's metadata log", () => {
 	expect(
 		parseNoiseScanLine(
 			"[Parsed_ametadata_3 @ 0x5581] lavfi.astats.Overall.RMS_level=-48.815289",
 		),
-	).toBe(-48.815289);
-	expect(parseNoiseScanLine("lavfi.astats.Overall.RMS_level=-inf")).toBe(
-		-Infinity,
-	);
+	).toEqual({ rmsDb: -48.815289 });
+	expect(parseNoiseScanLine("lavfi.astats.Overall.RMS_level=-inf")).toEqual({
+		rmsDb: -Infinity,
+	});
+	expect(
+		parseNoiseScanLine(
+			"[Parsed_ametadata_3 @ 0x5581] lavfi.astats.Overall.Number_of_samples=24000.000000",
+		),
+	).toEqual({ samples: 24000 });
 	expect(parseNoiseScanLine("frame:3    pts:144000  pts_time:3")).toBeNull();
 });
 
-test("learns noise from the quietest window, skipping digital silence and the partial last window", () => {
+const full = (rmsDb: number) => ({ rmsDb, samples: 48_000 });
+
+test("learns noise from the quietest window, skipping digital silence and a partial last window", () => {
 	const speech = -22;
 	expect(
-		pickNoiseWindow([speech, speech, -51, -55, -Infinity, -95, speech, -70]),
+		pickNoiseWindow([
+			...[speech, speech, -51, -55, -Infinity, -95, speech].map(full),
+			{ rmsDb: -70, samples: 12_000 },
+		]),
 	).toEqual({ start: 3 * NOISE_WINDOW_SECONDS, rmsDb: -55 });
+	// A last window that is whole counts: an exact 4 s recording.
+	expect(pickNoiseWindow([-20, -18, -19, -55].map(full))).toEqual({
+		start: 3,
+		rmsDb: -55,
+	});
+	// Of two windows, the louder is the reference.
+	expect(pickNoiseWindow([-55, -20].map(full))).toEqual({
+		start: 0,
+		rmsDb: -55,
+	});
 	// No window is clearly quieter than the rest: all talking, or all noise.
-	expect(pickNoiseWindow([speech, -25, -24, speech, -30])).toBeNull();
-	expect(pickNoiseWindow([-50, -51, -50, -52])).toBeNull();
-	expect(pickNoiseWindow([-50])).toBeNull();
+	expect(pickNoiseWindow([speech, -25, -24, speech, -30].map(full))).toBeNull();
+	expect(pickNoiseWindow([-50, -51, -50, -52].map(full))).toBeNull();
+	expect(pickNoiseWindow([-50, -52].map(full))).toBeNull();
+	expect(pickNoiseWindow([-50].map(full))).toBeNull();
+});
+
+test("a render is keyed by the file's size, times and inode", () => {
+	const info = { size: 10, mtimeMs: 1000, ctimeMs: 1000, ino: 7 };
+	const key = denoiseCacheKey({ path: "take.wav", info });
+	expect(denoiseCacheKey({ path: "take.wav", info: { ...info } })).toBe(key);
+	// Rewritten in place with the size and modified time put back.
+	expect(
+		denoiseCacheKey({ path: "take.wav", info: { ...info, ctimeMs: 2000 } }),
+	).not.toBe(key);
+	// Replaced by another file of the same size and times.
+	expect(
+		denoiseCacheKey({ path: "take.wav", info: { ...info, ino: 8 } }),
+	).not.toBe(key);
 });
 
 test("the scan logs one RMS level per window on the source timeline", () => {
@@ -70,7 +108,7 @@ test("the scan logs one RMS level per window on the source timeline", () => {
 		"0:a:0",
 	]);
 	expect(args[args.indexOf("-af") + 1]).toBe(
-		"aresample=48000:async=1:first_pts=0,asetnsamples=n=48000:p=0,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level",
+		"aresample=48000:async=1:first_pts=0,asetnsamples=n=48000:p=0,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level+Number_of_samples,ametadata=mode=print",
 	);
 });
 
@@ -88,17 +126,20 @@ test("samples the noise profile from the window, then renders the whole recordin
 	expect(args.filter((arg) => arg === "-i")).toHaveLength(2);
 	expect(args.filter((arg) => arg === "-protocol_whitelist")).toHaveLength(2);
 	expect(args[args.indexOf("-filter_complex") + 1]).toBe(
-		"[0:a:0]atrim=duration=1.000000,asetpts=PTS-STARTPTS[noise];" +
-			"[1:a:0]aresample=async=1:first_pts=0[recording];" +
+		"[0:a:0]aresample=48000,atrim=end_sample=48000,asetpts=PTS-STARTPTS[noise];" +
+			"[1:a:0]aresample=48000:async=1:first_pts=0[recording];" +
 			"[noise][recording]concat=n=2:v=0:a=1,highpass=f=80:poles=2,highpass=f=80:poles=2," +
-			"asendcmd=c='0 afftdn sn start;1.000000 afftdn sn stop',afftdn=nr=20:nf=-55," +
-			"atrim=start=1.000000,asetpts=PTS-STARTPTS[out]",
+			"apad=pad_len=1200,asendcmd=c='0 afftdn sn start;1.000000 afftdn sn stop',afftdn=nr=20:nf=-55," +
+			"atrim=start_sample=49200,asetpts=PTS-STARTPTS[out]",
 	);
-	expect(args.slice(-6)).toEqual([
+	// RF64 past 4 GiB, so long recordings still render.
+	expect(args.slice(-8)).toEqual([
 		"-c:a",
 		"pcm_s16le",
 		"-f",
 		"wav",
+		"-rf64",
+		"auto",
 		"-y",
 		"out.wav",
 	]);
@@ -110,7 +151,7 @@ test("samples the noise profile from the window, then renders the whole recordin
 	});
 	expect(tracked).not.toContain("-ss");
 	expect(tracked[tracked.indexOf("-af") + 1]).toBe(
-		"aresample=async=1:first_pts=0,highpass=f=80:poles=2,highpass=f=80:poles=2,afftdn=nr=12:nf=-50:tn=1",
+		"aresample=48000:async=1:first_pts=0,highpass=f=80:poles=2,highpass=f=80:poles=2,apad=pad_len=1200,afftdn=nr=12:nf=-50:tn=1,atrim=start_sample=1200,asetpts=PTS-STARTPTS",
 	);
 });
 
@@ -158,6 +199,16 @@ describe("noise reducer", () => {
 				noiseProfile: { sampledAt: 3, rmsDb: -52 },
 			});
 			expect(renders).toHaveLength(2);
+
+			// Rewritten with the same size, its modified time put back.
+			const { atime, mtime } = await stat(footage);
+			await Bun.sleep(10);
+			await writeFile(footage, "other audio!");
+			await utimes(footage, atime, mtime);
+			expect(await reducer.render({ path: "Day 1/take.wav" })).toMatchObject({
+				cached: false,
+			});
+			expect(renders).toHaveLength(3);
 			await reducer.stop();
 		}));
 
@@ -320,13 +371,57 @@ async function integratedLufs(file: string): Promise<number> {
 	);
 }
 
+/** The file's first channel as 48 kHz samples. */
+async function decodeSamples(file: string): Promise<Float32Array> {
+	const child = Bun.spawn(
+		[
+			ffmpeg ?? "ffmpeg",
+			"-nostdin",
+			"-loglevel",
+			"error",
+			"-i",
+			file,
+			"-ac",
+			"1",
+			"-ar",
+			"48000",
+			"-f",
+			"f32le",
+			"-",
+		],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	const bytes = await new Response(child.stdout).arrayBuffer();
+	if ((await child.exited) !== 0)
+		throw new Error(await new Response(child.stderr).text());
+	return new Float32Array(bytes);
+}
+
+/** The loudest sample's index within `around` ± 0.1 s. */
+function peakNear({
+	samples,
+	around,
+}: {
+	samples: Float32Array;
+	around: number;
+}): number {
+	let peak = around - 4_800;
+	const end = Math.min(samples.length, around + 4_800);
+	for (let index = peak; index < end; index++)
+		if (Math.abs(samples[index]) > Math.abs(samples[peak])) peak = index;
+	return peak;
+}
+
 /**
  * 12 s of speech-like tones with a gap at 4–8 s, over pink hiss and 60 Hz
- * hum at a home mic's level: a noise floor near -46 dBFS.
+ * hum at a home mic's level: a noise floor near -46 dBFS. Clicks, if given,
+ * are at those sample indexes.
  */
-async function writeNoisyRecording(file: string) {
-	const voice =
-		"0.25*sin(2*PI*180*t)*(0.6+0.4*sin(2*PI*4*t))*(lt(t,4)+gte(t,8))+0.12*sin(2*PI*540*t)*(lt(t,4)+gte(t,8))";
+async function writeNoisyRecording(file: string, clicks: number[] = []) {
+	const voice = [
+		"0.25*sin(2*PI*180*t)*(0.6+0.4*sin(2*PI*4*t))*(lt(t,4)+gte(t,8))+0.12*sin(2*PI*540*t)*(lt(t,4)+gte(t,8))",
+		...clicks.map((index) => `0.6*eq(n,${index})`),
+	].join("+");
 	await ffmpegLog([
 		"-loglevel",
 		"error",
@@ -352,6 +447,30 @@ async function writeNoisyRecording(file: string) {
 }
 
 describe.skipIf(!ffmpeg)("with FFmpeg", () => {
+	test(
+		"both renders keep the source's timing and length, compensating afftdn's latency",
+		() =>
+			withRoot(async (root) => {
+				const footage = join(root, "Footage", "take.wav");
+				// Near the start and in the last 25 ms, which afftdn would drop.
+				const clicks = [6_000, 575_500];
+				await writeNoisyRecording(footage, clicks);
+				const source = await decodeSamples(footage);
+				expect(AFFTDN_LATENCY_SAMPLES).toBe(1_200);
+				for (const window of [null, { start: 5, rmsDb: -46 }]) {
+					const output = join(root, `denoised-${window ? "sampled" : "tracked"}.wav`);
+					await ffmpegLog(denoiseArgs({ source: footage, output, window }));
+					const denoised = await decodeSamples(output);
+					expect(denoised.length).toBe(source.length);
+					for (const click of clicks)
+						expect(peakNear({ samples: denoised, around: click })).toBe(
+							peakNear({ samples: source, around: click }),
+						);
+				}
+			}),
+		60_000,
+	);
+
 	test(
 		"lowers the noise floor in a pause by over 10 dB and keeps the speech and timeline",
 		() =>
