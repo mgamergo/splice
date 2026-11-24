@@ -501,6 +501,26 @@ test("keeps separated audio linked to the video when tightening across two files
 	);
 });
 
+test("counts a pause only when it is credited with removed seconds", () => {
+	// The 50 ms pause is shorter than its padding, so it plans no cut; closing
+	// the sliver before the false start removes it, and that time is a sliver.
+	const result = api.roughCut({
+		expectedRevision: api.getRevision(),
+		pauses: [at([first, 0, 0.05])],
+		falseStarts: [at([first, 0.05, 1])],
+	});
+	expect(result).toMatchObject({
+		ok: true,
+		tightening: {
+			pauses: { count: 0, removedSeconds: 0 },
+			falseStarts: { count: 1 },
+		},
+	});
+	if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+	expect(result.tightening.sliverSeconds).toBeCloseTo(0.05, 3);
+	expect(result.durationSeconds).toBeCloseTo(23, 3);
+});
+
 test("keeps a sound shorter than a sliver between two pauses", () => {
 	// 40 ms of sound between the pauses is under two frames at 30 fps.
 	const result = api.roughCut({

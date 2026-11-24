@@ -636,12 +636,14 @@ export function buildRoughCut({
 		found: fillerWords,
 		without: [...takeCuts, ...falseStarts.flat()],
 	});
-	const removedPauses = {
-		...summarize({ found: pauses, without: spoken, within: cuts }),
-		removedSeconds: seconds(
-			measureSpans({ spans: tightening, within: cuts, without: spoken }),
-		),
-	};
+	// Pauses are credited only with the tightening they planned, so a pause
+	// counts when some of it is credited; the time slivers add, even of a
+	// pause, is reported as sliverSeconds.
+	const removedPauses = summarize({
+		found: pauses,
+		without: spoken,
+		within: intersectSpans({ spans: tightening, within: cuts }),
+	});
 	const total = measureSpans({ spans: cuts, within: cuts });
 	const slivers =
 		total - measureSpans({ spans: [...takeCuts, ...tightening], within: cuts });
