@@ -193,6 +193,11 @@ export function normalizeWord(text: string): string {
 const FILLER_MAX_SECONDS = 1;
 /** How far Whisper's time for a word may be from its sound. */
 const FILLER_REACH_SECONDS = 0.8;
+/**
+ * How much closer to a sound a filler's times must be than a real word's for
+ * the filler to keep it. Whisper's word edges drift by tens of milliseconds.
+ */
+const FILLER_MARGIN_SECONDS = 0.05;
 
 export type FillerWord = TimeRange & {
 	text: string;
@@ -211,6 +216,10 @@ const overlap = ({ a, b }: { a: TimeRange; b: TimeRange }) =>
 const gap = ({ a, b }: { a: TimeRange; b: TimeRange }) =>
 	Math.max(0, b.start - a.end, a.start - b.end);
 
+/** Seconds `range` shares with `sound`, less the seconds between them. */
+const closeness = ({ range, sound }: { range: TimeRange; sound: TimeRange }) =>
+	overlap({ a: range, b: sound }) - gap({ a: range, b: sound });
+
 /**
  * English filler words, moved from Whisper's drifting times to their sound:
  * the nearest short sound between two silences. Alignment is conservative,
@@ -219,11 +228,11 @@ const gap = ({ a, b }: { a: TimeRange; b: TimeRange }) =>
  * or when the filler's own times lie more in another sound than in that one,
  * which means Whisper heard it inside continuous speech. A real word claims a
  * sound that holds its middle. Unless it overlaps another sound more, it also
- * claims a sound it overlaps more than the filler does, or one its times are
- * at least as close to as the filler's: Whisper can miss a word's sound by a
- * few milliseconds and leave the word in silence. A filler whose
- * times overlap the sound more keeps it, so a few milliseconds of drift from a
- * neighbor don't claim it.
+ * claims a sound its times are about as close to as the filler's, counting
+ * overlap as closeness and a gap as distance: Whisper can miss a word's sound
+ * by a few milliseconds and leave the word in silence. A filler keeps the
+ * sound only when its times are clearly closer, so a few milliseconds of
+ * drift on either side don't decide which word the sound is.
  */
 export function findFillerWords({
 	transcript,
@@ -260,15 +269,13 @@ export function findFillerWords({
 		const middle = (word.start + word.end) / 2;
 		if (sound.start <= middle && middle <= sound.end) return true;
 		const shared = overlap({ a: word, b: sound });
-		const fillerShared = overlap({ a: filler, b: sound });
-		if (
-			fillerShared > shared ||
-			audible.some((other) => overlap({ a: word, b: other }) > shared)
-		)
+		if (audible.some((other) => overlap({ a: word, b: other }) > shared))
 			return false;
+		// Within the margin the word wins: cutting a real word is worse than
+		// keeping a filler.
 		return (
-			shared > fillerShared ||
-			gap({ a: word, b: sound }) <= gap({ a: filler, b: sound })
+			closeness({ range: word, sound }) >=
+			closeness({ range: filler, sound }) - FILLER_MARGIN_SECONDS
 		);
 	};
 	return words.flatMap((word) => {

@@ -204,6 +204,25 @@ test("never cuts a sound a real word's times barely miss", () => {
 	});
 	expect(um).toEqual({ start: 0.23, end: 0.49, text: "um", aligned: false });
 	expect(fillerCut({ filler: um, paddingSeconds: 0.2 })).toBeNull();
+	// A filler whose times reach 5 ms into the sound doesn't outweigh a word
+	// 10 ms from it.
+	const [reaching] = findFillerWords({
+		transcript: transcript({
+			words: [
+				word(["um", 0.23, 0.505]),
+				word(["go", 0.76, 1.05]),
+				word(["next", 1.22, 1.5]),
+			],
+		}),
+		silences,
+	});
+	expect(reaching).toEqual({
+		start: 0.23,
+		end: 0.505,
+		text: "um",
+		aligned: false,
+	});
+	expect(fillerCut({ filler: reaching, paddingSeconds: 0.2 })).toBeNull();
 	// A word closer to the sound than the filler claims it too.
 	expect(
 		findFillerWords({
