@@ -19,7 +19,7 @@ import {
 } from "@/text/measure-clip";
 import { resolveColorAtTime, resolveOpacityAtTime } from "@/animation/values";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
-import { videoCache } from "@/services/video-cache/service";
+import type { VideoCache } from "@/services/video-cache/service";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
 import {
@@ -44,6 +44,29 @@ import type {
 	ResolvedVisualSourceNodeState,
 	VisualNodeParams,
 } from "./nodes/visual-node";
+
+/** The source frame a video clip shows at `clipTime`. */
+function getVideoFrameAt({
+	cache,
+	params,
+	clipTime,
+}: {
+	cache: VideoCache;
+	params: Pick<
+		VideoNode["params"],
+		"mediaId" | "file" | "trimStart" | "retime"
+	>;
+	clipTime: number;
+}) {
+	const sourceTimeTicks =
+		params.trimStart +
+		getSourceTimeAtClipTime({ clipTime, retime: params.retime });
+	return cache.getFrameAt({
+		mediaId: params.mediaId,
+		file: params.file,
+		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+	});
+}
 
 type ResolveContext = {
 	renderer: CanvasRenderer;
@@ -196,16 +219,10 @@ async function resolveVideoNode({
 		return null;
 	}
 
-	const sourceTimeTicks =
-		node.params.trimStart +
-		getSourceTimeAtClipTime({
-			clipTime,
-			retime: node.params.retime,
-		});
-	const frame = await videoCache.getFrameAt({
-		mediaId: node.params.mediaId,
-		file: node.params.file,
-		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+	const frame = await getVideoFrameAt({
+		cache: context.renderer.videoCache,
+		params: node.params,
+		clipTime,
 	});
 	if (!frame) {
 		return null;
@@ -387,7 +404,11 @@ async function resolveBlurBackgroundNode({
 		return null;
 	}
 
-	const backdropSource = await resolveBackdropSource({ node, clipTime });
+	const backdropSource = await resolveBackdropSource({
+		node,
+		clipTime,
+		cache: context.renderer.videoCache,
+	});
 	if (!backdropSource) {
 		return null;
 	}
@@ -412,22 +433,14 @@ async function resolveBlurBackgroundNode({
 async function resolveBackdropSource({
 	node,
 	clipTime,
+	cache,
 }: {
 	node: BlurBackgroundNode;
 	clipTime: number;
+	cache: VideoCache;
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
-		const sourceTimeTicks =
-			node.params.trimStart +
-			getSourceTimeAtClipTime({
-				clipTime,
-				retime: node.params.retime,
-			});
-		const frame = await videoCache.getFrameAt({
-			mediaId: node.params.mediaId,
-			file: node.params.file,
-			time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
-		});
+		const frame = await getVideoFrameAt({ cache, params: node.params, clipTime });
 		if (!frame) {
 			return null;
 		}

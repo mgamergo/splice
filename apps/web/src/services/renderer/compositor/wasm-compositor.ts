@@ -43,6 +43,7 @@ class WasmCompositor {
 	private canvas: HTMLCanvasElement | null = null;
 	private initializedSize: { width: number; height: number } | null = null;
 	private cache = new Map<string, RenderedCacheEntry | ExternalCacheEntry>();
+	private framesRendered = 0;
 
 	ensureInitialized({ width, height }: { width: number; height: number }) {
 		if (!this.canvas) {
@@ -87,8 +88,14 @@ class WasmCompositor {
 		}
 	}
 
+	/** Counts frames drawn to the shared canvas, so a renderer can tell another drew over its frame. */
+	getFramesRendered(): number {
+		return this.framesRendered;
+	}
+
 	render(frame: FrameDescriptor) {
 		renderFrame(frame);
+		this.framesRendered++;
 		if (isRenderPerfEnabled()) {
 			recordWasmFrameProfile(
 				getLastFrameProfile() as Array<{ name: string; durationMs: number }>,

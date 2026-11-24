@@ -13,6 +13,73 @@ export function isDiskMedia(data: MediaData): data is DiskMedia {
 }
 
 /**
+ * A mediabunny source that reads the bytes where they live. `signal` stops its
+ * requests: disposing the Input alone leaves a request that is still waiting
+ * on its headers running.
+ */
+export function createMediaSource({
+	data,
+	signal,
+}: {
+	data: MediaData;
+	signal?: AbortSignal;
+}): Source {
+	if (!isDiskMedia(data)) return new BlobSource(data);
+	return new UrlSource(data.url, {
+		requestInit: { credentials: "same-origin" },
+		// The default retries forever, which a missing file would hit.
+		getRetryDelay: (previousAttempts) =>
+			!signal?.aborted && previousAttempts < 3 ? 0.5 : null,
+		...(signal && { fetchFn: createAbortableFetch({ signal }) }),
+	});
+}
+
+/** fetch, also stopped by `signal` on top of the signal each request brings. */
+function createAbortableFetch({ signal }: { signal: AbortSignal }): typeof fetch {
+	trackAbortReason({ signal });
+	const abortableFetch = (...[input, init]: Parameters<typeof fetch>) =>
+		fetch(input, {
+			...init,
+			signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+		});
+	return Object.assign(abortableFetch, { preconnect: fetch.preconnect });
+}
+
+/**
+ * mediabunny rethrows a failed read-ahead request that no read is waiting on
+ * ("so it doesn't get swallowed"), so aborting `signal` while one waits on its
+ * headers leaves an unhandled rejection. Reads that are waiting still get the
+ * rejection; the page only stops reporting, as uncaught, a rejection whose
+ * reason is an aborted media signal's own reason.
+ */
+const abortReasons = new WeakSet<object>();
+let ignoringAbortedReads = false;
+
+function trackAbortReason({ signal }: { signal: AbortSignal }): void {
+	const track = () => {
+		if (isObject(signal.reason)) abortReasons.add(signal.reason);
+	};
+	if (signal.aborted) track();
+	else signal.addEventListener("abort", track, { once: true });
+	if (!ignoringAbortedReads && typeof window !== "undefined") {
+		ignoringAbortedReads = true;
+		window.addEventListener("unhandledrejection", ignoreAbortedRead);
+	}
+}
+
+/** The page's `unhandledrejection` listener; exported for tests. */
+export function ignoreAbortedRead(
+	event: Pick<PromiseRejectionEvent, "reason" | "preventDefault">,
+): void {
+	if (isObject(event.reason) && abortReasons.has(event.reason))
+		event.preventDefault();
+}
+
+function isObject(value: unknown): value is object {
+	return typeof value === "object" && value !== null;
+}
+
+/**
  * Where a clip's audio is read from, and a key for caching what's decoded from
  * it. With noise reduction on, a disk item's audio comes from the WAV `splice`
  * renders, so playback and export hear the same thing; the file itself is
@@ -36,18 +103,6 @@ export function clipAudioMedia({
 		},
 		sourceKey: `${projectItem.id}:denoised`,
 	};
-}
-
-/** A mediabunny source that reads the bytes where they live. */
-export function createMediaSource(data: MediaData): Source {
-	return isDiskMedia(data)
-		? new UrlSource(data.url, {
-				requestInit: { credentials: "same-origin" },
-				// The default retries forever, which a missing file would hit.
-				getRetryDelay: (previousAttempts) =>
-					previousAttempts < 3 ? 0.5 : null,
-			})
-		: new BlobSource(data);
 }
 
 /**

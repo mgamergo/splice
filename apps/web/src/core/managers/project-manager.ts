@@ -9,6 +9,7 @@ import type {
 	TTimelineViewState,
 } from "@/project/types";
 import type { ExportOptions, ExportResult, ExportState } from "@/export";
+import { ExportJobs } from "@/export/export-jobs";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
 import { generateUUID } from "@/utils/id";
@@ -27,6 +28,12 @@ import { getClipFontFamilies } from "@/timeline/clip-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
 import type { ProjectItem } from "@/media/types";
 
+const IDLE_EXPORT_STATE: ExportState = {
+	isExporting: false,
+	progress: 0,
+	result: null,
+};
+
 export class ProjectManager {
 	private active: TProject | null = null;
 	private savedProjects: TProjectMetadata[] = [];
@@ -34,12 +41,8 @@ export class ProjectManager {
 	private isInitialized = false;
 	private invalidProjectIds = new Set<string>();
 	private listeners = new Set<() => void>();
-	private exportState: ExportState = {
-		isExporting: false,
-		progress: 0,
-		result: null,
-	};
-	private exportCancelRequested = false;
+	private exportState: ExportState = IDLE_EXPORT_STATE;
+	private exportJobs = new ExportJobs();
 
 	constructor(private editor: EditorCore) {}
 
@@ -189,36 +192,65 @@ export class ProjectManager {
 		}
 	}
 
-	async export({ options }: { options: ExportOptions }): Promise<ExportResult> {
-		this.exportCancelRequested = false;
+	/**
+	 * Exports the active sequence and hands a finished file to `onExported`.
+	 * Starting an export cancels one still running; the export replaced that
+	 * way, even one that already finished, resolves as cancelled and leaves the
+	 * export state and the download to the new one.
+	 */
+	async export({
+		options,
+		onExported,
+	}: {
+		options: ExportOptions;
+		onExported?: ({ buffer }: { buffer: ArrayBuffer }) => void;
+	}): Promise<ExportResult> {
 		this.exportState = { isExporting: true, progress: 0, result: null };
-		this.notify();
-
-		const result = await this.editor.renderer.exportProject({
-			options,
-			onProgress: ({ progress }) => {
-				this.exportState = { ...this.exportState, progress };
-				this.notify();
-			},
-			onCancel: () => this.exportCancelRequested,
+		// Register the job before notifying, so a subscriber that cancels on
+		// seeing the export start cancels this one.
+		const job = this.exportJobs.start({
+			run: ({ signal, isCurrent }) =>
+				this.editor.renderer.exportProject({
+					options,
+					signal,
+					onProgress: ({ progress }) => {
+						if (!isCurrent()) return;
+						this.exportState = { ...this.exportState, progress };
+						this.notify();
+					},
+				}),
 		});
-
-		this.exportState = {
-			isExporting: false,
-			progress: this.exportState.progress,
-			result,
-		};
 		this.notify();
+		const { result, isCurrent } = await job;
+		if (!isCurrent()) return { success: false, cancelled: true };
 
+		this.exportState = result.cancelled
+			? IDLE_EXPORT_STATE
+			: { isExporting: false, progress: this.exportState.progress, result };
+		this.notify();
+		// A subscriber can start another export from inside notify().
+		if (!isCurrent()) return { success: false, cancelled: true };
+		if (result.success && result.buffer) {
+			onExported?.({ buffer: result.buffer });
+		}
 		return result;
 	}
 
 	cancelExport(): void {
-		this.exportCancelRequested = true;
+		this.exportJobs.cancel();
+	}
+
+	/**
+	 * Whether an export, a cancelled one included, is still drawing on the
+	 * compositor's canvas. It can outlast `isExporting`: closing the export
+	 * dialog clears that before the cancelled export has stopped.
+	 */
+	isExportRunning(): boolean {
+		return this.exportJobs.isRunning();
 	}
 
 	clearExportState(): void {
-		this.exportState = { isExporting: false, progress: 0, result: null };
+		this.exportState = IDLE_EXPORT_STATE;
 		this.notify();
 	}
 

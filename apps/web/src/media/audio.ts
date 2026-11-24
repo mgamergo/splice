@@ -26,6 +26,12 @@ import {
 	isDiskMedia,
 	playableProjectItems,
 } from "@/media/media-data";
+import {
+	createAudioRangeAssembler,
+	getClipSourceRange,
+	getDecodeWindow,
+	type SourceRange,
+} from "@/media/source-range";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	computeRmsBuckets,
@@ -35,15 +41,14 @@ import {
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
 
-export interface CollectedAudioClip {
+interface CollectedAudioClip {
 	timelineClip: AudioCapableClip;
 	buffer: AudioBuffer;
 	startTime: number;
 	duration: number;
+	/** Seconds into `buffer` where the clip's in point is. */
 	trimStart: number;
-	trimEnd: number;
 	volume: number;
-	muted: boolean;
 	retime?: RetimeConfig;
 }
 
@@ -139,97 +144,97 @@ export function timelineHasAudio({
 	);
 }
 
-export async function collectAudioClips({
+/**
+ * Decodes the audible clips one at a time, each from only the part of its
+ * source it plays. The export mix holds one clip's audio at a time, so memory
+ * follows the sequence, not the length of the recordings behind it.
+ */
+async function* collectAudioClips({
 	tracks,
 	projectItems,
 	audioContext,
+	signal,
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	audioContext: AudioContext;
-}): Promise<CollectedAudioClip[]> {
-	const candidates = collectAudibleCandidates({ tracks, projectItems });
+	signal?: AbortSignal;
+}): AsyncGenerator<CollectedAudioClip> {
 	const mediaMap = new Map<string, ProjectItem>(
 		playableProjectItems(projectItems).map((media) => [media.id, media]),
 	);
-	const pendingClips: Array<Promise<CollectedAudioClip | null>> = [];
 
-	for (const { clip, projectItem } of candidates) {
-		if (clip.type === "audio") {
-			pendingClips.push(
-				resolveAudioBufferForClip({
-					clip,
-					mediaMap,
-					audioContext,
-				}).then((audioBuffer) => {
-					if (!audioBuffer) return null;
-					return {
-						timelineClip: clip,
-						buffer: audioBuffer,
-						startTime: clip.startTime / TICKS_PER_SECOND,
-						duration: clip.duration / TICKS_PER_SECOND,
-						trimStart: clip.trimStart / TICKS_PER_SECOND,
-						trimEnd: clip.trimEnd / TICKS_PER_SECOND,
-						volume: resolveEffectiveAudioGain({
-							clip,
-							trackMuted: false,
-							localTime: 0,
-						}),
-						muted: isClipMuted({ clip }),
-						retime: clip.retime,
-					};
-				}),
-			);
+	for (const { clip, projectItem } of collectAudibleCandidates({
+		tracks,
+		projectItems,
+	})) {
+		signal?.throwIfAborted();
+		if (isClipMuted({ clip })) continue;
+		if (
+			clip.type === "video" &&
+			!(projectItem && mediaSupportsAudio({ media: projectItem }))
+		) {
 			continue;
 		}
 
-		if (clip.type === "video") {
-			if (!projectItem || !mediaSupportsAudio({ media: projectItem })) continue;
+		const trimStart = clip.trimStart / TICKS_PER_SECOND;
+		const duration = clip.duration / TICKS_PER_SECOND;
+		const decoded =
+			clip.type === "audio"
+				? await resolveAudioBufferForClip({
+						clip,
+						mediaMap,
+						audioContext,
+						signal,
+					})
+				: projectItem
+					? await resolveAudioBufferForProjectItem({
+							projectItem,
+							file: clipAudioMedia({ clip, projectItem }).file,
+							range: getClipSourceRange({
+								trimStart,
+								duration,
+								retime: clip.retime,
+							}),
+							audioContext,
+							signal,
+						})
+					: null;
+		if (!decoded) continue;
 
-			pendingClips.push(
-				resolveAudioBufferForProjectItem({
-					projectItem,
-					file: clipAudioMedia({ clip, projectItem }).file,
-					audioContext,
-				}).then((audioBuffer) => {
-					if (!audioBuffer) return null;
-					return {
-						timelineClip: clip,
-						buffer: audioBuffer,
-						startTime: clip.startTime / TICKS_PER_SECOND,
-						duration: clip.duration / TICKS_PER_SECOND,
-						trimStart: clip.trimStart / TICKS_PER_SECOND,
-						trimEnd: clip.trimEnd / TICKS_PER_SECOND,
-						volume: resolveEffectiveAudioGain({
-							clip,
-							trackMuted: false,
-							localTime: 0,
-						}),
-						muted: isClipMuted({ clip }),
-						retime: clip.retime,
-					};
-				}),
-			);
-		}
+		yield {
+			timelineClip: clip,
+			buffer: decoded.buffer,
+			startTime: clip.startTime / TICKS_PER_SECOND,
+			duration,
+			trimStart: trimStart - decoded.start,
+			volume: resolveEffectiveAudioGain({
+				clip,
+				trackMuted: false,
+				localTime: 0,
+			}),
+			retime: clip.retime,
+		};
 	}
+}
 
-	const resolvedClips = await Promise.all(pendingClips);
-	const audioClips: CollectedAudioClip[] = [];
-	for (const clip of resolvedClips) {
-		if (clip) audioClips.push(clip);
-	}
-	return audioClips;
+/** Decoded audio and the source time its first sample is at. */
+interface DecodedClipAudio {
+	buffer: AudioBuffer;
+	start: number;
 }
 
 async function resolveAudioBufferForClip({
 	clip,
 	mediaMap,
 	audioContext,
+	signal,
 }: {
 	clip: AudioClip;
 	mediaMap: Map<string, ProjectItem>;
 	audioContext: AudioContext;
-}): Promise<AudioBuffer | null> {
+	signal?: AbortSignal;
+}): Promise<DecodedClipAudio | null> {
 	try {
 		if (clip.sourceType === "upload") {
 			const projectItem = mediaMap.get(clip.mediaId);
@@ -237,20 +242,32 @@ async function resolveAudioBufferForClip({
 			return await resolveAudioBufferForProjectItem({
 				projectItem,
 				file: clipAudioMedia({ clip, projectItem }).file,
+				range: getClipSourceRange({
+					trimStart: clip.trimStart / TICKS_PER_SECOND,
+					duration: clip.duration / TICKS_PER_SECOND,
+					retime: clip.retime,
+				}),
 				audioContext,
+				signal,
 			});
 		}
 
-		if (clip.buffer) return clip.buffer;
+		if (clip.buffer) return { buffer: clip.buffer, start: 0 };
 
-		const response = await fetch(clip.sourceUrl);
+		// Library sounds are short clips from the sounds API, so they decode whole.
+		const response = await fetch(clip.sourceUrl, { signal });
 		if (!response.ok) {
 			throw new Error(`Library audio fetch failed: ${response.status}`);
 		}
 
 		const arrayBuffer = await response.arrayBuffer();
-		return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+		return {
+			buffer: await audioContext.decodeAudioData(arrayBuffer.slice(0)),
+			start: 0,
+		};
 	} catch (error) {
+		// A cancelled export stops here rather than skipping to the next clip.
+		signal?.throwIfAborted();
 		console.warn("Failed to decode audio:", error);
 		return null;
 	}
@@ -259,96 +276,118 @@ async function resolveAudioBufferForClip({
 async function resolveAudioBufferForProjectItem({
 	projectItem,
 	file,
+	range,
 	audioContext,
+	signal,
 }: {
 	projectItem: ProjectItem;
 	/** The item's file, or what `clipAudioMedia` reads the clip's audio from. */
 	file: MediaData;
+	range: SourceRange;
 	audioContext: AudioContext;
-}): Promise<AudioBuffer | null> {
-	// Uploaded audio decodes in one go; long recordings on disk stream through mediabunny.
+	signal?: AbortSignal;
+}): Promise<DecodedClipAudio | null> {
+	// An uploaded audio file is already in memory, so it decodes in one go.
+	// Everything else, recordings on disk above all, decodes only the range.
 	if (projectItem.type === "audio" && !isDiskMedia(file)) {
 		try {
 			const arrayBuffer = await file.arrayBuffer();
-			return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+			return {
+				buffer: await audioContext.decodeAudioData(arrayBuffer.slice(0)),
+				start: 0,
+			};
 		} catch (error) {
 			console.warn("Failed to decode audio projectItem:", error);
 			return null;
 		}
 	}
 
+	try {
+		const buffer = await decodeAudioRange({
+			file,
+			range,
+			sampleRate: audioContext.sampleRate,
+			signal,
+		});
+		return buffer ? { buffer, start: range.start } : null;
+	} catch (error) {
+		signal?.throwIfAborted();
+		console.warn("Failed to decode projectItem audio:", error);
+		return null;
+	}
+}
+
+/**
+ * Decodes one range of a source's primary audio track, resampled to
+ * `sampleRate`. Sample 0 is `range.start`. mediabunny reads only the packets
+ * the range and its decoder pre-roll need, so a file on disk is fetched in
+ * byte ranges, never whole.
+ */
+export async function decodeAudioRange({
+	file,
+	range,
+	sampleRate,
+	signal,
+}: {
+	file: MediaData;
+	range: SourceRange;
+	sampleRate: number;
+	signal?: AbortSignal;
+}): Promise<AudioBuffer | null> {
+	if (range.end <= range.start) return null;
 	const input = new Input({
-		source: createMediaSource(file),
+		source: createMediaSource({ data: file, signal }),
 		formats: ALL_FORMATS,
 	});
+	// Disposing the input rejects a read that is still waiting on the file.
+	const disposeInput = () => input.dispose();
+	signal?.addEventListener("abort", disposeInput, { once: true });
 
 	try {
 		const audioTrack = await input.getPrimaryAudioTrack();
 		if (!audioTrack) return null;
 
+		const assembler = createAudioRangeAssembler({
+			range,
+			maxChannels: MAX_AUDIO_CHANNELS,
+			timeResolution: audioTrack.timeResolution,
+		});
 		const sink = new AudioBufferSink(audioTrack);
-		const targetSampleRate = audioContext.sampleRate;
-
-		const chunks: AudioBuffer[] = [];
-		let totalSamples = 0;
-
-		for await (const { buffer } of sink.buffers(0)) {
-			chunks.push(buffer);
-			totalSamples += buffer.length;
+		const decodeWindow = getDecodeWindow({ range });
+		for await (const chunk of sink.buffers(decodeWindow.start, decodeWindow.end)) {
+			signal?.throwIfAborted();
+			assembler.add(chunk);
 		}
+		const assembled = assembler.finish();
+		if (!assembled) return null;
 
-		if (chunks.length === 0) return null;
-
-		const nativeSampleRate = chunks[0].sampleRate;
-		const numChannels = Math.min(
-			MAX_AUDIO_CHANNELS,
-			chunks[0].numberOfChannels,
-		);
-
-		const nativeChannels = Array.from(
-			{ length: numChannels },
-			() => new Float32Array(totalSamples),
-		);
-		let offset = 0;
-		for (const chunk of chunks) {
-			for (let channel = 0; channel < numChannels; channel++) {
-				const sourceData = chunk.getChannelData(
-					Math.min(channel, chunk.numberOfChannels - 1),
-				);
-				nativeChannels[channel].set(sourceData, offset);
-			}
-			offset += chunk.length;
+		const { channels } = assembled;
+		const nativeBuffer = new AudioBuffer({
+			numberOfChannels: channels.length,
+			length: channels[0].length,
+			sampleRate: assembled.sampleRate,
+		});
+		for (let channel = 0; channel < channels.length; channel++) {
+			nativeBuffer.copyToChannel(channels[channel], channel);
 		}
+		if (assembled.sampleRate === sampleRate) return nativeBuffer;
 
-		// use OfflineAudioContext for high-quality resampling to target rate
-		const outputSamples = Math.ceil(
-			totalSamples * (targetSampleRate / nativeSampleRate),
-		);
+		// OfflineAudioContext gives high-quality resampling to the target rate.
 		const offlineContext = new OfflineAudioContext(
-			numChannels,
-			outputSamples,
-			targetSampleRate,
+			channels.length,
+			Math.ceil(nativeBuffer.length * (sampleRate / assembled.sampleRate)),
+			sampleRate,
 		);
-
-		const nativeBuffer = audioContext.createBuffer(
-			numChannels,
-			totalSamples,
-			nativeSampleRate,
-		);
-		for (let ch = 0; ch < numChannels; ch++) {
-			nativeBuffer.copyToChannel(nativeChannels[ch], ch);
-		}
-
 		const sourceNode = offlineContext.createBufferSource();
 		sourceNode.buffer = nativeBuffer;
 		sourceNode.connect(offlineContext.destination);
 		sourceNode.start(0);
-
 		return await offlineContext.startRendering();
 	} catch (error) {
-		console.warn("Failed to decode projectItem audio:", error);
-		return null;
+		signal?.throwIfAborted();
+		throw error;
 	} finally {
+		signal?.removeEventListener("abort", disposeInput);
 		input.dispose();
 	}
 }
@@ -437,10 +476,10 @@ async function fetchLibraryAudioClip({
 			id: clip.id,
 			sourceKey: clip.id,
 			file,
-			startTime: clip.startTime,
-			duration: clip.duration,
-			trimStart: clip.trimStart,
-			trimEnd: clip.trimEnd,
+			startTime: clip.startTime / TICKS_PER_SECOND,
+			duration: clip.duration / TICKS_PER_SECOND,
+			trimStart: clip.trimStart / TICKS_PER_SECOND,
+			trimEnd: clip.trimEnd / TICKS_PER_SECOND,
 			volume,
 			muted,
 			retime: clip.retime,
@@ -638,40 +677,41 @@ export async function collectAudioClipSources({
 	return clips;
 }
 
+/** Mixes the sequence's audio for export; rejects with `signal`'s reason once it aborts. */
 export async function createTimelineAudioBuffer({
 	tracks,
 	projectItems,
 	duration,
 	sampleRate = EXPORT_SAMPLE_RATE,
 	audioContext,
+	signal,
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	duration: number;
 	sampleRate?: number;
 	audioContext?: AudioContext;
+	signal?: AbortSignal;
 }): Promise<AudioBuffer | null> {
+	signal?.throwIfAborted();
 	const context = audioContext ?? createAudioContext({ sampleRate });
-
-	const audioClips = await collectAudioClips({
-		tracks,
-		projectItems,
-		audioContext: context,
-	});
-
-	if (audioClips.length === 0) return null;
 
 	const outputChannels = 2;
 	const durationSeconds = duration / TICKS_PER_SECOND;
 	const outputLength = Math.ceil(durationSeconds * sampleRate);
-	const outputBuffer = context.createBuffer(
-		outputChannels,
-		outputLength,
-		sampleRate,
-	);
+	let outputBuffer: AudioBuffer | null = null;
 
-	for (const clip of audioClips) {
-		if (clip.muted) continue;
+	for await (const clip of collectAudioClips({
+		tracks,
+		projectItems,
+		audioContext: context,
+		signal,
+	})) {
+		outputBuffer ??= context.createBuffer(
+			outputChannels,
+			outputLength,
+			sampleRate,
+		);
 
 		const renderedBuffer = shouldMaintainPitch({
 			rate: clip.retime?.rate ?? 1,
@@ -698,6 +738,8 @@ export async function createTimelineAudioBuffer({
 		});
 	}
 
+	signal?.throwIfAborted();
+	if (!outputBuffer) return null;
 	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
 }
 

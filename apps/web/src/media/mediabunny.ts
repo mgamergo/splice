@@ -28,7 +28,7 @@ export async function readVideoFile({
 	file: MediaData;
 }): Promise<VideoFileData> {
 	const input = new Input({
-		source: createMediaSource(file),
+		source: createMediaSource({ data: file }),
 		formats: ALL_FORMATS,
 	});
 

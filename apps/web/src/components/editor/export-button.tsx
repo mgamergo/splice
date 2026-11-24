@@ -114,30 +114,24 @@ function ExportPopover({
 	const handleExport = async () => {
 		if (!activeProject) return;
 
-		const result = await editor.project.export({
+		await editor.project.export({
 			options: {
 				format,
 				quality,
 				fps: activeProject.settings.fps,
 				includeAudio: shouldIncludeAudio,
 			},
+			// Called only while no other export has replaced this one.
+			onExported: ({ buffer }) => {
+				downloadBuffer({
+					buffer,
+					filename: `${activeProject.metadata.name}${getExportFileExtension({ format })}`,
+					mimeType: getExportMimeType({ format }),
+				});
+				editor.project.clearExportState();
+				onOpenChange(false);
+			},
 		});
-
-		if (result.cancelled) {
-			editor.project.clearExportState();
-			return;
-		}
-
-		if (result.success && result.buffer) {
-			downloadBuffer({
-				buffer: result.buffer,
-				filename: `${activeProject.metadata.name}${getExportFileExtension({ format })}`,
-				mimeType: getExportMimeType({ format }),
-			});
-
-			editor.project.clearExportState();
-			onOpenChange(false);
-		}
 	};
 
 	const handleCancel = () => {
