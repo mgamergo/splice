@@ -35,6 +35,8 @@ const tightenDefaults = {
 	pauses: "auto",
 	removeFillerWords: false,
 };
+/** The apply pass leaves out pauses: its tightening already lists them. */
+const { pauses: _auto, ...applyDefaults } = tightenDefaults;
 
 describe("splice mcp tools", () => {
 	test("lists the tools", async () => {
@@ -416,7 +418,7 @@ describe("loudness tools", () => {
 				{
 					expectedRevision: 3,
 					sections,
-					...tightenDefaults,
+					...applyDefaults,
 					sourceGains: [
 						{ projectItemId: "rec-1", gainDb: 14 },
 						{ projectItemId: "rec-2", gainDb: 1.45 },
@@ -433,6 +435,36 @@ describe("loudness tools", () => {
 				limited: ["loud.wav: true peak capped at -16.5 LUFS"],
 			},
 		});
+	});
+
+	test("rough_cut sends explicit pauses once on each pass", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.getState")
+				return { project: { format: "horizontal" } };
+			if (method === "loudness.measure") {
+				const path = field({ params, key: "path" });
+				return { path, ...measurements[String(path)], cached: false };
+			}
+			if (field({ params, key: "plan" }))
+				return { ok: true, revision: 3, audioSources, tightening };
+			return { ok: true, revision: 4 };
+		});
+		const result = await client.callTool({
+			name: "rough_cut",
+			arguments: { expectedRevision: 3, sections, pauses: tightening.pauses },
+		});
+		expect(result.isError).toBeFalsy();
+		const passes = calls.filter(([method]) => method === "editor.roughCut");
+		expect(passes).toHaveLength(2);
+		expect(passes[0][1]).toMatchObject({
+			plan: true,
+			pauses: tightening.pauses,
+		});
+		expect(field({ params: passes[0][1], key: "tightening" })).toBeUndefined();
+		expect(passes[1][1]).toMatchObject({ tightening });
+		expect(field({ params: passes[1][1], key: "pauses" })).toBeUndefined();
 	});
 
 	test("rough_cut skips a recording splice can't measure and still cuts", async () => {
@@ -514,7 +546,7 @@ describe("loudness tools", () => {
 			{
 				expectedRevision: 3,
 				sections,
-				...tightenDefaults,
+				...applyDefaults,
 				captions,
 				sourceGains: [
 					{ projectItemId: "rec-1", gainDb: 14 },
