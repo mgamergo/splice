@@ -14,6 +14,8 @@ export const BRIDGE_PATHS = {
 	session: "/splice/session",
 	/** Prefix for files under the Footage folder: `/splice/media/<path>`. */
 	media: "/splice/media/",
+	/** The editor tab's own calls to `splice`: transcripts, spellings and exports. */
+	api: "/splice/api",
 } as const;
 
 /** The URL fragment key that hands the bridge token to the editor tab. */
@@ -33,6 +35,8 @@ export const TAB_METHODS = [
 	"editor.takesList",
 	"editor.audioSources",
 	"editor.addCaptions",
+	"editor.captionCues",
+	"editor.correctCaption",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 
@@ -49,6 +53,7 @@ export const SERVER_METHODS = [
 	"loudness.measure",
 	"transcript.words",
 	"pauses.detect",
+	"exports.list",
 ] as const;
 export type ServerMethod = (typeof SERVER_METHODS)[number];
 

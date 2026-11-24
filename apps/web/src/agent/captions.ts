@@ -49,6 +49,8 @@ export interface TimelineWord {
 	start: number;
 	end: number;
 	text: string;
+	/** The transcript word it shows: its recording and position there. */
+	ref: { projectItemId: string; index: number };
 }
 
 type SourceClip = VideoClip | AudioClip;
@@ -135,7 +137,7 @@ export function mapWordsToTimeline({
 				const key = `${projectItemId}:${index}:${Math.round(start * 1000)}`;
 				if (end > start && !seen.has(key)) {
 					seen.add(key);
-					words.push({ start, end, text });
+					words.push({ start, end, text, ref: { projectItemId, index } });
 				}
 			}
 		}
@@ -148,12 +150,12 @@ export function buildCaptionCues({
 	words,
 	style = {},
 }: {
-	words: TimelineWord[];
+	words: Array<Pick<TimelineWord, "start" | "end" | "text">>;
 	style?: CaptionStyle;
 }): SubtitleCue[] {
 	const limit = style.wordsPerCaption ?? DEFAULT_WORDS_PER_CAPTION;
-	const groups: TimelineWord[][] = [];
-	let current: TimelineWord[] = [];
+	const groups: (typeof words)[] = [];
+	let current: typeof words = [];
 	for (const word of words) {
 		const previous = current.at(-1);
 		if (
@@ -322,7 +324,7 @@ function captionClips({
 }
 
 /** Recordings on the timeline whose words weren't given, so got no captions. */
-function uncaptionedItemIds({
+export function uncaptionedItemIds({
 	content,
 	captions,
 }: {

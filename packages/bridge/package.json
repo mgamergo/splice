@@ -5,7 +5,8 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./ops": "./src/ops.ts"
+		"./ops": "./src/ops.ts",
+		"./delivery": "./src/delivery.ts"
 	},
 	"dependencies": {
 		"zod": "4.3.6"

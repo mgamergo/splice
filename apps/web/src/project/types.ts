@@ -1,5 +1,6 @@
 import type { FrameRate } from "opencut-wasm";
 import type { ProjectFormat } from "@splice/bridge";
+import type { ProjectCaptions } from "@splice/bridge/delivery";
 import type { TSequence } from "@/timeline/types";
 import type { MediaTime } from "@/wasm";
 
@@ -51,6 +52,8 @@ export interface TProject {
 	settings: TProjectSettings;
 	version: number;
 	timelineViewState?: TTimelineViewState;
+	/** Horizontal projects: the transcript words and corrections SRT captions come from. */
+	captions?: ProjectCaptions;
 }
 
 export type TProjectSortKey = "createdAt" | "updatedAt" | "name" | "duration";

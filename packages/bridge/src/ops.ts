@@ -216,7 +216,7 @@ export const applyRequestSchema = z.strictObject({
 	ops: z.array(editOpSchema).min(1),
 });
 
-const expectedRevision = applyRequestSchema.shape.expectedRevision;
+export const expectedRevision = applyRequestSchema.shape.expectedRevision;
 
 export const rawSequenceRequestSchema = z.strictObject({
 	expectedRevision,
@@ -242,7 +242,7 @@ const captionWordSchema = z.strictObject({
 });
 
 /** Source-relative word timings of one recording, from its transcript. */
-const captionSourceSchema = z.strictObject({
+export const captionSourceSchema = z.strictObject({
 	projectItemId: z.string().min(1),
 	words: z.array(captionWordSchema).max(200_000),
 });

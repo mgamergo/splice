@@ -32,6 +32,15 @@ import {
 	markerNotesPreviewOverlay,
 	getMarkerPreviewOverlaySource,
 } from "@/timeline/markers/index";
+import { useCaptionCues } from "@/captions/use-caption-cues";
+import { cueAt } from "@/captions/cues";
+import {
+	captionsPreviewOverlay,
+	getCaptionPreviewOverlaySource,
+} from "@/captions/preview-overlay-source";
+import { useCaptionsStore } from "@/captions/store";
+import { useLibraryPanelStore } from "@/components/editor/panels/library/library-panel-store";
+import { mediaTimeToSeconds } from "@/wasm";
 
 export default function Editor() {
 	const params = useParams();
@@ -90,6 +99,16 @@ function EditorLayout() {
 		overlay: markerNotesPreviewOverlay,
 		overlays,
 	});
+	const captionCues = useCaptionCues();
+	const currentCue = cueAt({
+		cues: captionCues,
+		time: mediaTimeToSeconds({ time: currentTime }),
+	});
+	const selectedCueId = useCaptionsStore((state) => state.selectedCueId);
+	const showCaptions = isPreviewOverlayVisible({
+		overlay: captionsPreviewOverlay,
+		overlays,
+	});
 
 	const overlaySource = useMemo(
 		() =>
@@ -108,9 +127,32 @@ function EditorLayout() {
 								definitions: [markerNotesPreviewOverlay],
 								instances: [],
 							},
+					// Only Horizontal projects have SRT cues to show.
+					...(captionCues.length
+						? [
+								getCaptionPreviewOverlaySource({
+									cue: currentCue,
+									isVisible: showCaptions,
+									isSelected: currentCue?.id === selectedCueId,
+									onSelect: (cue) => {
+										useCaptionsStore.getState().selectCue(cue.id);
+										useLibraryPanelStore.getState().setActiveTab("captions");
+									},
+								}),
+							]
+						: []),
 				],
 			}),
-		[activeGuide, activeSequence, currentTime, showMarkerNotes],
+		[
+			activeGuide,
+			activeSequence,
+			currentTime,
+			showMarkerNotes,
+			captionCues.length,
+			currentCue,
+			showCaptions,
+			selectedCueId,
+		],
 	);
 
 	const overlayControls = useMemo(

@@ -5,6 +5,8 @@ import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SequenceExporter } from "@/services/renderer/sequence-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { createTimelineAudioBuffer } from "@/media/audio";
+import { calculateTotalDuration } from "@/timeline";
+import type { SequenceTracks } from "@/timeline/types";
 import { formatTimecode } from "opencut-wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import { downloadBlob } from "@/utils/browser";
@@ -143,16 +145,20 @@ export class RendererManager {
 		options,
 		onProgress,
 		signal,
+		tracks: snapshot,
 	}: {
 		options: ExportOptions;
 		onProgress?: ({ progress }: { progress: number }) => void;
 		signal: AbortSignal;
+		/** The sequence's tracks as they were when the export was asked for. */
+		tracks?: SequenceTracks;
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio } = options;
 
 		try {
 			signal.throwIfAborted();
-			const tracks = this.editor.sequences.getActiveSequence().tracks;
+			const tracks =
+				snapshot ?? this.editor.sequences.getActiveSequence().tracks;
 			const projectItems = this.editor.media.getProjectItems();
 			const activeProject = this.editor.project.getActive();
 
@@ -160,7 +166,7 @@ export class RendererManager {
 				return { success: false, error: "No active project" };
 			}
 
-			const duration = this.editor.timeline.getTotalDuration();
+			const duration = calculateTotalDuration({ tracks });
 			if (duration === 0) {
 				return { success: false, error: "Project is empty" };
 			}

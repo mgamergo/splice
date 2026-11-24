@@ -34,6 +34,9 @@ import {
 } from "@/components/section";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
+import { readBridgeToken } from "@/bridge/token";
+import { projectFormat } from "@/project/format";
+import { DeliveryPopover } from "./export-delivery";
 
 function isExportFormat(value: string): value is ExportFormat {
 	return EXPORT_FORMAT_VALUES.some((formatValue) => formatValue === value);
@@ -48,6 +51,12 @@ export function ExportButton() {
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActiveOrNull());
 	const hasProject = !!activeProject;
+	// Horizontal exports publish an MP4/SRT pair through splice; without splice
+	// (or for a Short) the export downloads.
+	const deliversPair =
+		!!activeProject &&
+		projectFormat({ project: activeProject }) === "horizontal" &&
+		readBridgeToken() !== null;
 
 	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
 		if (!open) {
@@ -87,7 +96,14 @@ export function ExportButton() {
 					</div>
 				</button>
 			</PopoverTrigger>
-			{hasProject && <ExportPopover onOpenChange={setIsExportPopoverOpen} />}
+			{hasProject &&
+				(deliversPair ? (
+					// Mounted only while open, so the history and the current edit's
+					// fingerprint are read fresh each time.
+					isExportPopoverOpen && <DeliveryPopover />
+				) : (
+					<ExportPopover onOpenChange={setIsExportPopoverOpen} />
+				))}
 		</Popover>
 	);
 }

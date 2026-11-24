@@ -50,8 +50,11 @@ describe("splice mcp tools", () => {
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			"captions_add",
+			"captions_correct",
+			"captions_list",
 			"detect_pauses",
 			"editor_status",
+			"exports_list",
 			"footage_list",
 			"items_import",
 			"items_list",
