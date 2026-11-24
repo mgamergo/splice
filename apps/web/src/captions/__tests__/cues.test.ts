@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import type { ProjectCaptions } from "@splice/bridge/delivery";
+import {
+	parseProjectCaptions,
+	type ProjectCaptions,
+} from "@splice/bridge/delivery";
 import { audioClip, videoClip } from "@/agent/__tests__/fixtures";
 import { buildEmptyTrack } from "@/timeline/placement";
 import {
 	buildCaptionCues,
 	changedWords,
+	correctionWords,
 	cuesToSrt,
 	formatSrtTime,
 	MAX_LINE_CHARS,
@@ -221,8 +225,8 @@ describe("SRT", () => {
 	test("numbers cues, writes millisecond times and never overlaps", () => {
 		expect(formatSrtTime(3_723_004.4)).toBe("01:02:03,004");
 		const srt = cuesToSrt([
-			{ id: "a", index: 1, start: 0.0004, end: 1.2, text: "One.", words: [] },
-			{ id: "b", index: 2, start: 1.1996, end: 2.5, text: "Two.", words: [] },
+			{ start: 0.0004, end: 1.2, text: "One." },
+			{ start: 1.1996, end: 2.5, text: "Two." },
 		]);
 		expect(srt).toBe(
 			"1\n00:00:00,000 --> 00:00:01,200\nOne.\n\n2\n00:00:01,200 --> 00:00:02,500\nTwo.\n",
@@ -307,4 +311,287 @@ describe("corrections", () => {
 			planCorrection({ cue, text: "Use git. Now.", scope: "project", captions }),
 		).toThrow("Change at least one word");
 	});
+
+	test("a cue correction too long to save is refused before it is stored", () => {
+		const captions = captionsOf(speak(1, "Use git."));
+		const [cue] = buildCaptionCues({ tracks: whole, captions, sequenceEnd: 120 });
+		expect(() =>
+			planCorrection({ cue, text: "x".repeat(1001), scope: "cue", captions }),
+		).toThrow("at most 1,000 characters");
+		expect(() =>
+			planCorrection({
+				cue,
+				text: `Use ${"y".repeat(201)}.`,
+				scope: "project",
+				captions,
+			}),
+		).toThrow("at most 200 characters");
+		// Surrounding spaces don't count.
+		expect(
+			planCorrection({ cue, text: ` ${"x".repeat(1000)} `, scope: "cue", captions }),
+		).toMatchObject({ scope: "cue" });
+	});
 });
+
+describe("cue corrections fix one placement", () => {
+	// The same source passage used twice: once at 0 s and again at 10 s.
+	const repeated = tracksWith([
+		videoClip({ id: "first", start: 0, duration: 5 }),
+		videoClip({ id: "again", start: 10, duration: 5 }),
+	]);
+	const captions = captionsOf(speak(1, "Ship it."));
+
+	test("a correction or hide on a repeat leaves the other placement alone", () => {
+		const cues = buildCaptionCues({
+			tracks: repeated,
+			captions,
+			sequenceEnd: 15,
+			sequenceId: "seq",
+		});
+		expect(cueTexts(cues)).toEqual(["Ship it.", "Ship it."]);
+		const edited = planCorrection({
+			cue: cues[1],
+			text: "Ship it now.",
+			scope: "cue",
+			captions,
+			sequenceId: "seq",
+		});
+		if (edited.scope !== "cue") throw new Error("expected a cue correction");
+		const after = buildCaptionCues({
+			tracks: repeated,
+			captions: edited.captions,
+			sequenceEnd: 15,
+			sequenceId: "seq",
+		});
+		expect(cueTexts(after)).toEqual(["Ship it.", "Ship it now."]);
+
+		// Hiding the first placement keeps the second one's own edit.
+		const hidden = planCorrection({
+			cue: after[0],
+			text: "",
+			scope: "cue",
+			captions: edited.captions,
+			sequenceId: "seq",
+		});
+		if (hidden.scope !== "cue") throw new Error("expected a cue correction");
+		const both = buildCaptionCues({
+			tracks: repeated,
+			captions: hidden.captions,
+			sequenceEnd: 15,
+			sequenceId: "seq",
+		});
+		expect(cueTexts(both)).toEqual(["", "Ship it now."]);
+		expect(cuesToSrt(both)).toBe("1\n00:00:11,000 --> 00:00:12,000\nShip it now.\n");
+
+		// Another sequence of the project shows the transcript's words.
+		expect(
+			cueTexts(
+				buildCaptionCues({
+					tracks: repeated,
+					captions: hidden.captions,
+					sequenceEnd: 15,
+					sequenceId: "other",
+				}),
+			),
+		).toEqual(["Ship it.", "Ship it."]);
+	});
+
+	test("an edit follows its words into a split, and leaves with a removed clip", () => {
+		const single = tracksWith([videoClip({ id: "first", start: 0, duration: 5 })]);
+		const [cue] = buildCaptionCues({
+			tracks: single,
+			captions,
+			sequenceEnd: 5,
+			sequenceId: "seq",
+		});
+		const edited = planCorrection({
+			cue,
+			text: "Ship it!",
+			scope: "cue",
+			captions,
+			sequenceId: "seq",
+		});
+		if (edited.scope !== "cue") throw new Error("expected a cue correction");
+		// A split before the words: they now play through a new clip.
+		const split = tracksWith([
+			videoClip({ id: "first", start: 0, duration: 0.5 }),
+			videoClip({ id: "right", start: 0.5, duration: 4.5, trimStart: 0.5 }),
+		]);
+		expect(
+			cueTexts(
+				buildCaptionCues({
+					tracks: split,
+					captions: edited.captions,
+					sequenceEnd: 5,
+					sequenceId: "seq",
+				}),
+			),
+		).toEqual(["Ship it!"]);
+		// The edited placement removed; the other one keeps the transcript.
+		const onlyOther = tracksWith([videoClip({ id: "again", start: 10, duration: 5 })]);
+		expect(
+			cueTexts(
+				buildCaptionCues({
+					tracks: onlyOther,
+					captions: edited.captions,
+					sequenceEnd: 15,
+					sequenceId: "seq",
+				}),
+			),
+		).toEqual(["Ship it."]);
+	});
+});
+
+describe("re-correcting corrected words", () => {
+	test("a second project correction replaces the first one's wording", () => {
+		const captions = captionsOf([
+			...speak(1, "Deploy to versel."),
+			...speak(4, "I love versel."),
+		]);
+		const build = (current: ProjectCaptions) =>
+			buildCaptionCues({ tracks: whole, captions: current, sequenceEnd: 120 });
+		const first = planCorrection({
+			cue: build(captions)[0],
+			text: "Deploy to Vercel.",
+			scope: "project",
+			captions,
+		});
+		if (first.scope !== "project") throw new Error("expected a project correction");
+		expect(cueTexts(build(first.captions))).toEqual([
+			"Deploy to Vercel.",
+			"I love Vercel.",
+		]);
+
+		const second = planCorrection({
+			cue: build(first.captions)[1],
+			text: "I love Vercel.io.",
+			scope: "project",
+			captions: first.captions,
+		});
+		if (second.scope !== "project") throw new Error("expected a project correction");
+		expect(second.replacement).toEqual({ from: "versel", to: "Vercel.io" });
+		expect(second.captions.replacements).toEqual([{ from: "versel", to: "Vercel.io" }]);
+		expect(cueTexts(build(second.captions))).toEqual([
+			"Deploy to Vercel.io.",
+			"I love Vercel.io.",
+		]);
+
+		// Typing the transcript's word back drops the correction.
+		const back = planCorrection({
+			cue: build(second.captions)[0],
+			text: "Deploy to versel.",
+			scope: "project",
+			captions: second.captions,
+		});
+		if (back.scope !== "project") throw new Error("expected a project correction");
+		expect(back.captions.replacements).toEqual([]);
+	});
+
+	test("re-correcting a spelling's words names the transcript's words", () => {
+		const captions = captionsOf(speak(1, "Use next js daily."));
+		const [cue] = buildCaptionCues({
+			tracks: whole,
+			captions,
+			spellings: [{ from: "next js", to: "Next JS" }],
+			sequenceEnd: 120,
+		});
+		expect(cue.text).toBe("Use Next JS daily.");
+		// Changing one word of the spelling's text changes the whole spelling.
+		expect(correctionWords({ cue, text: "Use Next.js daily." })).toEqual({
+			from: "next js",
+			to: "Next.js",
+		});
+		expect(
+			planCorrection({ cue, text: "Use Next.js daily.", scope: "spelling", captions }),
+		).toEqual({ scope: "spelling", replacement: { from: "next js", to: "Next.js" } });
+		// Words no correction shaped are named as they are.
+		expect(correctionWords({ cue, text: "Use Next JS weekly." })).toEqual({
+			from: "daily",
+			to: "weekly",
+		});
+	});
+});
+
+describe("replacements stay within a phrase", () => {
+	const fix = { replacements: [{ from: "next js", to: "Next.js" }] };
+
+	test("not across a long pause, a sentence end, or a change of recording", () => {
+		const cues = buildCaptionCues({
+			tracks: whole,
+			captions: captionsOf(
+				[
+					...speak(1, "I use next"),
+					// Two seconds of silence.
+					...speak(3.65, "js daily."),
+					...speak(8, "Go next."),
+					...speak(8.7, "Js is fine."),
+					...speak(12, "I use next js."),
+				],
+				fix,
+			),
+			sequenceEnd: 120,
+		});
+		expect(cueTexts(cues)).toEqual([
+			"I use next",
+			"js daily.",
+			"Go next.",
+			"Js is fine.",
+			"I use Next.js.",
+		]);
+
+		const voice = { ...audioClip({ id: "voice", start: 0, duration: 10 }), mediaId: "other" };
+		const tracks = tracksWith([videoClip({ id: "a", start: 0, duration: 1.4 })]);
+		tracks.audio = [
+			{
+				...buildEmptyTrack({ id: "voice-track", type: "audio", name: "Voice" }),
+				clips: [voice],
+			},
+		];
+		const across = buildCaptionCues({
+			tracks,
+			captions: {
+				sources: [
+					{ projectItemId: "rec", words: speak(1, "next") },
+					{ projectItemId: "other", words: speak(1.35, "js rocks") },
+				],
+				cueEdits: [],
+				replacements: fix.replacements,
+			},
+			sequenceEnd: 10,
+		});
+		expect(across.map(({ text }) => text).join(" ")).toBe("next js rocks");
+	});
+
+	test("a replacement that names a sentence end itself still applies", () => {
+		const cues = buildCaptionCues({
+			tracks: whole,
+			captions: captionsOf(speak(1, "Visit St. Louis today"), {
+				replacements: [{ from: "St. Louis", to: "Saint Louis" }],
+			}),
+			sequenceEnd: 120,
+		});
+		expect(cueTexts(cues)).toEqual(["Visit Saint Louis today"]);
+	});
+});
+
+describe("saved captions", () => {
+	test("a bad entry drops alone, keeping the transcripts and other corrections", () => {
+		const words = speak(1, "Use git.");
+		const saved = {
+			sources: [{ projectItemId: "rec", words }, { projectItemId: "", words: [] }],
+			cueEdits: [
+				{ words: [{ projectItemId: "rec", index: 0 }], text: "x".repeat(1001) },
+				{ words: [{ projectItemId: "rec", index: 1 }], text: "Git." },
+			],
+			replacements: [{ from: "git", to: "Git" }, { from: "", to: "x" }],
+		};
+		expect(parseProjectCaptions(saved)).toEqual({
+			sources: [{ projectItemId: "rec", words }],
+			cueEdits: [{ words: [{ projectItemId: "rec", index: 1 }], text: "Git." }],
+			replacements: [{ from: "git", to: "Git" }],
+		});
+		expect(parseProjectCaptions(undefined)).toBeUndefined();
+		expect(parseProjectCaptions("nonsense")).toBeUndefined();
+	});
+});
+

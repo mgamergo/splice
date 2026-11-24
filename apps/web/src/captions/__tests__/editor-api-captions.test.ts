@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { CAPTION_TRACK_NAME } from "@/agent/captions";
 import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
+import { setCaptionSources } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import { buildDefaultSequence } from "@/timeline/sequences";
@@ -163,4 +164,86 @@ describe("Horizontal captions through the editor API", () => {
 			code: "INVALID_OP",
 		});
 	});
+
+	test("saving a spelling for words the project corrected drops that project correction", async () => {
+		const { editor, api } = horizontalEditor();
+		api.addCaptions({ expectedRevision: api.getRevision(), sources });
+		useCaptionsStore.setState({
+			spellingsLoaded: true,
+			saveSpelling: async (spelling) => {
+				useCaptionsStore.setState({ spellings: [spelling] });
+			},
+		});
+		let listed = (await api.captionCues({})) as Listed;
+		await api.correctCaption({
+			expectedRevision: listed.revision,
+			cueId: listed.cues[0].id,
+			text: "Open Next.js.",
+			scope: "project",
+		});
+		listed = (await api.captionCues({})) as Listed;
+		const result = await api.correctCaption({
+			expectedRevision: listed.revision,
+			cueId: listed.cues[1].id,
+			text: "Then NextJS again.",
+			scope: "spelling",
+		});
+		// The spelling names the transcript's words, not the project's fix.
+		expect(result).toMatchObject({ ok: true, replaced: { from: "next js", to: "NextJS" } });
+		expect(editor.project.getActive().captions?.replacements).toEqual([]);
+		listed = (await api.captionCues({})) as Listed;
+		expect(listed.cues.map(({ text }) => text)).toEqual([
+			"Open NextJS.",
+			"Then NextJS again.",
+		]);
+	});
+
+	test("a correction too long to save is refused and nothing is stored", async () => {
+		const { editor, api } = horizontalEditor();
+		api.addCaptions({ expectedRevision: api.getRevision(), sources });
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const listed = (await api.captionCues({})) as Listed;
+		const before = editor.project.getActive().captions;
+		expect(
+			await api.correctCaption({
+				expectedRevision: listed.revision,
+				cueId: listed.cues[0].id,
+				text: `Open ${"x".repeat(300)}.`,
+				scope: "project",
+			}),
+		).toMatchObject({ ok: false, code: "INVALID_OP" });
+		expect(
+			await api.correctCaption({
+				expectedRevision: listed.revision,
+				cueId: listed.cues[0].id,
+				text: "x".repeat(1001),
+			}),
+		).toMatchObject({ ok: false });
+		expect(editor.project.getActive().captions).toBe(before);
+		expect(api.getRevision()).toBe(listed.revision);
+	});
+
+	test("checks the revision after the spellings load, so an edit meanwhile is a conflict", async () => {
+		const { editor, api } = horizontalEditor();
+		api.addCaptions({ expectedRevision: api.getRevision(), sources });
+		const listed = (await api.captionCues({})) as Listed;
+		let release: () => void = () => {};
+		useCaptionsStore.setState({
+			spellingsLoaded: false,
+			loadSpellings: () =>
+				new Promise((resolve) => {
+					release = () => resolve([]);
+				}),
+		});
+		const correcting = api.correctCaption({
+			expectedRevision: listed.revision,
+			cueId: listed.cues[0].id,
+			text: "Open Next.js.",
+		});
+		// The creator edits while the spellings load.
+		setCaptionSources({ editor, sources: [...sources] });
+		release();
+		expect(await correcting).toMatchObject({ ok: false, code: "REVISION_CONFLICT" });
+	});
 });
+
