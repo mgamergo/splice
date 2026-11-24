@@ -35,12 +35,14 @@ export function stubFetch(
 	respond: (init: RequestInit | undefined) => Promise<Response>,
 ) {
 	const signals: AbortSignal[] = [];
+	const urls: string[] = [];
 	let requested: () => void = () => {};
 	const firstRequest = new Promise<void>((resolve) => {
 		requested = resolve;
 	});
 	// fetch's own signature, so positional.
-	const stub = (...[, init]: Parameters<typeof fetch>) => {
+	const stub = (...[input, init]: Parameters<typeof fetch>) => {
+		urls.push(input instanceof Request ? input.url : String(input));
 		if (init?.signal) signals.push(init.signal);
 		requested();
 		return respond(init);
@@ -48,7 +50,7 @@ export function stubFetch(
 	fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
 		Object.assign(stub, { preconnect: globalThis.fetch.preconnect }),
 	);
-	return { signals, firstRequest };
+	return { signals, urls, firstRequest };
 }
 
 /** The promise's outcome, or "pending" if it hasn't settled in time. */

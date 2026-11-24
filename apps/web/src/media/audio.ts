@@ -20,7 +20,12 @@ import { canTrackHaveAudio } from "@/timeline";
 import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, AudioBufferSink } from "mediabunny";
-import { createMediaSource, isDiskMedia, playableProjectItems } from "@/media/media-data";
+import {
+	clipAudioMedia,
+	createMediaSource,
+	isDiskMedia,
+	playableProjectItems,
+} from "@/media/media-data";
 import {
 	createAudioRangeAssembler,
 	getClipSourceRange,
@@ -185,6 +190,7 @@ async function* collectAudioClips({
 				: projectItem
 					? await resolveAudioBufferForProjectItem({
 							projectItem,
+							file: clipAudioMedia({ clip, projectItem }).file,
 							range: getClipSourceRange({
 								trimStart,
 								duration,
@@ -235,6 +241,7 @@ async function resolveAudioBufferForClip({
 			if (!projectItem) return null;
 			return await resolveAudioBufferForProjectItem({
 				projectItem,
+				file: clipAudioMedia({ clip, projectItem }).file,
 				range: getClipSourceRange({
 					trimStart: clip.trimStart / TICKS_PER_SECOND,
 					duration: clip.duration / TICKS_PER_SECOND,
@@ -268,20 +275,23 @@ async function resolveAudioBufferForClip({
 
 async function resolveAudioBufferForProjectItem({
 	projectItem,
+	file,
 	range,
 	audioContext,
 	signal,
 }: {
 	projectItem: ProjectItem;
+	/** The item's file, or what `clipAudioMedia` reads the clip's audio from. */
+	file: MediaData;
 	range: SourceRange;
 	audioContext: AudioContext;
 	signal?: AbortSignal;
 }): Promise<DecodedClipAudio | null> {
 	// An uploaded audio file is already in memory, so it decodes in one go.
 	// Everything else, recordings on disk above all, decodes only the range.
-	if (projectItem.type === "audio" && !isDiskMedia(projectItem.file)) {
+	if (projectItem.type === "audio" && !isDiskMedia(file)) {
 		try {
-			const arrayBuffer = await projectItem.file.arrayBuffer();
+			const arrayBuffer = await file.arrayBuffer();
 			return {
 				buffer: await audioContext.decodeAudioData(arrayBuffer.slice(0)),
 				start: 0,
@@ -294,7 +304,7 @@ async function resolveAudioBufferForProjectItem({
 
 	try {
 		const buffer = await decodeAudioRange({
-			file: projectItem.file,
+			file,
 			range,
 			sampleRate: audioContext.sampleRate,
 			signal,
@@ -491,7 +501,7 @@ function collectMediaAudioSource({
 }): AudioMixSource {
 	return {
 		timelineClip: clip,
-		file: projectItem.file,
+		file: clipAudioMedia({ clip, projectItem }).file,
 		startTime: clip.startTime / TICKS_PER_SECOND,
 		duration: clip.duration / TICKS_PER_SECOND,
 		trimStart: clip.trimStart / TICKS_PER_SECOND,
@@ -512,11 +522,12 @@ function collectMediaAudioClip({
 	muted: boolean;
 	volume: number;
 }): AudioClipSource {
+	const { file, sourceKey } = clipAudioMedia({ clip, projectItem });
 	return {
 		timelineClip: clip,
 		id: clip.id,
-		sourceKey: projectItem.id,
-		file: projectItem.file,
+		sourceKey,
+		file,
 		startTime: clip.startTime / TICKS_PER_SECOND,
 		duration: clip.duration / TICKS_PER_SECOND,
 		trimStart: clip.trimStart / TICKS_PER_SECOND,

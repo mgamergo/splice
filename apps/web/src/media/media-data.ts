@@ -1,4 +1,9 @@
-import { isFootagePath, mediaUrlForPath } from "@splice/bridge";
+import {
+	denoisedAudioUrlForPath,
+	isFootagePath,
+	mediaUrlForPath,
+} from "@splice/bridge";
+import { type AudioCapableClip, isNoiseReduced } from "@/timeline/audio-state";
 import { BlobSource, UrlSource, type Source } from "mediabunny";
 import { ensureMediaSession } from "@/bridge/media-session";
 import type { DiskMedia, MediaData, ProjectItem } from "./types";
@@ -37,6 +42,32 @@ function createAbortableFetch({ signal }: { signal: AbortSignal }): typeof fetch
 			signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
 		});
 	return Object.assign(abortableFetch, { preconnect: fetch.preconnect });
+}
+
+/**
+ * Where a clip's audio is read from, and a key for caching what's decoded from
+ * it. With noise reduction on, a disk item's audio comes from the WAV `splice`
+ * renders, so playback and export hear the same thing; the file itself is
+ * never changed. Items stored in the browser have no render and play as is.
+ */
+export function clipAudioMedia({
+	clip,
+	projectItem,
+}: {
+	clip: AudioCapableClip;
+	projectItem: ProjectItem;
+}): { file: MediaData; sourceKey: string } {
+	const { file } = projectItem;
+	if (!isNoiseReduced({ clip }) || !isDiskMedia(file))
+		return { file, sourceKey: projectItem.id };
+	return {
+		file: {
+			...file,
+			url: denoisedAudioUrlForPath(file.path),
+			type: "audio/wav",
+		},
+		sourceKey: `${projectItem.id}:denoised`,
+	};
 }
 
 /**

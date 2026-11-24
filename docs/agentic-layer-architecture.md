@@ -132,7 +132,8 @@ project items: rec-01.mkv (42:10, 1080p, audio), rec-02.mkv (06:30)
 | Rank takes | agent | Completeness, then fluency, then pacing, guided by `profile.md`. |
 | Find false starts and filler words | agent and `splice` | Transcript patterns plus word timings. |
 | Build the cut | tab | Create the **Rough Cut** sequence from the raw sequence with one `apply()`: ripple deletes plus removal markers. |
-| Loudness | `splice` and tab | FFmpeg `ebur128` measures; a gain param applies the correction. |
+| Noise reduction (off by default) | `splice` and tab | FFmpeg renders a cleaned WAV of each recording into `Cache\`; a clip param makes playback and export read it. |
+| Loudness | `splice` and tab | FFmpeg `ebur128` measures, after noise reduction when it's on; a gain param applies the correction. |
 | Captions (Shorts) | tab | Word-by-word captions from the same transcript. |
 
 A **removal marker** stores the bad takes it replaced, as source ranges. **Restore** and **Swap** apply ordinary undoable edits built from that data, so they keep working after any amount of later editing.
@@ -163,7 +164,7 @@ Built on the official MCP TypeScript SDK, over stdio. The tools:
 | Project | `project_create` (format: horizontal or Short), `project_open`, `project_list` |
 | Project items | `items_import` (paths under `D:\Splice\Footage`), `items_list`, `items_probe` |
 | Read | `sequence_get` (digest or full), `frame_render` |
-| Edit | `sequence_apply` (a batch of `EditOp`s), `normalize_loudness` |
+| Edit | `sequence_apply` (a batch of `EditOp`s), `normalize_loudness`, `noise_reduction` |
 | Analysis | `transcribe`, `detect_pauses`, `measure_loudness` |
 | Rough cut | `rough_cut` (the whole pipeline in §5, as one undo step), `takes_list` |
 | Profile | `profile_get`, `profile_pending`, `profile_apply` |

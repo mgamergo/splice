@@ -53,6 +53,10 @@ _Avoid_: Split, cut (as a verb for this tool)
 **Ripple delete**:
 Removing a clip or gap and closing the resulting gap by shifting later clips earlier.
 
+**Noise reduction**:
+A per-clip setting, off by default, that plays and exports a cleaned copy of the clip's recording audio in place of the source; the recording itself is never changed. Shown as **Reduce noise** in the clip's audio properties.
+_Avoid_: Noise removal, noise suppression
+
 ### Takes
 
 **Section**:

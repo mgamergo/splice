@@ -1,5 +1,13 @@
 import { afterEach, expect, type Mock, spyOn, test } from "bun:test";
-import { audioClip, s } from "@/agent/__tests__/fixtures";
+import { denoisedAudioUrlForPath } from "@splice/bridge";
+import { audioClip, s, videoClip } from "@/agent/__tests__/fixtures";
+import type { ProjectItem } from "@/media/types";
+import {
+	recording,
+	restoreFetch,
+	stubFetch,
+	untilAborted,
+} from "./stub-fetch";
 import { createTimelineAudioBuffer } from "@/media/audio";
 import type { LibraryAudioClip, SequenceTracks } from "@/timeline";
 import { buildDefaultSequence } from "@/timeline/sequences";
@@ -9,6 +17,7 @@ let fetchSpy: Mock<typeof fetch> | null = null;
 afterEach(() => {
 	fetchSpy?.mockRestore();
 	fetchSpy = null;
+	restoreFetch();
 });
 
 function librarySound({
@@ -78,4 +87,48 @@ test("a cancelled export stops mixing audio instead of decoding the clips left",
 
 	await expect(mix).rejects.toMatchObject({ name: "AbortError" });
 	expect(fetchSpy?.mock.calls).toHaveLength(1);
+});
+
+test("the export decodes a noise-reduced clip's range from splice's WAV render", async () => {
+	const { tracks: defaults } = buildDefaultSequence({
+		name: "Main sequence",
+		isMain: true,
+	});
+	const tracks: SequenceTracks = {
+		...defaults,
+		main: {
+			...defaults.main,
+			clips: [
+				{
+					...videoClip({ id: "denoised", start: 0, duration: 2, trimStart: 10 }),
+					params: { noiseReduction: true },
+				},
+			],
+		},
+	};
+	const item: ProjectItem = {
+		id: "rec",
+		name: "rec",
+		type: "video",
+		duration: 60,
+		hasAudio: true,
+		file: recording,
+	};
+	const { urls, firstRequest } = stubFetch((init) => untilAborted(init?.signal));
+
+	const controller = new AbortController();
+	const mix = createTimelineAudioBuffer({
+		tracks,
+		projectItems: [item],
+		duration: s(2),
+		audioContext: { sampleRate: 44100 } as AudioContext,
+		signal: controller.signal,
+	});
+	await firstRequest;
+	controller.abort();
+
+	await expect(mix).rejects.toMatchObject({ name: "AbortError" });
+	const denoisedUrl = denoisedAudioUrlForPath(recording.path);
+	expect(urls.length).toBeGreaterThan(0);
+	expect(urls.every((url) => url.endsWith(denoisedUrl))).toBe(true);
 });

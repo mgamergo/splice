@@ -17,7 +17,11 @@ import {
 	type VideoClip,
 	updateClipInSequenceTracks,
 } from "@/timeline";
-import { hasAnimatedVolume, isClipMuted } from "@/timeline/audio-state";
+import {
+	hasAnimatedVolume,
+	isClipMuted,
+	isNoiseReduced,
+} from "@/timeline/audio-state";
 import { addMediaTime, mediaTimeToSeconds, roundMediaTime } from "@/wasm";
 
 export class LoudnessError extends Error {}
@@ -26,10 +30,10 @@ export function formatGain(gainDb: number): string {
 	return `${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)} dB`;
 }
 
-type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
+export type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
 
 /** Clips whose project item audio reaches playback and export, in track order. */
-function audibleClips({
+export function audibleClips({
 	tracks,
 	projectItems,
 }: {
@@ -54,10 +58,34 @@ function audibleClips({
 	});
 }
 
+function footagePath(item: ProjectItem | undefined): string | null {
+	return item && isDiskMedia(item.file) ? item.file.path : null;
+}
+
+/** Browser-stored items have no noise-reduced render to play. */
+function playsDenoised({
+	clip,
+	item,
+}: {
+	clip: AudibleClip;
+	item: ProjectItem | undefined;
+}): boolean {
+	return footagePath(item) !== null && isNoiseReduced({ clip });
+}
+
+const sourceKey = ({
+	projectItemId,
+	noiseReduction,
+}: {
+	projectItemId: string;
+	noiseReduction: boolean;
+}) => `${projectItemId}:${noiseReduction}`;
+
 /**
  * Each project item's audible source ranges in a sequence, one per clip, for
- * measuring loudness. Missing items are listed, so the report can say they
- * were skipped.
+ * measuring loudness. Clips of one item with noise reduction on and off are
+ * separate sources, since they sound different. Missing items are listed, so
+ * the report can say they were skipped.
  */
 export function collectAudioSources({
 	tracks,
@@ -79,17 +107,21 @@ export function collectAudioSources({
 			}),
 		});
 		if (span <= 0) continue;
-		let source = sources.get(clip.mediaId);
+		const item = projectItems.find(({ id }) => id === clip.mediaId);
+		const path = footagePath(item);
+		const noiseReduction = playsDenoised({ clip, item });
+		const key = sourceKey({ projectItemId: clip.mediaId, noiseReduction });
+		let source = sources.get(key);
 		if (!source) {
-			const item = projectItems.find(({ id }) => id === clip.mediaId);
 			source = {
 				projectItemId: clip.mediaId,
-				path: item && isDiskMedia(item.file) ? item.file.path : null,
+				path,
+				noiseReduction,
 				missing: item?.missing === true,
 				clipIds: [],
 				ranges: [],
 			};
-			sources.set(clip.mediaId, source);
+			sources.set(key, source);
 		}
 		source.clipIds.push(clip.id);
 		source.ranges.push({
@@ -103,8 +135,9 @@ export function collectAudioSources({
 }
 
 /**
- * Sets the volume of every audible clip of each listed project item. Gains are
- * absolute, since they come from measuring the source itself.
+ * Sets the volume of every audible clip of each listed project item, with its
+ * noise reduction on or off as the gain says. Gains are absolute, since they
+ * come from measuring the source itself.
  */
 export function applySourceGains({
 	tracks,
@@ -115,12 +148,21 @@ export function applySourceGains({
 	projectItems: ProjectItem[];
 	gains: SourceGain[];
 }): SequenceTracks {
-	const byItem = new Map(
-		gains.map((gain) => [gain.projectItemId, gain.gainDb]),
+	const items = new Map(projectItems.map((item) => [item.id, item]));
+	const bySource = new Map(
+		gains.map(({ projectItemId, noiseReduction = false, gainDb }) => [
+			sourceKey({ projectItemId, noiseReduction }),
+			gainDb,
+		]),
 	);
 	let updated = tracks;
 	for (const { trackId, clip } of audibleClips({ tracks, projectItems })) {
-		const volume = byItem.get(clip.mediaId);
+		const volume = bySource.get(
+			sourceKey({
+				projectItemId: clip.mediaId,
+				noiseReduction: playsDenoised({ clip, item: items.get(clip.mediaId) }),
+			}),
+		);
 		if (volume === undefined) continue;
 		if (hasAnimatedVolume({ clip }))
 			throw new LoudnessError(
