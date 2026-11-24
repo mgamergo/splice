@@ -103,8 +103,30 @@ export function unionSpans<T extends Span>(spans: T[]): T[] {
 	return merged;
 }
 
+/** The parts of `area` outside the sorted, disjoint `holes`. */
+export function outsideHoles({
+	area,
+	holes,
+}: {
+	area: Span;
+	holes: Span[];
+}): Span[] {
+	const kept: Span[] = [];
+	let start = area.start;
+	for (
+		let i = firstEndingAfter({ spans: holes, at: area.start });
+		i < holes.length && holes[i].start < area.end;
+		i++
+	) {
+		if (holes[i].start > start) kept.push({ start, end: holes[i].start });
+		start = Math.max(start, holes[i].end);
+	}
+	if (area.end > start) kept.push({ start, end: area.end });
+	return kept;
+}
+
 /** The parts of `within` outside every span in `without`, sorted and disjoint. */
-function subtractSpans({
+export function subtractSpans({
 	within,
 	without,
 }: {
@@ -112,18 +134,7 @@ function subtractSpans({
 	without: Span[];
 }): Span[] {
 	const holes = unionSpans(without);
-	const kept: Span[] = [];
-	let first = 0;
-	for (const area of unionSpans(within)) {
-		while (first < holes.length && holes[first].end <= area.start) first++;
-		let start = area.start;
-		for (let i = first; i < holes.length && holes[i].start < area.end; i++) {
-			if (holes[i].start > start) kept.push({ start, end: holes[i].start });
-			start = Math.max(start, holes[i].end);
-		}
-		if (area.end > start) kept.push({ start, end: area.end });
-	}
-	return kept;
+	return unionSpans(within).flatMap((area) => outsideHoles({ area, holes }));
 }
 
 /** Index of the first of the sorted, disjoint `spans` that ends after `at`. */
@@ -182,41 +193,66 @@ export function countOverlapping({
 	).length;
 }
 
+/** Index of the first of the ascending `values` above `at`. */
+function firstAbove({ values, at }: { values: number[]; at: number }) {
+	let low = 0;
+	let high = values.length;
+	while (low < high) {
+		const middle = (low + high) >> 1;
+		if (values[middle] <= at) low = middle + 1;
+		else high = middle;
+	}
+	return low;
+}
+
 /**
  * Widens cuts over the slivers they would leave: any piece of a clip, or any
- * gap between two cuts, shorter than `minimum`. `edges` are the clip
- * boundaries on every track.
+ * gap between two cuts, shorter than `minimum`. `clips` are the clip bounds on
+ * every track. Each edge moves to the bound of a clip it would leave a sliver
+ * of, then checks again from there, so a clip that starts just before another
+ * one isn't left with the difference.
  */
 export function closeSlivers<T extends Span>({
 	cuts,
-	edges,
+	clips,
 	minimum,
 }: {
 	cuts: T[];
-	edges: Array<T["start"]>;
+	clips: Array<Pick<T, "start" | "end">>;
 	minimum: number;
 }): T[] {
-	const sorted = [...new Set(edges)].sort((a, b) => a - b);
-	// Cuts come sorted from unionSpans, so one pointer walks the edges.
-	let next = 0;
-	const widened = unionSpans(cuts).map((cut) => {
-		while (next < sorted.length && sorted[next] < cut.start) next++;
-		const previous = next > 0 ? sorted[next - 1] : undefined;
-		let after = next;
-		while (after < sorted.length && sorted[after] <= cut.end) after++;
-		const following = sorted[after];
-		return {
-			...cut,
-			start:
-				previous !== undefined && cut.start - previous < minimum
-					? previous
-					: cut.start,
-			end:
-				following !== undefined && following - cut.end < minimum
-					? following
-					: cut.end,
-		};
-	});
+	const byStart = [...clips].sort((a, b) => a.start - b.start);
+	const byEnd = [...clips].sort((a, b) => a.end - b.end);
+	const starts = byStart.map(({ start }) => start);
+	const ends = byEnd.map(({ end }) => end);
+	const widenStart = (at: T["start"]) => {
+		for (;;) {
+			// Sorted by start, so the first clip the edge would leave a sliver of reaches furthest back.
+			let i = firstAbove({ values: starts, at: at - minimum });
+			while (i < byStart.length && byStart[i].start < at && byStart[i].end < at)
+				i++;
+			if (i === byStart.length || byStart[i].start >= at) return at;
+			at = byStart[i].start;
+		}
+	};
+	const widenEnd = (at: T["start"]) => {
+		for (;;) {
+			let reach = at;
+			for (
+				let i = firstAbove({ values: ends, at });
+				i < byEnd.length && byEnd[i].end - at < minimum;
+				i++
+			)
+				if (byEnd[i].start <= at) reach = byEnd[i].end;
+			if (reach === at) return at;
+			at = reach;
+		}
+	};
+	const widened = unionSpans(cuts).map((cut) => ({
+		...cut,
+		start: widenStart(cut.start),
+		end: widenEnd(cut.end),
+	}));
 	const closed: T[] = [];
 	for (const cut of unionSpans(widened)) {
 		const last = closed.at(-1);

@@ -315,7 +315,7 @@ export const roughCutRequestSchema = roughCutBaseSchema.extend({
 		.union([z.literal("auto"), z.array(itemRangeSchema)])
 		.default("auto")
 		.describe(
-			'"auto" (the default) removes the pauses detect_pauses finds in every recording on the source sequence. Or pass silence ranges with project item IDs, or [] to keep every pause.',
+			'"auto" (the default) removes the pauses detect_pauses finds in every recording heard on the source sequence, where every recording heard there is silent. Or pass silence ranges with project item IDs, or [] to keep every pause.',
 		),
 	pauseDetection: z
 		.strictObject({

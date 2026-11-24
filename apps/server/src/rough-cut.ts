@@ -7,7 +7,7 @@ type Failure = Extract<RoughCutSources, { ok: false }>;
 /**
  * Turns the agent's `rough_cut` request into the explicit plan the tab
  * applies: `pauses: "auto"` becomes detect_pauses ranges and
- * `removeFillerWords` becomes filler cuts, for every recording on the
+ * `removeFillerWords` becomes filler cuts, for every recording heard on the
  * source sequence. Anything the schema rejects goes to the tab unchanged, so
  * the creator sees one kind of validation error.
  */

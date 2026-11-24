@@ -9,6 +9,7 @@ import { CaptionError, withCaptionTrack } from "@/agent/captions";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	applySourceGains,
+	audibleClips,
 	collectAudioSources,
 	formatGain,
 	LoudnessError,
@@ -180,27 +181,27 @@ export class EditorApi {
 		);
 	}
 
-	/** The recordings on a rough cut's source sequence, so `splice` can find their pauses. */
+	/**
+	 * The recordings heard on a rough cut's source sequence, so `splice` can
+	 * find their pauses. A recording only on muted tracks or clips, or with its
+	 * audio turned off, isn't listed: its silences say nothing about what plays.
+	 */
 	roughCutSources(request: unknown): RoughCutSources {
 		const parsed = roughCutSourcesRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const source = this.findRoughCutSource(parsed.data);
 		if ("ok" in source) return source;
-		const used = new Set(
-			allTracks({ tracks: source.tracks }).flatMap(({ clips }) =>
-				clips.flatMap((clip) =>
-					(clip.type === "video" || clip.type === "audio") && "mediaId" in clip
-						? [clip.mediaId]
-						: [],
-				),
+		const projectItems = this.editor.media.getProjectItems();
+		const heard = new Set(
+			audibleClips({ tracks: source.tracks, projectItems }).map(
+				({ clip }) => clip.mediaId,
 			),
 		);
 		return {
 			ok: true,
 			sequenceId: source.id,
-			items: this.editor.media
-				.getProjectItems()
-				.filter(({ id }) => used.has(id))
+			items: projectItems
+				.filter(({ id }) => heard.has(id))
 				.map((item) => {
 					const { id, name, path } = summarizeItem(item);
 					return { id, name, path };

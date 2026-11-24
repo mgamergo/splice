@@ -1,7 +1,4 @@
-import {
-	type AudioSource,
-	type SourceGain,
-} from "@splice/bridge/ops";
+import { type AudioSource, type SourceGain } from "@splice/bridge/ops";
 import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
 import { getSourceSpanAtClipTime } from "@/retime";
@@ -26,10 +23,10 @@ export function formatGain(gainDb: number): string {
 	return `${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)} dB`;
 }
 
-type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
+export type AudibleClip = Extract<AudioClip | VideoClip, { mediaId: string }>;
 
 /** Clips whose project item audio reaches playback and export, in track order. */
-function audibleClips({
+export function audibleClips({
 	tracks,
 	projectItems,
 }: {

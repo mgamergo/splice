@@ -1,14 +1,24 @@
 import type { RoughCutPlan, ItemRange } from "@splice/bridge/ops";
+import { audibleClips } from "@/agent/loudness";
 import {
 	closeSlivers,
 	countOverlapping,
 	measureSpans,
+	outsideHoles,
 	planTightenCuts,
+	subtractSpans,
+	unionSpans,
 } from "@/agent/tighten";
 import type { ProjectItem } from "@/media/types";
 import {
+	getClipTimeAtSourceTime,
+	getSourceSpanAtClipTime,
+	getSourceTimeAtClipTime,
+} from "@/retime";
+import {
 	calculateTotalDuration,
 	type RemovalMarker,
+	type SequenceTracks,
 	type TimelineClip,
 	type TSequence,
 } from "@/timeline";
@@ -110,6 +120,111 @@ function clampToItems({
 	});
 }
 
+/** The sequence with only the clips whose recording is heard. */
+function heardTracks({
+	tracks,
+	projectItems,
+}: {
+	tracks: SequenceTracks;
+	projectItems: ProjectItem[];
+}): SequenceTracks {
+	const heard = new Set(
+		audibleClips({ tracks, projectItems }).map(({ clip }) => clip.id),
+	);
+	const keep = (clip: TimelineClip) => heard.has(clip.id);
+	return {
+		main: { ...tracks.main, clips: tracks.main.clips.filter(keep) },
+		overlay: tracks.overlay.flatMap((track) =>
+			track.type === "video"
+				? [{ ...track, clips: track.clips.filter(keep) }]
+				: [],
+		),
+		audio: tracks.audio.map((track) => ({
+			...track,
+			clips: track.clips.filter(keep),
+		})),
+	};
+}
+
+/**
+ * The parts of each pause where every recording heard on the sequence is
+ * silent, in source seconds, one list per pause. A ripple delete cuts every
+ * track, so a pause in a muted clip, or under another recording's sound,
+ * isn't cut.
+ */
+export function audiblePauses({
+	tracks,
+	pauses,
+	projectItems,
+}: {
+	tracks: SequenceTracks;
+	pauses: ItemRange[];
+	projectItems: ProjectItem[];
+}): ItemRange[][] {
+	const placed = audibleClips({ tracks, projectItems }).map(({ clip }) => {
+		const { startTime, trimStart, retime } = clip;
+		const toSequence = (source: number) =>
+			startTime +
+			getClipTimeAtSourceTime({ sourceTime: source - trimStart, retime });
+		const toSource = (time: number) =>
+			mediaTimeToSeconds({
+				time: roundMediaTime({
+					time:
+						trimStart +
+						getSourceTimeAtClipTime({ clipTime: time - startTime, retime }),
+				}),
+			});
+		const sourceIn = mediaTimeToSeconds({ time: trimStart });
+		const sourceOut = mediaTimeToSeconds({
+			time: addMediaTime({
+				a: trimStart,
+				b: roundMediaTime({
+					time: getSourceSpanAtClipTime({ clipTime: clip.duration, retime }),
+				}),
+			}),
+		});
+		const silent = pauses.flatMap((pause, index) => {
+			if (pause.projectItemId !== clip.mediaId) return [];
+			const from = Math.max(pause.sourceIn, sourceIn);
+			const to = Math.min(pause.sourceOut, sourceOut);
+			if (to <= from) return [];
+			return [
+				{
+					index,
+					start: toSequence(mediaTimeFromSeconds({ seconds: from })),
+					end: toSequence(mediaTimeFromSeconds({ seconds: to })),
+					sourceIn: from,
+					sourceOut: to,
+				},
+			];
+		});
+		const span = { start: startTime, end: startTime + clip.duration };
+		return {
+			toSource,
+			silent,
+			sounding: subtractSpans({ within: [span], without: silent }),
+		};
+	});
+	const holes = unionSpans(placed.flatMap(({ sounding }) => sounding));
+	const pieces: Array<Array<{ start: number; end: number }>> = pauses.map(
+		() => [],
+	);
+	for (const { toSource, silent } of placed)
+		for (const window of silent)
+			for (const { start, end } of outsideHoles({ area: window, holes }))
+				pieces[window.index].push({
+					start: start === window.start ? window.sourceIn : toSource(start),
+					end: end === window.end ? window.sourceOut : toSource(end),
+				});
+	return pieces.map((spans, index) =>
+		unionSpans(spans).map(({ start, end }) => ({
+			projectItemId: pauses[index].projectItemId,
+			sourceIn: start,
+			sourceOut: end,
+		})),
+	);
+}
+
 /** Where each source range shows in the source sequence, on any track. */
 function mapSourceRanges({
 	tracks,
@@ -206,8 +321,10 @@ export function buildRoughCut({
 		falseStarts: clampToItems({ ranges: plan.falseStarts, projectItems }),
 		fillerWords: clampToItems({ ranges: plan.fillerWords, projectItems }),
 	};
+	// Tightening cuts what plays, so a recording's muted copy elsewhere isn't cut.
+	const heard = heardTracks({ tracks: source.tracks, projectItems });
 	const map = ({ ranges, context }: { ranges: ItemRange[]; context: string }) =>
-		mapSourceRanges({ tracks: source.tracks, ranges, projectItems, context });
+		mapSourceRanges({ tracks: heard, ranges, projectItems, context });
 	const falseStarts = map({
 		ranges: clamped.falseStarts,
 		context: "False start",
@@ -215,32 +332,52 @@ export function buildRoughCut({
 	falseStarts.forEach((found, index) => {
 		if (!found.length)
 			throw new RemovalTakeError(
-				`False start ${index + 1} isn't on the source sequence. Check its project item and source times.`,
+				`False start ${index + 1} isn't heard on the source sequence. Check its project item and source times, and that its clip isn't muted.`,
 			);
 	});
 	const fillerWords = map({
 		ranges: clamped.fillerWords,
 		context: "Filler word",
 	});
-	const pauses = map({ ranges: clamped.pauses, context: "Pause" });
+	const silent = audiblePauses({
+		tracks: source.tracks,
+		pauses: clamped.pauses,
+		projectItems,
+	});
+	const pieces = map({ ranges: silent.flat(), context: "Pause" });
+	let piece = 0;
+	// One group per pause, however many silent parts it has.
+	const pauses = silent.map(({ length }) =>
+		pieces.slice(piece, (piece += length)).flat(),
+	);
 	const tightening = map({
 		ranges: planTightenCuts({
 			...clamped,
+			pauses: silent.flat(),
 			paddingSeconds: plan.pausePaddingSeconds,
 		}),
 		context: "Cut",
 	}).flat();
 	const takeCuts: Window[] = mapped.flatMap((section) => section.cuts);
+	const clips = [
+		source.tracks.main,
+		...source.tracks.overlay,
+		...source.tracks.audio,
+	]
+		.flatMap((track): TimelineClip[] => track.clips)
+		.map((clip) => ({
+			start: clip.startTime,
+			end: roundMediaTime({ time: clip.startTime + clip.duration }),
+		}));
 	const cuts = closeSlivers({
 		cuts: [...takeCuts, ...tightening],
-		edges: [
-			ZERO_MEDIA_TIME,
-			...[source.tracks.main, ...source.tracks.overlay, ...source.tracks.audio]
-				.flatMap((track): TimelineClip[] => track.clips)
-				.flatMap((clip) => [
-					clip.startTime,
-					roundMediaTime({ time: clip.startTime + clip.duration }),
-				]),
+		// The whole timeline counts as a clip, so a cut never leaves a sliver of its start or end.
+		clips: [
+			...clips,
+			{
+				start: ZERO_MEDIA_TIME,
+				end: calculateTotalDuration({ tracks: source.tracks }),
+			},
 		],
 		minimum: sliverDuration,
 	});

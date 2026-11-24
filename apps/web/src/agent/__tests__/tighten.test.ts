@@ -11,7 +11,14 @@ import {
 import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import type { EditorCore } from "@/core";
 import type { TimelineClip } from "@/timeline";
-import { type MediaTime, mediaTimeToSeconds } from "@/wasm";
+import { buildClipFromMedia } from "@/timeline/clip-utils";
+import { buildEmptyTrack } from "@/timeline/placement";
+import {
+	type MediaTime,
+	mediaTimeFromSeconds,
+	mediaTimeToSeconds,
+	ZERO_MEDIA_TIME,
+} from "@/wasm";
 
 const first = "recording-1";
 const second = "recording-2";
@@ -109,7 +116,11 @@ describe("closeSlivers", () => {
 					{ start: 16, end: 17 },
 					{ start: 17.9, end: 18 },
 				],
-				edges: [0, 12, 18.05, 24],
+				clips: [
+					{ start: 0, end: 12 },
+					{ start: 12, end: 18.05 },
+					{ start: 18.05, end: 24 },
+				],
 				minimum: 2 / 30,
 			}),
 		).toEqual([
@@ -118,6 +129,34 @@ describe("closeSlivers", () => {
 			{ start: 16, end: 17 },
 			{ start: 17.9, end: 18.05 },
 		]);
+	});
+
+	test("widens past every clip it would leave a sliver of, not just the nearest boundary", () => {
+		// Main starts 30 ms before an overlay; the cut starts 20 ms after the
+		// overlay. Widening only to the overlay would leave 30 ms of Main.
+		expect(
+			closeSlivers({
+				cuts: [{ start: 10, end: 11 }],
+				clips: [
+					{ start: 9.95, end: 20 },
+					{ start: 9.98, end: 20 },
+					{ start: 0, end: 11.02 },
+					{ start: 0, end: 11.05 },
+				],
+				minimum: 2 / 30,
+			}),
+		).toEqual([{ start: 9.95, end: 11.05 }]);
+		// A clip boundary far from the cut stays where it is.
+		expect(
+			closeSlivers({
+				cuts: [{ start: 10, end: 11 }],
+				clips: [
+					{ start: 9.5, end: 20 },
+					{ start: 9.98, end: 20 },
+				],
+				minimum: 2 / 30,
+			}),
+		).toEqual([{ start: 9.98, end: 11 }]);
 	});
 
 	test("measures each moment once", () => {
@@ -191,13 +230,15 @@ describe("span measures match a direct count", () => {
 					(group) => direct({ measured: group, within, without }) > 0,
 				).length,
 			);
-			const edges = spans(5).map(({ start }) => start);
+			const clips = spans(8);
 			const cuts = spans(5);
 			const naive = cuts
 				.sort((a, b) => a.start - b.start)
 				.map((cut) => ({ ...cut }));
-			expect(closeSlivers({ cuts, edges, minimum: 0.5 })).toEqual(
-				closeSliversDirect({ cuts: naive, edges, minimum: 0.5 }),
+			// Off the 0.1 s grid, so float error never decides a comparison.
+			const minimum = 0.45;
+			expect(closeSlivers({ cuts, clips, minimum })).toEqual(
+				closeSliversDirect({ cuts: naive, clips, minimum }),
 			);
 		},
 	);
@@ -219,7 +260,10 @@ describe("span measures match a direct count", () => {
 		expect(
 			closeSlivers({
 				cuts: pauses,
-				edges: pauses.map(({ end }) => end + 0.01),
+				clips: pauses.map(({ start, end }) => ({
+					start: start - 0.5,
+					end: end + 0.01,
+				})),
 				minimum: 0.05,
 			}),
 		).toHaveLength(10_000);
@@ -227,17 +271,16 @@ describe("span measures match a direct count", () => {
 	});
 });
 
-/** closeSlivers as first written: a linear search for each cut's neighboring edges. */
+/** closeSlivers checked directly: every clip against every cut edge until nothing moves. */
 function closeSliversDirect({
 	cuts,
-	edges,
+	clips,
 	minimum,
 }: {
 	cuts: Array<{ start: number; end: number }>;
-	edges: number[];
+	clips: Array<{ start: number; end: number }>;
 	minimum: number;
 }) {
-	const sorted = [...new Set(edges)].sort((a, b) => a - b);
 	const union: Array<{ start: number; end: number }> = [];
 	for (const cut of cuts) {
 		const last = union.at(-1);
@@ -246,15 +289,25 @@ function closeSliversDirect({
 	}
 	const widened = union
 		.map((cut) => {
-			const previous = sorted.findLast((edge) => edge < cut.start);
-			const next = sorted.find((edge) => edge > cut.end);
-			return {
-				start:
-					previous !== undefined && cut.start - previous < minimum
-						? previous
-						: cut.start,
-				end: next !== undefined && next - cut.end < minimum ? next : cut.end,
-			};
+			let { start, end } = cut;
+			for (let moved = true; moved; ) {
+				moved = false;
+				for (const clip of clips) {
+					if (
+						clip.start < start &&
+						clip.end >= start &&
+						start - clip.start < minimum
+					) {
+						start = clip.start;
+						moved = true;
+					}
+					if (clip.end > end && clip.start <= end && clip.end - end < minimum) {
+						end = clip.end;
+						moved = true;
+					}
+				}
+			}
+			return { start, end };
 		})
 		.sort((a, b) => a.start - b.start);
 	const joined: Array<{ start: number; end: number }> = [];
@@ -568,5 +621,93 @@ test("rejects a false start that isn't on the source sequence and reports source
 	expect(api.roughCutSources({ sequenceId: "missing" })).toMatchObject({
 		ok: false,
 		message: expect.stringContaining("Unknown source sequence"),
+	});
+});
+
+describe("pauses follow what plays", () => {
+	const scratch = "scratch";
+	/** A scratch recording under Main's first 12 s, on its own audio track. */
+	const addScratch = ({ muted }: { muted: boolean }) => {
+		editor.media.setProjectItems({
+			projectItems: [
+				...editor.media.getProjectItems(),
+				{
+					id: scratch,
+					name: scratch,
+					type: "audio",
+					duration: 12,
+					file: new File([], scratch),
+				},
+			],
+		});
+		const clip = buildClipFromMedia({
+			mediaId: scratch,
+			mediaType: "audio",
+			name: scratch,
+			duration: mediaTimeFromSeconds({ seconds: 12 }),
+			startTime: ZERO_MEDIA_TIME,
+		});
+		if (clip.type !== "audio") throw new Error("Not an audio clip");
+		const { tracks } = active();
+		editor.timeline.updateTracks({
+			...tracks,
+			audio: [
+				...tracks.audio,
+				{
+					...buildEmptyTrack({ id: "scratch-track", type: "audio" }),
+					muted,
+					clips: [{ ...clip, id: "scratch-clip" }],
+				},
+			],
+		});
+	};
+	const cut = (pauses: ReturnType<typeof at>[]) =>
+		api.roughCut({ expectedRevision: api.getRevision(), pauses });
+
+	test("ignores a muted track's silence under continuous audio", () => {
+		addScratch({ muted: true });
+		expect(api.roughCutSources({})).toMatchObject({
+			items: [{ id: first }, { id: second }],
+		});
+		// Main plays on; only the muted scratch track is silent.
+		expect(cut([at([scratch, 2.22, 3.817])])).toMatchObject({
+			ok: true,
+			durationSeconds: 24,
+			tightening: { pauses: { count: 0, removedSeconds: 0 } },
+		});
+	});
+
+	test("ignores a muted track's sound over a pause", () => {
+		addScratch({ muted: true });
+		const result = cut([at([first, 2, 4.5])]);
+		expect(result).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 1 } },
+		});
+		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(2.1, 3);
+		expect(result.durationSeconds).toBeCloseTo(21.9, 3);
+	});
+
+	test("cuts only where every recording heard there is silent", () => {
+		addScratch({ muted: false });
+		expect(api.roughCutSources({})).toMatchObject({
+			items: [{ id: first }, { id: second }, { id: scratch }],
+		});
+		// The scratch recording sounds through Main's pause.
+		expect(cut([at([first, 2, 4.5])])).toMatchObject({
+			ok: true,
+			durationSeconds: 24,
+			tightening: { pauses: { count: 0 } },
+		});
+		// Both are silent from 2.22 to 3.817 s: only that, less the padding, goes.
+		const result = cut([at([first, 2, 4.5]), at([scratch, 2.22, 3.817])]);
+		expect(result).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 2 } },
+		});
+		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(1.197, 3);
+		expect(result.durationSeconds).toBeCloseTo(22.803, 3);
 	});
 });
