@@ -8,8 +8,19 @@ import type {
 	TProjectSettings,
 	TTimelineViewState,
 } from "@/project/types";
-import type { ExportOptions, ExportResult, ExportState } from "@/export";
+import type {
+	ExportOptions,
+	ExportQuality,
+	ExportResult,
+	ExportState,
+} from "@/export";
 import { ExportJobs } from "@/export/export-jobs";
+import {
+	DeliveryError,
+	type DeliverySnapshot,
+	publishDelivery,
+	takeDeliverySnapshot,
+} from "@/export/deliver";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
 import { generateUUID } from "@/utils/id";
@@ -43,6 +54,12 @@ export class ProjectManager {
 	private listeners = new Set<() => void>();
 	private exportState: ExportState = IDLE_EXPORT_STATE;
 	private exportJobs = new ExportJobs();
+	/** A Horizontal export that can be retried: its snapshot and any finished render. */
+	private delivery: {
+		snapshot: DeliverySnapshot;
+		quality: ExportQuality;
+		video: ArrayBuffer | null;
+	} | null = null;
 
 	constructor(private editor: EditorCore) {}
 
@@ -234,6 +251,98 @@ export class ProjectManager {
 		return result;
 	}
 
+	/**
+	 * Exports the active Horizontal sequence as it is now: renders the MP4,
+	 * times the SRT against the same tracks and publishes both under Exports.
+	 */
+	deliver({ quality }: { quality: ExportQuality }): Promise<ExportResult> {
+		this.delivery = {
+			snapshot: takeDeliverySnapshot({ editor: this.editor }),
+			quality,
+			video: null,
+		};
+		return this.runDelivery();
+	}
+
+	/** Retries a failed Horizontal export, reusing its render if it finished. */
+	retryDelivery(): Promise<ExportResult> {
+		if (!this.delivery)
+			return Promise.resolve({ success: false, error: "Nothing to retry." });
+		return this.runDelivery();
+	}
+
+	private async runDelivery(): Promise<ExportResult> {
+		const delivery = this.delivery;
+		if (!delivery) return { success: false, error: "Nothing to export." };
+		this.exportState = {
+			isExporting: true,
+			progress: delivery.video ? 0.9 : 0,
+			result: null,
+			step: delivery.video ? "upload-video" : "render",
+		};
+		this.notify();
+
+		const { result, isCurrent } = await this.exportJobs.start({
+			run: async ({ signal, isCurrent }): Promise<ExportResult> => {
+				const update = (patch: Partial<ExportState>) => {
+					if (!isCurrent()) return;
+					this.exportState = { ...this.exportState, ...patch };
+					this.notify();
+				};
+				if (!delivery.video) {
+					const rendered = await this.editor.renderer.exportProject({
+						options: {
+							format: "mp4",
+							quality: delivery.quality,
+							fps: this.getActive().settings.fps,
+							includeAudio: true,
+						},
+						signal,
+						tracks: delivery.snapshot.tracks,
+						// Rendering is most of the work; writing the files is the rest.
+						onProgress: ({ progress }) => update({ progress: progress * 0.9 }),
+					});
+					if (rendered.cancelled) return rendered;
+					if (!rendered.success || !rendered.buffer)
+						return {
+							success: false,
+							error: rendered.error ?? "The render produced no video.",
+							failedStep: "render",
+						};
+					delivery.video = rendered.buffer;
+				}
+				try {
+					const record = await publishDelivery({
+						snapshot: delivery.snapshot,
+						video: delivery.video,
+						signal,
+						onStep: (step) => update({ step }),
+					});
+					return { success: true, record };
+				} catch (error) {
+					if (signal.aborted) return { success: false, cancelled: true };
+					return {
+						success: false,
+						error: error instanceof Error ? error.message : String(error),
+						failedStep: error instanceof DeliveryError ? error.step : "publish",
+					};
+				}
+			},
+		});
+		if (!isCurrent()) return { success: false, cancelled: true };
+		// The render is kept only to retry a failure.
+		if (result.success || result.cancelled) this.delivery = null;
+		this.exportState = result.cancelled
+			? IDLE_EXPORT_STATE
+			: {
+					isExporting: false,
+					progress: result.success ? 1 : this.exportState.progress,
+					result,
+				};
+		this.notify();
+		return result;
+	}
+
 	cancelExport(): void {
 		this.exportJobs.cancel();
 	}
@@ -248,6 +357,7 @@ export class ProjectManager {
 	}
 
 	clearExportState(): void {
+		this.delivery = null;
 		this.exportState = IDLE_EXPORT_STATE;
 		this.notify();
 	}

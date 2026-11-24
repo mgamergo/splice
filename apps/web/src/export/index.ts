@@ -1,3 +1,4 @@
+import type { ExportRecord } from "@splice/bridge/delivery";
 import type { FrameRate } from "opencut-wasm";
 import { EXPORT_MIME_TYPES } from "./mime-types";
 
@@ -20,17 +21,39 @@ export interface ExportOptions {
 	includeAudio?: boolean;
 }
 
+/** The steps of a Horizontal export, which publishes an MP4/SRT pair under Exports. */
+export const DELIVERY_STEPS = [
+	"render",
+	"upload-video",
+	"upload-captions",
+	"publish",
+] as const;
+export type DeliveryStep = (typeof DELIVERY_STEPS)[number];
+
+export const DELIVERY_STEP_LABELS: Record<DeliveryStep, string> = {
+	render: "Rendering the video",
+	"upload-video": "Writing the MP4 to Exports",
+	"upload-captions": "Writing the SRT to Exports",
+	publish: "Publishing the MP4 and SRT",
+};
+
 export interface ExportResult {
 	success: boolean;
 	buffer?: ArrayBuffer;
 	error?: string;
 	cancelled?: boolean;
+	/** The step a Horizontal export failed at. */
+	failedStep?: DeliveryStep;
+	/** The pair a Horizontal export published. */
+	record?: ExportRecord;
 }
 
 export interface ExportState {
 	isExporting: boolean;
 	progress: number;
 	result: ExportResult | null;
+	/** The step a Horizontal export is on. */
+	step?: DeliveryStep;
 }
 
 export function getExportMimeType({
