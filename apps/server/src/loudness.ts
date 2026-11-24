@@ -32,6 +32,7 @@ import {
 	type FileIdentity,
 	fileIdentity,
 	type NoiseReducer,
+	sameFileIdentity,
 } from "./noise-reduction";
 
 export const measureLoudnessInput = {
@@ -501,9 +502,6 @@ export function createLoudnessMeter({
 	}
 	type Identified = Awaited<ReturnType<typeof identify>>;
 
-	const sameFile = ({ a, b }: { a: FileIdentity; b: FileIdentity }) =>
-		fileIdentity(a).join() === fileIdentity(b).join();
-
 	/**
 	 * Whether the recording, and the render when one was measured, are still
 	 * the files measured. Checked from their identities alone: rendering again
@@ -517,10 +515,12 @@ export function createLoudnessMeter({
 		identified: Identified;
 	}): Promise<boolean> {
 		const current = await resolveRecording({ root, path: target.path });
-		if (!sameFile({ a: current.info, b: info })) return false;
+		if (!sameFileIdentity({ a: current.info, b: info })) return false;
 		if (!render) return true;
 		const rendered = await stat(input).catch(() => null);
-		return rendered !== null && sameFile({ a: rendered, b: render.info });
+		return (
+			rendered !== null && sameFileIdentity({ a: rendered, b: render.info })
+		);
 	}
 
 	async function measureAndCache({

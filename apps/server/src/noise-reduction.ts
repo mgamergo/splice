@@ -77,6 +77,17 @@ export function fileIdentity({
 	return [size, mtimeMs, ctimeMs, ino];
 }
 
+/** Whether two stats describe the same file, unchanged. */
+export function sameFileIdentity({
+	a,
+	b,
+}: {
+	a: FileIdentity;
+	b: FileIdentity;
+}): boolean {
+	return fileIdentity(a).join() === fileIdentity(b).join();
+}
+
 /** Identifies a render by the source file's path and identity. */
 export function denoiseCacheKey({
 	path,

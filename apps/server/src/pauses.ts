@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
 import { createSharedWork } from "./shared-work";
+import { fileIdentity, sameFileIdentity } from "./noise-reduction";
 import {
 	ffmpegInputArgs,
 	findFfmpeg,
@@ -399,9 +400,11 @@ export function createPauseDetector({
 		signal?: AbortSignal;
 	}): Promise<{ scan: Scan; cached: boolean }> {
 		const { source, info } = await resolveRecording({ root, path });
+		// The inode and change time catch a file replaced with one of the same
+		// size and modified time.
 		const key = createHash("sha256")
 			.update(
-				JSON.stringify([CACHE_VERSION, path, info.size, info.mtimeMs, noiseDb]),
+				JSON.stringify([CACHE_VERSION, path, ...fileIdentity(info), noiseDb]),
 			)
 			.digest("hex");
 		const cachePath = join(cacheDir, `${key}.json`);
@@ -435,6 +438,9 @@ export function createPauseDetector({
 				const { durationSeconds } = parseSilencedetect({ output: probe });
 				result = { durationSeconds, hasAudio: false, silences: [] };
 			}
+			const current = await resolveRecording({ root, path });
+			if (!sameFileIdentity({ a: current.info, b: info }))
+				throw new Error("Footage changed while finding pauses. Try again.");
 			await mkdir(cacheDir, { recursive: true });
 			const temporary = await mkdtemp(join(cacheDir, ".scan-"));
 			try {
