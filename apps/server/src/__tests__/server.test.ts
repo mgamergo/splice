@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
 	BRIDGE_PATHS,
 	denoisedAudioUrlForPath,
@@ -6,18 +6,21 @@ import {
 	STATE_CHANGED,
 	TAB_CLOSE_CODES,
 	TAB_HELLO,
+	TAB_METHODS,
 	parseRpcMessage,
 } from "@splice/bridge";
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcClient } from "../rpc-client";
+import { createRpcClient, isLongMethod, rpcDeadlineMs } from "../rpc-client";
 import {
 	isAllowedHost,
 	isAllowedOrigin,
 	startServer,
+	tabCallTimeoutMs,
 	type RunningServer,
 } from "../server";
+import { DEFAULT_CALL_TIMEOUT_MS } from "../tab-bridge";
 
 const TOKEN = "test-token";
 const running: RunningServer[] = [];
@@ -542,6 +545,35 @@ describe("rpc endpoint", () => {
 			}),
 		20_000,
 	);
+
+	test("the tab gets as long to answer a long call as splice mcp waits for it", async () => {
+		for (const method of TAB_METHODS)
+			expect(tabCallTimeoutMs(method)).toBe(
+				isLongMethod(method) ? rpcDeadlineMs(method) : DEFAULT_CALL_TIMEOUT_MS,
+			);
+		expect(tabCallTimeoutMs("editor.importItems")).toBe(30 * 60_000);
+		expect(tabCallTimeoutMs("editor.getState")).toBe(30_000);
+
+		const server = start();
+		const tab = connectTab({
+			origin: server.origin,
+			answer: (method) =>
+				method === "editor.importItems"
+					? { items: [], failed: [] }
+					: { ok: true },
+		});
+		await tab.authed;
+		const relayed = spyOn(server.bridge, "call");
+		const call = createRpcClient({ origin: server.origin, token: TOKEN });
+		await call({ method: "editor.importItems", params: { paths: ["a.wav"] } });
+		await call({ method: "editor.getState" });
+		expect(
+			relayed.mock.calls.map(([{ method, timeoutMs }]) => [method, timeoutMs]),
+		).toEqual([
+			["editor.importItems", rpcDeadlineMs("editor.importItems")],
+			["editor.getState", DEFAULT_CALL_TIMEOUT_MS],
+		]);
+	});
 
 	test("status tracks the revision the tab reports", async () => {
 		const server = start();

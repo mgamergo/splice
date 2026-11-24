@@ -12,6 +12,7 @@ import {
 	type RpcId,
 	type RpcResponse,
 	type ServerStatus,
+	type TabMethod,
 } from "@splice/bridge";
 import {
 	type RoughCutTightening,
@@ -28,7 +29,8 @@ import {
 import { createPauseDetector } from "./pauses";
 import { resolveRoughCutRequest } from "./rough-cut";
 import { createToken, tokensMatch } from "./session";
-import { BridgeError, TabBridge } from "./tab-bridge";
+import { isLongMethod, rpcDeadlineMs } from "./rpc-client";
+import { BridgeError, DEFAULT_CALL_TIMEOUT_MS, TabBridge } from "./tab-bridge";
 import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
@@ -133,6 +135,16 @@ export function isAllowedOrigin({
 		origin === `http://127.0.0.1:${port}` ||
 		origin === `http://localhost:${port}`
 	);
+}
+
+/**
+ * How long the tab may take to answer a call relayed from `splice mcp`. A
+ * long method, such as an import probing every file, waits as long as
+ * `splice mcp` does, so the bridge never gives up on work its caller still
+ * waits for.
+ */
+export function tabCallTimeoutMs(method: TabMethod): number {
+	return isLongMethod(method) ? rpcDeadlineMs(method) : DEFAULT_CALL_TIMEOUT_MS;
 }
 
 export function startServer({
@@ -286,8 +298,7 @@ export function startServer({
 			const result = await bridge.call({
 				method,
 				params: forwarded,
-				// Importing probes every file, which can take minutes for long recordings.
-				timeoutMs: method === "editor.importItems" ? 10 * 60_000 : undefined,
+				timeoutMs: tabCallTimeoutMs(method),
 			});
 			return Response.json(
 				rpcResult({

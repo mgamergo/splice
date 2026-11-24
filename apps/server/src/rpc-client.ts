@@ -27,13 +27,18 @@ const LONG_METHODS: ReadonlySet<string> = new Set([
 	"noiseReduction.render",
 ]);
 
+/** Whether `splice mcp` gives a call the long deadline. */
+export function isLongMethod(method: string): boolean {
+	return LONG_METHODS.has(method);
+}
+
 /**
  * How long `splice mcp` waits for `splice` to answer a call. Everything else
  * answers within the tab bridge's 30 s deadline, or transcribe's 30 s wait,
  * so two minutes only trips when `splice` has stalled.
  */
 export function rpcDeadlineMs(method: string): number {
-	return LONG_METHODS.has(method) ? 30 * MINUTE_MS : 2 * MINUTE_MS;
+	return isLongMethod(method) ? 30 * MINUTE_MS : 2 * MINUTE_MS;
 }
 
 export type RpcCall = (call: {
