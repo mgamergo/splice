@@ -191,6 +191,70 @@ test("a rough cut with noise reduction plans denoised sources and cuts with flag
 	);
 });
 
+test("a tightened rough cut with noise reduction plans the kept denoised audio and denoises every piece", () => {
+	// Cut 6.2–7.8 s of recording-1, keeping 0.2 s of breath on each side.
+	const tighten = {
+		sections: [section],
+		pauses: [{ projectItemId: first, sourceIn: 6, sourceOut: 8 }],
+		pausePaddingSeconds: 0.2,
+		noiseReduction: true,
+	};
+	const plan = api.roughCut({
+		...tighten,
+		expectedRevision: api.getRevision(),
+		plan: true,
+	});
+	expect(plan).toMatchObject({ ok: true });
+	const [denoised] = "audioSources" in plan ? (plan.audioSources ?? []) : [];
+	if (!denoised) throw new Error("expected a plan with audio sources");
+	expect(denoised).toMatchObject({ projectItemId: first, noiseReduction: true });
+	// The meter hears what tightening keeps: the pause is gone from the ranges.
+	expect(denoised.ranges).toHaveLength(2);
+	expect(denoised.ranges[0].start).toBeCloseTo(4, 3);
+	expect(denoised.ranges[0].end).toBeCloseTo(6.2, 3);
+	expect(denoised.ranges[1].start).toBeCloseTo(7.8, 3);
+	expect(denoised.ranges[1].end).toBeCloseTo(12, 3);
+
+	const result = api.roughCut({
+		...tighten,
+		expectedRevision: api.getRevision(),
+		sourceGains: [{ projectItemId: first, noiseReduction: true, gainDb: 3 }],
+	});
+	expect(result).toMatchObject({
+		ok: true,
+		tightening: { pauses: { count: 1 } },
+	});
+	const firstClips = active().tracks.main.clips.filter(
+		(clip) => "mediaId" in clip && clip.mediaId === first,
+	);
+	expect(firstClips).toHaveLength(2);
+	for (const clip of firstClips) {
+		expect(clip.params.noiseReduction).toBe(true);
+		expect(clip.params.volume).toBe(3);
+	}
+});
+
+test("tightening hears a clip denoised in Raw like any other and keeps its noise reduction on every piece", () => {
+	const [a] = active().tracks.main.clips.map(({ id }) => id);
+	setNoiseReduction({ clipIds: [a], enabled: true });
+	const result = api.roughCut({
+		sections: [],
+		pauses: [{ projectItemId: first, sourceIn: 6, sourceOut: 8 }],
+		pausePaddingSeconds: 0.2,
+		expectedRevision: api.getRevision(),
+	});
+	expect(result).toMatchObject({
+		ok: true,
+		tightening: { pauses: { count: 1 } },
+	});
+	expect(flags()).toEqual([
+		[first, true],
+		[first, true],
+		[second, false],
+		["browser", false],
+	]);
+});
+
 test("clips with noise reduction play splice's WAV render, cached apart from the source", async () => {
 	const [a, b] = active().tracks.main.clips.map(({ id }) => id);
 	setNoiseReduction({ clipIds: [a], enabled: true });

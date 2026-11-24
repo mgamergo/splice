@@ -11,18 +11,29 @@ const rangeSchema = z.strictObject({
 	end: timeSpecSchema,
 });
 
+const sourceRangeFields = {
+	projectItemId: z.string().min(1),
+	sourceIn: z.number().nonnegative().describe("Source in point in seconds"),
+	sourceOut: z.number().positive().describe("Source out point in seconds"),
+};
+const sourceOutAfterIn = (range: { sourceIn: number; sourceOut: number }) =>
+	range.sourceOut > range.sourceIn;
+const sourceOutMessage = {
+	path: ["sourceOut"],
+	message: "Source out must be after source in",
+};
+
+const itemRangeSchema = z
+	.strictObject(sourceRangeFields)
+	.refine(sourceOutAfterIn, sourceOutMessage);
+
 const takeSourceRangeSchema = z
 	.strictObject({
-		projectItemId: z.string().min(1),
-		sourceIn: z.number().nonnegative().describe("Source in point in seconds"),
-		sourceOut: z.number().positive().describe("Source out point in seconds"),
+		...sourceRangeFields,
 		label: z.string().optional(),
 		transcriptSnippet: z.string().optional(),
 	})
-	.refine((take) => take.sourceOut > take.sourceIn, {
-		path: ["sourceOut"],
-		message: "Source out must be after source in",
-	});
+	.refine(sourceOutAfterIn, sourceOutMessage);
 
 // Keep the original single-range marker shape readable on disk.
 const takeSchema = z.union([
@@ -270,6 +281,8 @@ export const captionsRequestSchema = z.strictObject({
 	style: captionStyleSchema.optional(),
 });
 
+export const DEFAULT_PAUSE_PADDING_SECONDS = 0.2;
+
 const loudnessOption = z
 	.union([z.strictObject({ targetLufs }), z.literal(false)])
 	.optional()
@@ -277,7 +290,7 @@ const loudnessOption = z
 		`Normalizes each recording's kept audio to ${DEFAULT_TARGET_LUFS} LUFS, or targetLufs, in the same undo step. Pass false to keep source levels.`,
 	);
 
-export const roughCutRequestSchema = z.strictObject({
+const roughCutBaseSchema = z.strictObject({
 	sequenceId: z
 		.string()
 		.min(1)
@@ -297,18 +310,29 @@ export const roughCutRequestSchema = z.strictObject({
 					.describe("Zero-based index of the take to keep"),
 			}),
 		)
-		.min(1),
-	loudness: loudnessOption,
+		.default([])
+		.describe(
+			"Sections with retakes. Omit or pass [] when nothing was retaken.",
+		),
+	falseStarts: z
+		.array(itemRangeSchema)
+		.default([])
+		.describe(
+			"Abandoned phrases to cut, in source seconds: from the false start's first word to the first word of its restart. Whisper's word times drift by up to half a second, so when a pause from detect_pauses sits next to an edge, put the edge inside that pause: Splice snaps it to the pause and keeps the breath padding.",
+		),
+	pausePaddingSeconds: z
+		.number()
+		.min(0)
+		.max(1)
+		.default(DEFAULT_PAUSE_PADDING_SECONDS)
+		.describe(
+			"Silence kept on each side of a removed pause, in seconds. Defaults to 0.2.",
+		),
 	noiseReduction: z
 		.boolean()
 		.optional()
 		.describe(
 			"true turns noise reduction on for every Footage recording in the cut, in the same undo step. Omitted or false, each clip keeps its source clip's setting, so clips denoised in the source sequence stay denoised.",
-		),
-	captions: captionsRequestSchema
-		.optional()
-		.describe(
-			"Word timings for burned-in captions. splice mcp fills this for Short projects.",
 		),
 });
 
@@ -321,18 +345,6 @@ const sourceGainSchema = z.strictObject({
 	noiseReduction: z.boolean().optional(),
 	gainDb: gainDbSchema,
 });
-
-/**
- * What `splice` sends the tab for `rough_cut`. With `plan`, the tab builds the
- * cut without applying it and returns its audio sources, so `splice` can
- * measure them and send `sourceGains` with the same request.
- */
-export const roughCutTabRequestSchema = roughCutRequestSchema
-	.omit({ loudness: true })
-	.extend({
-		plan: z.boolean().optional(),
-		sourceGains: z.array(sourceGainSchema).optional(),
-	});
 
 export const audioSourcesRequestSchema = z.strictObject({
 	sequenceId: z
@@ -405,6 +417,101 @@ export const addCaptionsRequestSchema = z.strictObject({
 	...captionsRequestSchema.shape,
 });
 
+/** What the agent sends to `rough_cut`. `splice` resolves pauses and fillers before the tab sees it. */
+export const roughCutRequestSchema = roughCutBaseSchema.extend({
+	pauses: z
+		.union([z.literal("auto"), z.array(itemRangeSchema)])
+		.default("auto")
+		.describe(
+			'"auto" (the default) removes the pauses detect_pauses finds in every recording heard on the source sequence, where every recording heard there is silent. Or pass silence ranges with project item IDs, or [] to keep every pause.',
+		),
+	pauseDetection: z
+		.strictObject({
+			noiseDb: z.number().min(-90).max(-10).optional(),
+			minSeconds: z.number().min(0.2).max(10).optional(),
+		})
+		.optional()
+		.describe('detect_pauses settings for pauses: "auto".'),
+	removeFillerWords: z
+		.boolean()
+		.default(false)
+		.describe(
+			"Also cut English filler words (um, uh, erm…) found in the cached transcripts. Off by default.",
+		),
+	loudness: loudnessOption,
+	captions: captionsRequestSchema
+		.optional()
+		.describe(
+			"Word timings for burned-in captions. splice mcp fills this for Short projects.",
+		),
+});
+
+/**
+ * Lets `splice mcp` build the cut in two passes. With `plan`, the tab builds
+ * the cut without applying it and returns its audio sources, so `splice` can
+ * measure them and send `sourceGains` with the same request.
+ */
+const roughCutPassFields = {
+	plan: z.boolean().optional(),
+	sourceGains: z.array(sourceGainSchema).optional(),
+};
+
+/** The pause and filler ranges `splice` resolved for a rough cut. */
+export const roughCutTighteningSchema = z.strictObject({
+	pauses: z.array(itemRangeSchema),
+	fillerWords: z.array(itemRangeSchema),
+	/** The source sequence the ranges were measured on, when `splice` measured them. */
+	sequenceId: z.string().min(1).optional(),
+});
+
+/** What `splice mcp` sends `splice` for `editor.roughCut`: loudness is already measured. */
+export const roughCutCallSchema = roughCutRequestSchema
+	.omit({ loudness: true })
+	.extend({
+		...roughCutPassFields,
+		// A transcript can land between the passes and change what `pauses: "auto"`
+		// resolves to, so the apply pass cuts exactly what the plan pass measured.
+		tightening: roughCutTighteningSchema.optional(),
+	});
+
+/** The cut itself, with every tightening range explicit. */
+export const roughCutPlanSchema = roughCutBaseSchema.extend({
+	pauses: z.array(itemRangeSchema).default([]),
+	fillerWords: z.array(itemRangeSchema).default([]),
+});
+
+/** What `splice` sends the tab for `editor.roughCut`. */
+export const roughCutTabRequestSchema = roughCutPlanSchema.extend({
+	captions: captionsRequestSchema.optional(),
+	...roughCutPassFields,
+});
+
+export const roughCutSourcesRequestSchema = roughCutBaseSchema.pick({
+	sequenceId: true,
+});
+
+/** The recordings on a rough cut's source sequence, as `editor.roughCutSources` reports them. */
+export const roughCutSourcesSchema = z.discriminatedUnion("ok", [
+	z.object({
+		ok: z.literal(true),
+		sequenceId: z.string(),
+		items: z.array(
+			z.object({
+				id: z.string(),
+				name: z.string(),
+				/** Null for items that don't reference a file under Footage. */
+				path: z.string().nullable(),
+			}),
+		),
+	}),
+	z.object({
+		ok: z.literal(false),
+		code: z.string(),
+		message: z.string(),
+		revision: z.number(),
+	}),
+]);
+
 export const takesListRequestSchema = z.strictObject({
 	sequenceId: z
 		.string()
@@ -417,6 +524,11 @@ export type TakePlacement = z.infer<typeof takePlacementSchema>;
 export type TakeAudioSegment = z.infer<typeof takeAudioSegmentSchema>;
 export type Take = z.infer<typeof takeSchema>;
 export type RoughCutRequest = z.infer<typeof roughCutRequestSchema>;
+export type RoughCutPlan = z.infer<typeof roughCutPlanSchema>;
+export type ItemRange = z.infer<typeof itemRangeSchema>;
+export type RoughCutSources = z.infer<typeof roughCutSourcesSchema>;
+export type RoughCutTightening = z.infer<typeof roughCutTighteningSchema>;
+export type RoughCutCall = z.infer<typeof roughCutCallSchema>;
 export type SourceGain = z.infer<typeof sourceGainSchema>;
 export type NoiseReductionRequest = z.infer<typeof noiseReductionRequestSchema>;
 export type SourceRange = z.infer<typeof sourceRangeSchema>;

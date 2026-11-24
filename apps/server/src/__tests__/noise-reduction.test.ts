@@ -208,14 +208,18 @@ describe("noise reducer", () => {
 				basename(first.file),
 			]);
 
-			expect(await reducer.render({ path: "Day 1/take.wav" })).toEqual({
+			expect(
+				await reducer.render({ params: { path: "Day 1/take.wav" } }),
+			).toEqual({
 				path: "Day 1/take.wav",
 				cached: true,
 			});
 			expect(renders).toHaveLength(1);
 
 			await utimes(footage, new Date(), new Date(Date.now() + 10_000));
-			expect(await reducer.render({ path: "Day 1/take.wav" })).toEqual({
+			expect(
+				await reducer.render({ params: { path: "Day 1/take.wav" } }),
+			).toEqual({
 				path: "Day 1/take.wav",
 				cached: false,
 				noiseProfile: { sampledAt: 3, rmsDb: -52 },
@@ -227,7 +231,9 @@ describe("noise reducer", () => {
 			await Bun.sleep(10);
 			await writeFile(footage, "other audio!");
 			await utimes(footage, atime, mtime);
-			expect(await reducer.render({ path: "Day 1/take.wav" })).toMatchObject({
+			expect(
+				await reducer.render({ params: { path: "Day 1/take.wav" } }),
+			).toMatchObject({
 				cached: false,
 			});
 			expect(renders).toHaveLength(3);
@@ -245,11 +251,15 @@ describe("noise reducer", () => {
 					return { noiseWindow: null };
 				},
 			});
-			expect(await reducer.render({ path: "talk.wav" })).toMatchObject({
+			expect(
+				await reducer.render({ params: { path: "talk.wav" } }),
+			).toMatchObject({
 				noiseProfile: "tracked",
 			});
 			for (const path of ["still.png", "../talk.wav", "missing.wav"])
-				await expect(reducer.render({ path })).rejects.toMatchObject({
+				await expect(
+					reducer.render({ params: { path } }),
+				).rejects.toMatchObject({
 					code: RPC_ERRORS.INVALID_PARAMS,
 				});
 		}));
@@ -287,7 +297,9 @@ describe("noise reducer", () => {
 					throw new Error("ffmpeg exited with 1.");
 				},
 			});
-			await expect(reducer.render({ path: "take.wav" })).rejects.toMatchObject({
+			await expect(
+				reducer.render({ params: { path: "take.wav" } }),
+			).rejects.toMatchObject({
 				code: RPC_ERRORS.INVALID_PARAMS,
 				data: { missingFootage: true },
 			});
@@ -333,14 +345,20 @@ test("loudness with noise reduction on measures the render, cached apart from th
 		});
 		const ranges = [{ start: 0, end: 4 }];
 		expect(
-			await meter.measure({ path: "take.wav", ranges, noiseReduction: true }),
+			await meter.measure({
+				params: { path: "take.wav", ranges, noiseReduction: true },
+			}),
 		).toMatchObject({ noiseReduction: true, integratedLufs: -18.8 });
-		expect(await meter.measure({ path: "take.wav", ranges })).toMatchObject({
+		expect(
+			await meter.measure({ params: { path: "take.wav", ranges } }),
+		).toMatchObject({
 			noiseReduction: false,
 			integratedLufs: -21,
 		});
 		expect(
-			await meter.measure({ path: "take.wav", ranges, noiseReduction: true }),
+			await meter.measure({
+				params: { path: "take.wav", ranges, noiseReduction: true },
+			}),
 		).toMatchObject({ cached: true, integratedLufs: -18.8 });
 		expect(new Set(ensured)).toEqual(new Set(["take.wav"]));
 		expect(measured).toHaveLength(2);
@@ -354,7 +372,9 @@ test("loudness with noise reduction on measures the render, cached apart from th
 		await writeFile(rendered, "soft render");
 		await utimes(rendered, atime, mtime);
 		expect(
-			await meter.measure({ path: "take.wav", ranges, noiseReduction: true }),
+			await meter.measure({
+				params: { path: "take.wav", ranges, noiseReduction: true },
+			}),
 		).toMatchObject({ cached: false, integratedLufs: -43.8 });
 		expect(measured).toHaveLength(3);
 		await meter.stop();
@@ -390,19 +410,19 @@ test("a denoised measurement goes stale without rendering again when the source 
 		};
 
 		replace = rewrite(source);
-		await expect(meter.measure(request)).rejects.toThrow(
+		await expect(meter.measure({ params: request })).rejects.toThrow(
 			"Footage changed while measuring",
 		);
 		expect(ensured).toBe(1);
 
 		replace = rewrite(rendered);
-		await expect(meter.measure(request)).rejects.toThrow(
+		await expect(meter.measure({ params: request })).rejects.toThrow(
 			"Footage changed while measuring",
 		);
 		expect(ensured).toBe(2);
 
 		replace = () => rm(rendered);
-		await expect(meter.measure(request)).rejects.toThrow(
+		await expect(meter.measure({ params: request })).rejects.toThrow(
 			"Footage changed while measuring",
 		);
 		expect(ensured).toBe(3);
@@ -567,7 +587,10 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 					signal: new AbortController().signal,
 				});
 				for (const profile of [null, { file, window }]) {
-					const output = join(root, `denoised-${profile ? "sampled" : "tracked"}.wav`);
+					const output = join(
+						root,
+						`denoised-${profile ? "sampled" : "tracked"}.wav`,
+					);
 					await ffmpegLog(denoiseArgs({ source: footage, output, profile }));
 					const denoised = await decodeSamples(output);
 					expect(denoised.length).toBe(source.length);
@@ -676,11 +699,11 @@ describe.skipIf(!ffmpeg)("with FFmpeg", () => {
 					{ start: 9, end: 10 },
 				];
 				const denoised = await meter.measure({
-					path: "take.wav",
-					ranges,
-					noiseReduction: true,
+					params: { path: "take.wav", ranges, noiseReduction: true },
 				});
-				const source = await meter.measure({ path: "take.wav", ranges });
+				const source = await meter.measure({
+					params: { path: "take.wav", ranges },
+				});
 				const { file } = await reducer.ensure({ path: "take.wav" });
 				const signal = new AbortController().signal;
 				expect(denoised).toMatchObject(

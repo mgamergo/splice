@@ -7,6 +7,7 @@ import {
 import { EditorApi } from "@/agent/editor-api";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import type { EditorCore } from "@/core";
+import { buildDefaultSequence } from "@/timeline/sequences";
 import { normalizeMarkers } from "@/services/storage/service";
 import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import { clampMarkerDragTime } from "@/timeline/markers/utils";
@@ -645,4 +646,137 @@ describe("removal markers", () => {
 			clampMarkerDragTime({ time: s(8), duration: s(6), markerTime: s(2) }),
 		).toBe(s(6));
 	});
+});
+
+test("swapping back puts each surviving range of a tightened take on its own tracks", () => {
+	// The best take spans A, B and C: B on Main with its audio on Dialogue, C
+	// on an overlay. Tighten cuts A's part as a false start.
+	const { tracks } = buildDefaultSequence({ name: "Raw", isMain: true });
+	const clip = ({
+		id,
+		start,
+		duration,
+	}: {
+		id: string;
+		start: number;
+		duration: number;
+	}) => ({ ...videoClip({ id, start, duration }), mediaId: id });
+	const editor = setUpEditor({
+		tracks: {
+			main: { ...tracks.main, clips: [
+					clip({ id: "A", start: 0, duration: 4 }),
+					clip({ id: "B", start: 4, duration: 2 }),
+				] },
+			overlay: [
+				{
+					id: "overlay",
+					name: "Overlay",
+					type: "video",
+					hidden: false,
+					muted: false,
+					clips: [clip({ id: "C", start: 6, duration: 3 })],
+				},
+			],
+		},
+	});
+	const api = new EditorApi(editor);
+	editor.media.setProjectItems({
+		projectItems: (
+			[
+				["A", 4],
+				["B", 2],
+				["C", 3],
+			] as const
+		).map(([id, duration]) => ({
+			id,
+			name: id,
+			type: "video",
+			duration,
+			hasAudio: true,
+			file: new File([], id),
+		})),
+	});
+	const active = () => editor.sequences.getActiveSequence();
+	editor.command.execute({
+		command: new ToggleSourceAudioSeparationCommand({
+			trackId: active().tracks.main.id,
+			clipId: "B",
+		}),
+	});
+	const range = ({
+		id,
+		from,
+		to,
+	}: {
+		id: string;
+		from: number;
+		to: number;
+	}) => ({ projectItemId: id, sourceIn: from, sourceOut: to });
+	expect(
+		api.roughCut({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			sections: [
+				{
+					name: "Across",
+					takes: [
+						range({ id: "A", from: 0, to: 1 }),
+						range({ id: "A", from: 1, to: 2 }),
+						{ ranges: [range({ id: "A", from: 3, to: 4 }), range({ id: "B", from: 0, to: 2 }), range({ id: "C", from: 0, to: 1 })] },
+					],
+					bestTakeIndex: 2,
+				},
+			],
+			falseStarts: [range({ id: "A", from: 3, to: 4 })],
+		}),
+	).toMatchObject({ ok: true });
+	const mainId = active().tracks.main.id;
+	const dialogueId = active().tracks.audio[0].id;
+	const markerId = active().markers[0].id;
+	const placeB = () => ({
+		video: [active().tracks.main, ...active().tracks.overlay].flatMap((track) =>
+			track.clips
+				.filter((each) => each.type === "video" && each.mediaId === "B")
+				.map((each) => ({
+					track: track.id,
+					separated:
+						each.type === "video" && each.isSourceAudioEnabled === false,
+				})),
+		),
+		audio: active().tracks.audio.flatMap((track) =>
+			track.clips
+				.filter((each) => "mediaId" in each && each.mediaId === "B")
+				.map(() => track.id),
+		),
+	});
+	const before = placeB();
+	expect(before).toEqual({
+		video: [{ track: mainId, separated: true }],
+		audio: [dialogueId],
+	});
+	const swap = (takeIndex: number) =>
+		api.apply({
+			expectedRevision: api.getRevision(),
+			sequenceId: active().id,
+			label: "Swap",
+			ops: [{ op: "swap_take", markerId, takeIndex }],
+		});
+	expect(swap(0)).toMatchObject({ ok: true });
+	const stored = active().markers[0].data;
+	expect(
+		stored?.kind === "removal" ? stored.badTakePlacements?.[0] : undefined,
+	).toEqual([
+		// Cut whole, so it goes back with its recording's gain and noise reduction.
+		{ trackId: mainId, audioTrackId: dialogueId },
+		{
+			trackId: mainId,
+			audioTrackId: dialogueId,
+			volume: 0,
+			noiseReduction: false,
+		},
+		{ trackId: "overlay", volume: 0, noiseReduction: false },
+	]);
+	expect(swap(1)).toMatchObject({ ok: true });
+	expect(swap(0)).toMatchObject({ ok: true });
+	expect(placeB()).toEqual(before);
 });

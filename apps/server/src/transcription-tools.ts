@@ -173,6 +173,49 @@ export function ffmpegInputArgs({
 	return ["-nostats", ...ffmpegInput({ source, concat })];
 }
 
+/** Lists the input's streams without decoding any. */
+function probeArgs({ source }: { source: string }): string[] {
+	return [
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel",
+		"info",
+		...ffmpegInputArgs({ source }),
+		"-f",
+		"ffmetadata",
+		"-",
+	];
+}
+
+/** Whether FFmpeg's description of the input lists an audio stream. */
+export function parseHasAudio({ output }: { output: string }): boolean {
+	for (const line of output.split(/\r?\n/)) {
+		if (/^(Output #|Stream mapping:)/.test(line)) break;
+		if (/^\s*Stream #\d+:\d+.*: Audio: /.test(line)) return true;
+	}
+	return false;
+}
+
+/** FFmpeg's description of a recording: its stream listing and duration. */
+export async function probeRecording({
+	command,
+	source,
+	signal,
+}: {
+	command: string;
+	source: string;
+	signal: AbortSignal;
+}): Promise<string> {
+	const lines: string[] = [];
+	await run({
+		command,
+		args: probeArgs({ source }),
+		signal,
+		onLine: (line) => lines.push(line),
+	});
+	return lines.join("\n");
+}
+
 export function ffmpegArgs({
 	source,
 	wav,
@@ -202,6 +245,13 @@ export function ffmpegArgs({
 	];
 }
 
+/**
+ * Whisper leaves out disfluencies unless its context already has some. A
+ * prompt written with them keeps "um" and "uh" in the transcript, so filler
+ * words and false starts can be found and cut.
+ */
+export const DISFLUENCY_PROMPT = "Um, uh, so, erm, I mean, like, ah, okay.";
+
 export function whisperArgs({
 	wav,
 	output,
@@ -224,6 +274,8 @@ export function whisperArgs({
 		"-of",
 		output,
 		"-pp",
+		"--prompt",
+		DISFLUENCY_PROMPT,
 		...(cpu ? ["-ng"] : []),
 	];
 }
@@ -252,6 +304,11 @@ export async function extractAudio({
 	signal: AbortSignal;
 }): Promise<number> {
 	const command = await findFfmpeg({ root });
+	const output = await probeRecording({ command, source, signal });
+	if (!parseHasAudio({ output }))
+		throw new Error(
+			`${basename(source)} has no audio track, so there is nothing to transcribe.`,
+		);
 	await run({ command, args: ffmpegArgs({ source, wav }), signal });
 	const file = await open(wav, "r");
 	try {
