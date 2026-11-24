@@ -70,6 +70,12 @@ test("a finished run answers every waiter, and stop aborts what runs", async () 
 	await expect(shared.run({ key: "c", signal: gone, work })).rejects.toThrow(
 		"already gone",
 	);
+
+	// Work asked for after stop isn't started, so nothing is left to wait for.
+	const late = shared.run({ key: "d", work: blocking });
+	await expect(late).rejects.toThrow("stopping");
+	expect(signals).toHaveLength(1);
+	await shared.settled();
 });
 
 test("settled waits for work every waiter left until it has cleaned up", async () => {

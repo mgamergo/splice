@@ -8,7 +8,8 @@ type Running<T> = {
  * Work that every request asking for the same key shares, such as one FFmpeg
  * scan of a file. A request's `signal` ends only its own wait. The work is
  * aborted once every request waiting for it has gone, or when `stop` aborts,
- * and the next request for the key starts it again.
+ * and the next request for the key starts it again. After `stop` aborts, new
+ * requests are refused.
  */
 export function createSharedWork<T>({ stop }: { stop: AbortSignal }) {
 	/** Work a new request for its key joins. */
@@ -26,6 +27,9 @@ export function createSharedWork<T>({ stop }: { stop: AbortSignal }) {
 			work: (signal: AbortSignal) => Promise<T>;
 		}): Promise<T> {
 			if (signal?.aborted) return Promise.reject(signal.reason);
+			// Work started now would get a signal already aborted, with no abort
+			// event left to end it.
+			if (stop.aborted) return Promise.reject(stop.reason);
 			let job = running.get(key);
 			if (!job) {
 				const abort = new AbortController();
