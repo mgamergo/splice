@@ -122,6 +122,31 @@ test("joins silences around a click only when the transcript has no word there",
 	).toEqual([{ start: 6.4, end: 9.5 }]);
 });
 
+test("keeps a short word Whisper timed inside the silence after it", () => {
+	// "a" sounds at 1.50–1.60 s, but Whisper puts it in the next silence.
+	const silences = [
+		{ start: 1, end: 1.5 },
+		{ start: 1.6, end: 2.2 },
+	];
+	const words = [
+		word(["Take", 0.2, 0.9]),
+		word(["a", 1.65, 1.72]),
+		word(["breath", 2.3, 2.8]),
+	];
+	expect(
+		combineSilencesWithTranscript({ silences, words, minSeconds: 0.5 }),
+	).toEqual(silences);
+	// Drifted from the speech after the second silence, the word is nearer that
+	// speech than the click, so the silences still join.
+	expect(
+		combineSilencesWithTranscript({
+			silences,
+			words: [word(["Take", 0.2, 0.9]), word(["breath", 2.05, 2.8])],
+			minSeconds: 0.5,
+		}),
+	).toEqual([{ start: 1, end: 2.2 }]);
+});
+
 test("moves filler words from Whisper's times to their sound between two silences", () => {
 	// Captured drift: Whisper put "erm" inside the silence before the real filler.
 	const silences = [

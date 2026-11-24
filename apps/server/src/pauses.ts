@@ -153,7 +153,10 @@ function transcriptWords(transcript: Transcript): TranscriptWord[] {
  * times drift by up to a second around silence (it places words inside
  * stretches of digital silence), so the transcript never moves or vetoes an
  * edge. It only joins two silences around a sound too short for speech, such
- * as a click, when no word overlaps that sound.
+ * as a click, when no word could be that sound: none overlaps it, and none
+ * lies nearer to it than to any other sound. A short word Whisper moved into
+ * the silence after it still blocks the join; a word drifted from the speech
+ * beyond that silence doesn't.
  */
 export function combineSilencesWithTranscript({
 	silences,
@@ -164,22 +167,40 @@ export function combineSilencesWithTranscript({
 	words: TranscriptWord[] | null;
 	minSeconds: number;
 }): TimeRange[] {
-	const merged: TimeRange[] = [];
+	const disjoint: TimeRange[] = [];
 	for (const silence of [...silences].sort((a, b) => a.start - b.start)) {
-		const previous = merged.at(-1);
-		const bridgeable =
-			previous &&
-			words !== null &&
-			silence.start - previous.end <= BRIDGE_SECONDS &&
-			!words.some(
-				(word) => word.start < silence.start && word.end > previous.end,
-			);
-		if (previous && (silence.start <= previous.end || bridgeable)) {
+		const previous = disjoint.at(-1);
+		if (previous && silence.start <= previous.end)
 			previous.end = Math.max(previous.end, silence.end);
-		} else {
-			merged.push({ ...silence });
-		}
+		else disjoint.push({ ...silence });
 	}
+	const sounds = soundsAround(disjoint);
+	const mayBeWord = ({ sound, word }: { sound: TimeRange; word: TimeRange }) =>
+		overlap({ a: word, b: sound }) > 0 ||
+		sounds.every(
+			(other) =>
+				closeness({ range: word, sound: other }) <=
+				closeness({ range: word, sound }),
+		);
+	const merged: TimeRange[] = [];
+	disjoint.forEach((silence, index) => {
+		const before: TimeRange | undefined = disjoint[index - 1];
+		// Only a word touching the two silences can be nearer to the sound
+		// between them than to the sounds beyond them.
+		const bridgeable =
+			before !== undefined &&
+			words !== null &&
+			silence.start - before.end <= BRIDGE_SECONDS &&
+			!words.some(
+				(word) =>
+					word.end >= before.start &&
+					word.start <= silence.end &&
+					mayBeWord({ sound: sounds[index], word }),
+			);
+		const previous = merged.at(-1);
+		if (bridgeable && previous) previous.end = silence.end;
+		else merged.push({ ...silence });
+	});
 	return merged.filter((silence) =>
 		lastsAtLeast({ range: silence, seconds: minSeconds }),
 	);
@@ -221,6 +242,25 @@ const closeness = ({ range, sound }: { range: TimeRange; sound: TimeRange }) =>
 	overlap({ a: range, b: sound }) - gap({ a: range, b: sound });
 
 /**
+ * The sounds around sorted, disjoint silences: before the first, between each
+ * two (with the silences on either side), and after the last.
+ */
+function soundsAround(
+	silences: TimeRange[],
+): Array<TimeRange & { before?: TimeRange; after?: TimeRange }> {
+	return [
+		{ start: Number.NEGATIVE_INFINITY, end: silences[0]?.start ?? Infinity },
+		...silences.slice(1).map((after, index) => ({
+			start: silences[index].end,
+			end: after.start,
+			before: silences[index],
+			after,
+		})),
+		{ start: silences.at(-1)?.end ?? Infinity, end: Infinity },
+	];
+}
+
+/**
  * English filler words, moved from Whisper's drifting times to their sound:
  * the nearest short sound between two silences. Alignment is conservative,
  * because cutting the wrong sound deletes a real word. A filler stays at its
@@ -245,18 +285,9 @@ export function findFillerWords({
 	const words = transcriptWords(transcript);
 	const isFiller = (text: string) => FILLER_WORDS.has(normalizeWord(text));
 	const spoken = words.filter(({ text }) => !isFiller(text));
-	const sorted = [...silences].sort((a, b) => a.start - b.start);
-	const audible: Array<TimeRange & { before?: TimeRange; after?: TimeRange }> =
-		[
-			{ start: Number.NEGATIVE_INFINITY, end: sorted[0]?.start ?? Infinity },
-			...sorted.slice(1).map((after, index) => ({
-				start: sorted[index].end,
-				end: after.start,
-				before: sorted[index],
-				after,
-			})),
-			{ start: sorted.at(-1)?.end ?? Infinity, end: Infinity },
-		].filter(({ start, end }) => end > start);
+	const audible = soundsAround(
+		[...silences].sort((a, b) => a.start - b.start),
+	).filter(({ start, end }) => end > start);
 	const claims = ({
 		word,
 		sound,
