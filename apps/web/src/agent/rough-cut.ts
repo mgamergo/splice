@@ -1,5 +1,5 @@
 import type { RoughCutPlan, ItemRange } from "@splice/bridge/ops";
-import { audibleClips } from "@/agent/loudness";
+import { audibleClips, heardClips } from "@/agent/loudness";
 import {
 	closeSlivers,
 	countOverlapping,
@@ -18,6 +18,7 @@ import {
 } from "@/retime";
 import {
 	calculateTotalDuration,
+	hasMediaId,
 	type RemovalMarker,
 	type SequenceTracks,
 	type TimelineClip,
@@ -157,7 +158,8 @@ export type SilentPart = ItemRange & {
  * delete cuts every track, so a pause in a muted clip, or under another
  * recording's sound, isn't cut. The same source time can be silent at one
  * placement of a recording and under another recording's sound at the next,
- * so a part only holds for its own clip.
+ * so a part only holds for its own clip. Audio that wasn't scanned, such as
+ * library music, which has no project item, sounds throughout.
  */
 export function audiblePauses({
 	tracks,
@@ -213,7 +215,16 @@ export function audiblePauses({
 			sounding: subtractSpans({ within: [span], without: silent }),
 		};
 	});
-	const holes = unionSpans(placed.flatMap(({ sounding }) => sounding));
+	const scanned = new Set(projectItems.map(({ id }) => id));
+	const unscanned = heardClips({ tracks, projectItems }).flatMap(({ clip }) =>
+		hasMediaId(clip) && scanned.has(clip.mediaId)
+			? []
+			: [{ start: clip.startTime, end: clip.startTime + clip.duration }],
+	);
+	const holes = unionSpans([
+		...placed.flatMap(({ sounding }) => sounding),
+		...unscanned,
+	]);
 	return placed.flatMap(({ clipId, toSource, silent }) =>
 		silent.flatMap((window) =>
 			outsideHoles({ area: window, holes }).map(({ start, end }) => ({

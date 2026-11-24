@@ -11,7 +11,10 @@ import {
 import { ToggleSourceAudioSeparationCommand } from "@/commands/timeline/clip/toggle-source-audio-separation";
 import type { EditorCore } from "@/core";
 import type { TimelineClip } from "@/timeline";
-import { buildClipFromMedia } from "@/timeline/clip-utils";
+import {
+	buildClipFromMedia,
+	buildLibraryAudioClip,
+} from "@/timeline/clip-utils";
 import { buildEmptyTrack } from "@/timeline/placement";
 import {
 	type MediaTime,
@@ -709,6 +712,44 @@ describe("pauses follow what plays", () => {
 		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
 		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(1.197, 3);
 		expect(result.durationSeconds).toBeCloseTo(22.803, 3);
+	});
+
+	test("keeps a pause under library music, which can't be scanned", () => {
+		const music = buildLibraryAudioClip({
+			sourceUrl: "https://example.com/music.mp3",
+			name: "Music",
+			duration: mediaTimeFromSeconds({ seconds: 10 }),
+			startTime: ZERO_MEDIA_TIME,
+		});
+		const { tracks } = active();
+		const withMusic = (muted: boolean) =>
+			editor.timeline.updateTracks({
+				...tracks,
+				audio: [
+					...tracks.audio,
+					{
+						...buildEmptyTrack({ id: "music-track", type: "audio" }),
+						muted,
+						clips: [{ ...music, id: "music-clip" }],
+					},
+				],
+			});
+		withMusic(false);
+		expect(cut([at([first, 2, 4.5])])).toMatchObject({
+			ok: true,
+			durationSeconds: 24,
+			tightening: { pauses: { count: 0, removedSeconds: 0 } },
+		});
+		// Muted music doesn't play, so the pause goes.
+		editor.command.undo();
+		withMusic(true);
+		const result = cut([at([first, 2, 4.5])]);
+		expect(result).toMatchObject({
+			ok: true,
+			tightening: { pauses: { count: 1 } },
+		});
+		if (!result.ok || !("tightening" in result)) throw new Error("No cut");
+		expect(result.tightening.pauses.removedSeconds).toBeCloseTo(2.1, 3);
 	});
 
 	test("cuts a pause only at the placement where every recording is silent", () => {
