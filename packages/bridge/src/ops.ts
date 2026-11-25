@@ -240,6 +240,12 @@ export const applyRequestSchema = z.strictObject({
 		.max(120)
 		.describe('Short undo label shown to the creator, e.g. "Remove bad takes"'),
 	ops: z.array(editOpSchema).min(1),
+	scope: rangeSchema.optional().describe(
+		"Selected passage in sequence time. Use transcript_selection to get its start and end.",
+	),
+	allowOutsideScope: z.boolean().optional().describe(
+		"Set only when the creator authorizes changes outside the selected passage, including ripple shifts.",
+	),
 });
 
 export const rawSequenceRequestSchema = z.strictObject({
@@ -371,11 +377,14 @@ const roughCutBaseSchema = z.strictObject({
 		.describe('Source sequence ID. Defaults to the sequence named "Raw".'),
 	expectedRevision,
 	label: applyRequestSchema.shape.label.optional(),
+	restructure: z.boolean().optional().describe(
+		"Set only when the creator explicitly asks to restructure, for example to remove a whole section or choose a take out of teaching order.",
+	),
 	sections: z
 		.array(
 			z.strictObject({
 				name: z.string().trim().min(1),
-				takes: z.array(takeSchema).min(2),
+				takes: z.array(takeSchema).min(1),
 				bestTakeIndex: z
 					.number()
 					.int()
@@ -385,7 +394,7 @@ const roughCutBaseSchema = z.strictObject({
 		)
 		.default([])
 		.describe(
-			"Sections with retakes. Omit or pass [] when nothing was retaken.",
+			"Sections in recording order. Include one-take sections to protect them during tightening. Omit or pass [] when no sections are known.",
 		),
 	falseStarts: z
 		.array(itemRangeSchema)

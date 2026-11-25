@@ -928,6 +928,10 @@ export class TimelineManager {
 	}
 
 	updateTracks(newTracks: SequenceTracks): void {
+		if (this.editor.sequences.isStagingEdit()) {
+			this.editor.sequences.updateSequenceTracks({ tracks: newTracks });
+			return;
+		}
 		this.previewOverlay.clear();
 		this.previewTracks = null;
 		this.editor.sequences.updateSequenceTracks({ tracks: newTracks });

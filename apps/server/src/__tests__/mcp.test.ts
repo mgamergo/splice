@@ -49,6 +49,8 @@ describe("splice mcp tools", () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
+			"brief_get",
+			"brief_set",
 			"captions_add",
 			"captions_correct",
 			"captions_list",
@@ -79,6 +81,7 @@ describe("splice mcp tools", () => {
 			"rough_cut",
 			"sequence_apply",
 			"sequence_get",
+			"sequence_preview_ops",
 			"short_caption_placement",
 			"short_hook",
 			"short_srt",
@@ -88,6 +91,38 @@ describe("splice mcp tools", () => {
 			"transcribe_status",
 			"transcript_selection",
 		]);
+	});
+
+	test("brief and scoped preview tools forward their project and sequence revisions", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const brief = { text: "Show the result after the setup", targetDurationSeconds: 60 };
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			return { ok: true, brief };
+		});
+		const briefArgs = { projectId: "project", expectedRevision: 4, brief };
+		const previewArgs = {
+			sequenceId: "sequence",
+			expectedRevision: 5,
+			label: "Mark passage",
+			scope: { start: { seconds: 2 }, end: { seconds: 5 } },
+			ops: [{ op: "add_marker", at: { seconds: 3 } }],
+		};
+		try {
+			const get = await client.callTool({ name: "brief_get" });
+			expect(JSON.parse(textOf(get))).toMatchObject({ ok: true, brief });
+			const set = await client.callTool({ name: "brief_set", arguments: briefArgs });
+			expect(set.isError).toBeFalsy();
+			const preview = await client.callTool({ name: "sequence_preview_ops", arguments: previewArgs });
+			expect(preview.isError).toBeFalsy();
+			expect(calls).toEqual([
+				["editor.briefGet", undefined],
+				["editor.briefSet", briefArgs],
+				["editor.previewOps", previewArgs],
+			]);
+		} finally {
+			await client.close();
+		}
 	});
 
 	test("checkpoint status identifies the exported checkpoint even when SRT and MP4 match a later approval", async () => {

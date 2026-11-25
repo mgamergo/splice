@@ -1,12 +1,12 @@
 import type { EditorCore } from "@/core";
 import {
-	type Command,
+	Command,
 	type CommandResult,
 	createClipSelectionResult,
 } from "@/commands/base-command";
 import type { EditorSelectionSnapshot } from "@/selection/editor-selection";
 import { applyRippleAdjustments, computeRippleAdjustments } from "@/ripple";
-import type { SequenceTracks } from "@/timeline/types";
+import type { SequenceTracks, TSequence } from "@/timeline/types";
 
 interface CommandHistoryEntry {
 	command: Command;
@@ -40,16 +40,63 @@ export class CommandManager {
 		const followUps = this.runFollowUps();
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
-		this.history.push({
+		this.recordExecution({
 			command,
 			followUps,
 			sequenceId,
 			previousSelection,
 			selectionOverride,
 		});
+		return command;
+	}
+
+	/** Agent sequence commands ignore the UI ripple toggle. Include their derived edits in the preview. */
+	previewSequenceEdit({ command }: { command: Command }) {
+		return this.editor.sequences.stageEdit(() => {
+			const result = command.execute();
+			this.runFollowUps();
+			this.runReactors();
+			return result;
+		});
+	}
+
+	/** Publish the exact previewed state as one undo step. */
+	commitSequenceEdit({
+		sequences,
+		result,
+	}: {
+		sequences: TSequence[];
+		result: CommandResult | undefined;
+	}): void {
+		const manager = this.editor.sequences;
+		const before = manager.getSequences();
+		const sequenceId = manager.getActiveSequence().id;
+		const previousSelection = this.getSelectionSnapshot();
+		const command = new (class extends Command {
+			readonly ignoresRippleToggle = true;
+			execute() {
+				manager.setSequences({ sequences });
+				return result;
+			}
+			undo() {
+				manager.setSequences({ sequences: before });
+			}
+		})();
+		command.execute();
+		const selectionOverride = this.applySelectionOverride(result);
+		this.recordExecution({
+			command,
+			followUps: [],
+			sequenceId,
+			previousSelection,
+			selectionOverride,
+		});
+	}
+
+	private recordExecution(entry: CommandHistoryEntry): void {
+		this.history.push(entry);
 		this.redoStack = [];
 		this.bumpRevision();
-		return command;
 	}
 
 	push({ command }: { command: Command }): void {

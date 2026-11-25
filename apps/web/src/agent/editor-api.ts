@@ -1,3 +1,5 @@
+import { briefSetRequestSchema, normalizeProjectBrief } from "@splice/bridge/brief";
+import { sequenceEditImpact } from "@/agent/sequence-edit-impact";
 import { fillExplainerPicture } from "@/agent/explainer-picture";
 import {
 	buildRawSequence,
@@ -129,13 +131,16 @@ import type {
 	TimelineClip,
 	TSequence,
 } from "@/timeline";
-import { addMediaTime, mediaTimeToSeconds } from "@/wasm";
+import { addMediaTime, mediaTimeFromSeconds, mediaTimeToSeconds } from "@/wasm";
 
 export type ApplyErrorCode =
 	| "INVALID_REQUEST"
 	| "REVISION_CONFLICT"
 	| "INVALID_OP"
+	| "OUTSIDE_SCOPE"
 	| "NO_PROJECT";
+
+type SequenceEditImpact = ReturnType<typeof sequenceEditImpact>;
 
 type EditorError = {
 	ok: false;
@@ -144,10 +149,11 @@ type EditorError = {
 	revision: number;
 	/** The current digest, so the agent can re-plan after a conflict. */
 	digest?: string;
+	impact?: SequenceEditImpact;
 };
 
 export type ApplyResult =
-	| { ok: true; revision: number; label: string; summary: string[] }
+	| { ok: true; revision: number; label: string; summary: string[]; impact?: SequenceEditImpact }
 	| EditorError;
 
 class InvalidOpError extends Error {}
@@ -191,7 +197,60 @@ export class EditorApi {
 		});
 	}
 
+	private briefContext() {
+		const brief = this.editor.project.getActive().brief;
+		return brief ? { brief } : {};
+	}
+
+	briefGet() {
+		const project = this.editor.project.getActiveOrNull();
+		if (!project) return this.noProject();
+		return {
+			ok: true as const,
+			projectId: project.metadata.id,
+			revision: this.getRevision(),
+			brief: project.brief ?? null,
+		};
+	}
+
+	briefSet(request: unknown) {
+		const parsed = briefSetRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const project = this.editor.project.getActive();
+		if (project.metadata.id !== parsed.data.projectId) {
+			return {
+				ok: false as const,
+				code: "REVISION_CONFLICT" as const,
+				message: "The creator switched projects. Read the project brief again.",
+				revision: this.getRevision(),
+			};
+		}
+		const brief = normalizeProjectBrief(parsed.data.brief);
+		if (JSON.stringify(project.brief) !== JSON.stringify(brief)) {
+			this.editor.project.setActiveProject({
+				project: {
+					...project,
+					brief,
+					metadata: { ...project.metadata, updatedAt: new Date() },
+				},
+			});
+			this.editor.save.markDirty();
+			this.editor.command.bumpRevision();
+		}
+		return this.briefGet();
+	}
+
 	apply(request: unknown): ApplyResult {
+		return this.editSequence({ request, preview: false });
+	}
+
+	previewOps(request: unknown) {
+		return this.editSequence({ request, preview: true });
+	}
+
+	private editSequence({ request, preview }: { request: unknown; preview: boolean }): ApplyResult {
 		const parsed = applyRequestSchema.safeParse(request);
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const conflict = this.checkWrite(parsed.data);
@@ -206,7 +265,7 @@ export class EditorApi {
 				digest: this.getDigest(),
 			};
 		}
-		return this.run({ request: parsed.data });
+		return this.run({ request: parsed.data, preview });
 	}
 
 	rawSequence(request: unknown) {
@@ -327,6 +386,20 @@ export class EditorApi {
 					fps: this.editor.project.getActive().settings.fps,
 				}),
 			});
+			const project = this.editor.project.getActive();
+			const brief = project.brief ?? null;
+			const target = brief?.targetDurationSeconds;
+			const durationSeconds = sequenceDurationSeconds(cut.sequence);
+			const overBySeconds = target === undefined ? 0 : Math.max(0, durationSeconds - target);
+			const context = {
+				...(brief && { brief }),
+				...(target !== undefined && {
+					targetDuration: { targetSeconds: target, overBySeconds },
+					...(overBySeconds > 0 && !cutPlan.restructure && {
+						targetDurationNote: "The cut exceeds the target. Try tighter cuts within sections, or get explicit creator direction before restructuring.",
+					}),
+				}),
+			};
 			// Noise reduction goes on first, so the plan reports which audio
 			// `splice` must measure denoised.
 			const tracks = noiseReduction
@@ -343,11 +416,11 @@ export class EditorApi {
 					ok: true as const,
 					revision: this.getRevision(),
 					audioSources: collectAudioSources({ tracks, projectItems }),
+					...context,
 				};
 			const leveled = sourceGains
 				? applySourceGains({ tracks, projectItems, gains: sourceGains })
 				: tracks;
-			const project = this.editor.project.getActive();
 			const gained =
 				projectShortStyle({ project }) === "explainer"
 					? fillExplainerPicture({
@@ -368,6 +441,7 @@ export class EditorApi {
 				: { ...cut.sequence, tracks: gained };
 			return {
 				...this.addPreparedSequence({ sequence, label }),
+				...context,
 				sections: cut.sections,
 				tightening: cut.tightening,
 				...(captioned && {
@@ -382,7 +456,10 @@ export class EditorApi {
 				!(error instanceof CaptionError)
 			)
 				throw error;
-			return this.invalidOp(error.message);
+			return {
+				...this.invalidOp(error.message),
+				...this.briefContext(),
+			};
 		}
 	}
 
@@ -465,6 +542,7 @@ export class EditorApi {
 				label,
 				captionCount,
 				uncaptionedItemIds,
+				...this.briefContext(),
 			};
 		} catch (error) {
 			if (!(error instanceof CaptionError)) throw error;
@@ -483,6 +561,7 @@ export class EditorApi {
 		return {
 			ok: true as const,
 			style: parsed.data.style,
+			...this.briefContext(),
 			revision: this.getRevision(),
 		};
 	}
@@ -522,6 +601,7 @@ export class EditorApi {
 		return {
 			ok: true as const,
 			position: parsed.data.position,
+			...this.briefContext(),
 			revision: this.getRevision(),
 		};
 	}
@@ -554,6 +634,7 @@ export class EditorApi {
 		return {
 			ok: true as const,
 			status: result.status,
+			...this.briefContext(),
 			revision: this.getRevision(),
 		};
 	}
@@ -567,6 +648,7 @@ export class EditorApi {
 			ok: true as const,
 			revision: this.getRevision(),
 			srt: shortSrt({ tracks: sequence.tracks }),
+			...this.briefContext(),
 		};
 	}
 
@@ -781,6 +863,7 @@ export class EditorApi {
 				sequenceId: found.sequence.id,
 				revision: this.getRevision(),
 				graphics: entries,
+			...this.briefContext(),
 				...(removed > 0 && { wouldRemove: removed }),
 			};
 		} catch (error) {
@@ -815,6 +898,7 @@ export class EditorApi {
 			...result,
 			sequenceId: found.sequence.id,
 			graphics: report?.entries ?? [],
+			...this.briefContext(),
 			...(report?.removed && { removed: report.removed }),
 		};
 	}
@@ -830,6 +914,7 @@ export class EditorApi {
 			sequenceId: found.sequence.id,
 			revision: this.getRevision(),
 			graphics: summarizeGraphics({ sequence: found.sequence }),
+			...this.briefContext(),
 			deletedByCreator: found.sequence.graphics?.tombstones.length ?? 0,
 		};
 	}
@@ -1323,8 +1408,10 @@ export class EditorApi {
 	private run({
 		request,
 		onGraphicsPass,
+		preview = false,
 	}: {
 		request: ApplyRequest;
+		preview?: boolean;
 		onGraphicsPass?: (result: Pick<ReturnType<EditorApi["passResult"]>, "entries" | "removed">) => void;
 	}): ApplyResult {
 		const summary: string[] = [];
@@ -1338,8 +1425,39 @@ export class EditorApi {
 		);
 		const batch = new AgentBatchCommand({ editor: this.editor, commands });
 
+		let impact: SequenceEditImpact | undefined;
 		try {
-			this.editor.command.execute({ command: batch });
+			if (preview || request.scope) {
+				const before = this.editor.sequences.getActiveSequence();
+				const fps = this.editor.project.getActive().settings.fps;
+				const scopeTime = (spec: Parameters<typeof resolveTimeSpec>[0]["spec"]) =>
+					"seconds" in spec
+						? mediaTimeFromSeconds({ seconds: spec.seconds })
+						: resolveTimeSpec({ spec, fps });
+				const scope = request.scope && {
+					start: scopeTime(request.scope.start),
+					end: scopeTime(request.scope.end),
+				};
+				if (scope && scope.end <= scope.start)
+					return this.invalidOp("The scope end must be after its start.");
+				const staged = this.editor.command.previewSequenceEdit({ command: batch });
+				const after = staged.sequences.find(({ id }) => id === before.id);
+				if (!after) throw new Error("A sequence edit removed the active sequence.");
+				impact = sequenceEditImpact({ before, after, scope });
+				if (!preview) {
+					if (impact.outsideScopeUntouched === false && !request.allowOutsideScope)
+						return {
+							ok: false,
+							code: "OUTSIDE_SCOPE",
+							message: "This batch changes edits outside the selected passage. Revise the batch or obtain the creator's authorization to expand its scope.",
+							revision: this.getRevision(),
+							impact,
+						};
+					this.editor.command.commitSequenceEdit(staged);
+				}
+			} else {
+				this.editor.command.execute({ command: batch });
+			}
 		} catch (error) {
 			// BatchCommand has already undone the ops that ran before the failure.
 			const revision = this.getRevision();
@@ -1364,6 +1482,7 @@ export class EditorApi {
 			revision: this.getRevision(),
 			label: request.label,
 			summary,
+			...(impact && { impact }),
 		};
 	}
 

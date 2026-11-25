@@ -961,3 +961,55 @@ describe("pauses follow what plays", () => {
 		expect(scratchLength()).toBeCloseTo(5.7, 3);
 	});
 });
+
+test("preserves teaching order by the first take of each section", () => {
+	const source = active();
+	const args = {
+		expectedRevision: api.getRevision(),
+		pauses: [],
+		sections: [
+			{ name: "Setup", takes: [at([first, 0, 2]), at([first, 8, 10])], bestTakeIndex: 1 },
+			{ name: "Payoff", takes: [at([first, 3, 6])], bestTakeIndex: 0 },
+		],
+	};
+	expect(api.roughCut(args)).toMatchObject({
+		code: "INVALID_OP",
+		message: expect.stringContaining("teaching order"),
+	});
+	expect(active()).toBe(source);
+	expect(api.roughCut({ ...args, restructure: true })).toMatchObject({ ok: true });
+});
+
+test("tightening preserves a one-take section and reports a missed brief target", () => {
+	editor.save.pause();
+	expect(api.briefSet({
+		projectId: editor.project.getActive().metadata.id,
+		expectedRevision: api.getRevision(),
+		brief: { goal: "Show the setup and payoff", targetDurationSeconds: 1 },
+	})).toMatchObject({ ok: true });
+	const source = active();
+	const args = {
+		expectedRevision: api.getRevision(),
+		pauses: [],
+		sections: [{ name: "Payoff", takes: [at([first, 3, 6])], bestTakeIndex: 0 }],
+	};
+	const falseStarts = [at([first, 3, 4]), at([first, 4, 6])];
+	expect(api.roughCut({ ...args, falseStarts, plan: true })).toMatchObject({
+		code: "INVALID_OP",
+		message: expect.stringContaining("whole “Payoff” section"),
+	});
+	expect(api.roughCut({ ...args, falseStarts })).toMatchObject({ code: "INVALID_OP" });
+	expect(active()).toBe(source);
+	expect(api.roughCut({ ...args, plan: true })).toMatchObject({
+		ok: true,
+		brief: { targetDurationSeconds: 1 },
+		targetDuration: { targetSeconds: 1, overBySeconds: 23 },
+		targetDurationNote: expect.stringContaining("exceeds"),
+	});
+	expect(api.roughCut({ ...args, falseStarts, restructure: true })).toMatchObject({
+		ok: true,
+		durationSeconds: 21,
+		brief: { goal: "Show the setup and payoff" },
+		targetDuration: { targetSeconds: 1, overBySeconds: 20 },
+	});
+});

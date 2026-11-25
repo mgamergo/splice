@@ -454,6 +454,23 @@ export function buildRoughCut({
 		}
 	}
 
+	if (!plan.restructure) {
+		const inRecordingOrder = mapped
+			.map((section) => ({
+				...section,
+				firstTakeAt: section.windows.reduce((first, { start }) => start < first ? start : first, section.bestWindow.start),
+			}))
+			.sort((a, b) => a.firstTakeAt - b.firstTakeAt);
+		for (let i = 1; i < inRecordingOrder.length; i++) {
+			const previous = inRecordingOrder[i - 1];
+			const current = inRecordingOrder[i];
+			if (current.bestWindow.start < previous.bestWindow.start)
+				throw new RemovalTakeError(
+					`The chosen takes put “${current.sectionName}” before “${previous.sectionName}”. Choose takes in teaching order, or pass restructure: true if the creator explicitly asked for that change.`,
+				);
+		}
+	}
+
 	const clamped = {
 		pauses: clampToItems({ ranges: plan.pauses, projectItems }),
 		falseStarts: clampToItems({ ranges: plan.falseStarts, projectItems }),
@@ -585,10 +602,61 @@ export function buildRoughCut({
 		within: [...closeAll(spoken), ...pauses.flat()],
 	});
 
+	const deleted = unionSpans(cuts);
+	const hasKeptMaterial = (spans: Window[], holes: Window[]) =>
+		spans.some((area) => outsideHoles({ area, holes }).length > 0);
+	if (!plan.restructure) {
+		const badTakes = unionSpans(takeCuts);
+		const protects = [
+			...mapped.map(({ sectionName, bestWindow }) => ({ sectionName, spans: [bestWindow] })),
+			...source.markers.flatMap(({ data, id }) => {
+				if (!data) return [];
+				const taggedTracks = keepClips({
+					tracks: source.tracks,
+					keep: (clip) => hasMediaId(clip) && !!clip.bestTakeMarkerIds?.includes(id),
+				});
+				const take = "ranges" in data.bestTake ? data.bestTake.ranges : [data.bestTake];
+				const spans = mapSourceRanges({
+					tracks: taggedTracks,
+					ranges: take.filter(({ projectItemId }) =>
+						projectItems.some(({ id, missing }) => id === projectItemId && !missing)),
+					projectItems,
+					context: `Best take of ${data.sectionName}`,
+				}).flat();
+				return [{ sectionName: data.sectionName, spans }];
+			}),
+		];
+		for (const { sectionName, spans } of protects) {
+			if (spans.length && !hasKeptMaterial(spans, deleted))
+				throw new RemovalTakeError(
+					`This cut would remove the whole “${sectionName}” section. Keep part of its best take, or pass restructure: true if the creator explicitly asked to remove it.`,
+				);
+		}
+		const recordings = Map.groupBy(audibleClips({ tracks: source.tracks, projectItems }), ({ clip }) => clip.mediaId);
+		for (const [itemId, recording] of recordings) {
+			const spans = recording.map(({ clip }) => ({
+				start: clip.startTime,
+				end: addMediaTime({ a: clip.startTime, b: clip.duration }),
+			}));
+			// A recording can be entirely bad takes. Guard only the content left after take removal.
+			if (hasKeptMaterial(spans, badTakes) && !hasKeptMaterial(spans, deleted))
+				throw new RemovalTakeError(
+					`Tightening would remove all kept material from recording ${itemId}. Keep some of the recording, or pass restructure: true if the creator explicitly asked to remove it.`,
+				);
+		}
+	}
+
 	let tracks = source.tracks;
 	const markers = [...source.markers];
 	const sectionsRemoved = mapped.map(
 		({ sectionName, bestTake, bestWindow, cuts: sectionCuts }) => {
+			const removed = sectionCuts.reduce(
+				(sum, { start, end }) => sum + end - start,
+				0,
+			);
+			const report = { sectionName, removedSeconds: seconds(removed) };
+			if (sectionCuts.length === 0 || !hasKeptMaterial([bestWindow], deleted))
+				return report;
 			const marker: RemovalMarker = {
 				id: generateUUID(),
 				time: sectionCuts[0].start,
@@ -605,11 +673,7 @@ export function buildRoughCut({
 				markerId: marker.id,
 				clipIds: bestWindow.clipIds,
 			});
-			const removed = sectionCuts.reduce(
-				(sum, { start, end }) => sum + end - start,
-				0,
-			);
-			return { sectionName, removedSeconds: seconds(removed) };
+			return report;
 		},
 	);
 

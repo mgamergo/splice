@@ -1,3 +1,4 @@
+import { normalizeProjectBrief, projectBriefSchema } from "@splice/bridge/brief";
 import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceMixSchema } from "@splice/bridge/mix";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
@@ -205,6 +206,7 @@ class StorageService {
 			version: project.version,
 			timelineViewState: project.timelineViewState,
 			...(project.captions && { captions: project.captions }),
+			...(project.brief && { brief: project.brief }),
 			...(project.approval && { approval: project.approval }),
 		};
 
@@ -276,6 +278,7 @@ class StorageService {
 			settings: serializedProject.settings,
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
+			brief: normalizeProjectBrief(projectBriefSchema.safeParse(serializedProject.brief).data),
 			captions: parseProjectCaptions(serializedProject.captions),
 			approval: parseProjectApproval({
 				raw: serializedProject.approval,

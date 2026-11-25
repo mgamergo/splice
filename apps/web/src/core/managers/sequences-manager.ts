@@ -25,6 +25,7 @@ import type { MediaTime } from "@/wasm";
 
 export class SequencesManager {
 	private active: TSequence | null = null;
+	private stagingEdit = false;
 	private list: TSequence[] = [];
 	private listeners = new Set<() => void>();
 
@@ -264,6 +265,26 @@ export class SequencesManager {
 		return this.list;
 	}
 
+	isStagingEdit(): boolean {
+		return this.stagingEdit;
+	}
+
+	/** Run synchronous sequence commands without publishing their intermediate state. */
+	stageEdit<T>(edit: () => T): { sequences: TSequence[]; result: T } {
+		if (this.stagingEdit)
+			throw new Error("Sequence edits cannot be staged inside one another.");
+		const { list, active } = this;
+		this.stagingEdit = true;
+		try {
+			const result = edit();
+			return { sequences: this.list, result };
+		} finally {
+			this.list = list;
+			this.active = active;
+			this.stagingEdit = false;
+		}
+	}
+
 	setSequences({
 		sequences,
 		activeSequenceId,
@@ -277,6 +298,7 @@ export class SequencesManager {
 			? (sequences.find((sequence) => sequence.id === nextActiveSequenceId) ??
 				null)
 			: null;
+		if (this.stagingEdit) return;
 		this.notify();
 
 		const activeProject = this.editor.project.getActive();
@@ -318,6 +340,7 @@ export class SequencesManager {
 			s.id === this.active?.id ? updatedSequence : s,
 		);
 		this.active = updatedSequence;
+		if (this.stagingEdit) return;
 		this.notify();
 
 		const activeProject = this.editor.project.getActive();

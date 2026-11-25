@@ -67,6 +67,9 @@ function setUp(handlers: Partial<TabHandlers> = {}) {
 		handlers: {
 			"editor.getState": () => ({ revision: 3 }),
 			"editor.apply": () => ({ ok: true }),
+			"editor.previewOps": () => ({ ok: true }),
+			"editor.briefGet": () => ({ ok: true }),
+			"editor.briefSet": () => ({ ok: true }),
 			"editor.listItems": () => [],
 			"editor.importItems": () => ({ imported: [], failed: [] }),
 			"editor.rawSequence": () => ({ ok: true }),
