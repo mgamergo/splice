@@ -1,7 +1,7 @@
 import { createCacheUse, type CacheUse } from "./cache-use";
 import type { Transcript, TranscriptWord } from "@splice/bridge";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
@@ -406,20 +406,24 @@ export function createPauseDetector({
 		noiseDb: number;
 		signal?: AbortSignal;
 	}): Promise<{ scan: Scan; cached: boolean }> {
-		const { source, info } = await resolveRecording({ root, path });
-		// The inode and change time catch a file replaced with one of the same
-		// size and modified time.
-		const key = createHash("sha256")
-			.update(
-				JSON.stringify([CACHE_VERSION, path, ...fileIdentity(info), noiseDb]),
-			)
-			.digest("hex");
+		const { source, info, content } = await resolveRecording({ root, path });
+		const keyFor = (identity: Array<string | number>) =>
+			createHash("sha256")
+				.update(JSON.stringify([CACHE_VERSION, ...identity, noiseDb]))
+				.digest("hex");
+		const key = keyFor([content]);
 		const cachePath = join(cacheDir, `${key}.json`);
-		const cached = scanSchema.safeParse(
-			await Bun.file(cachePath)
-				.json()
-				.catch(() => null),
+		const legacy = join(
+			cacheDir,
+			`${keyFor([path, ...fileIdentity(info)])}.json`,
 		);
+		const cached = await cacheUse.use({
+			cache: "pauses",
+			operation: async () => {
+				await link(legacy, cachePath).catch(() => {});
+				return scanSchema.safeParse(await Bun.file(cachePath).json().catch(() => null));
+			},
+		});
 		if (cached.success) return { scan: cached.data, cached: true };
 		const work = (jobSignal: AbortSignal) =>
 			cacheUse.use({

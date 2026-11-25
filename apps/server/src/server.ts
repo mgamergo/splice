@@ -584,8 +584,13 @@ export function startServer({
 			try {
 				version = await footageVersion({ absolutePath });
 				if (expected !== null && expected !== version) return changed();
-				if (probe && request.headers.get(MEDIA_CONTENT_HEADER) === "1")
-					contentHash = await footageContentHash({ absolutePath, version });
+				const hashMode = request.headers.get(MEDIA_CONTENT_HEADER);
+				if (probe && (hashMode === "sample" || hashMode === "1"))
+					contentHash = await footageContentHash({
+						absolutePath,
+						version,
+						full: hashMode === "1",
+					});
 				// The path can be replaced while a content hash is computed.
 				if ((await footageVersion({ absolutePath })) !== version)
 					return changed();

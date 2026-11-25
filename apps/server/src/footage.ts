@@ -1,7 +1,7 @@
 import { type FootageFile, isFootagePath } from "@splice/bridge";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { realpath, readdir, stat } from "node:fs/promises";
+import { createReadStream, type Stats } from "node:fs";
+import { open, realpath, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 import { fileIdentity } from "./file-identity";
@@ -111,6 +111,12 @@ export async function listFootage({
 }
 
 /** Changes even when a replacement has the same size and modification time. */
+export function versionForStats(info: Stats): string {
+	return createHash("sha256")
+		.update([info.dev, ...fileIdentity(info)].join())
+		.digest("hex");
+}
+
 export async function footageVersion({
 	absolutePath,
 }: {
@@ -118,40 +124,89 @@ export async function footageVersion({
 }): Promise<string> {
 	const info = await stat(absolutePath);
 	if (!info.isFile()) throw new Error("Footage is unavailable.");
-	return createHash("sha256")
-		.update([info.dev, ...fileIdentity(info)].join())
-		.digest("hex");
+	return versionForStats(info);
 }
 
 const footageHashes = new Map<string, Promise<string>>();
 const MAX_CACHED_HASHES = 512;
 
-/** Hash the file on demand and share the result between probes of that version. */
-export function footageContentHash({
+const SAMPLE_BYTES = 64 * 1024;
+const SAMPLE_COUNT = 32;
+
+/** Read at most 2 MiB, including both ends. Small files are read in full. */
+async function sampleFootage({
 	absolutePath,
 	version,
 }: {
 	absolutePath: string;
 	version: string;
+}) {
+	const file = await open(absolutePath, "r");
+	try {
+		const info = await file.stat();
+		if (versionForStats(info) !== version)
+			throw new Error("Footage changed while reading its identity.");
+		const hash = createHash("sha256").update(String(info.size) + "\n");
+		const buffer = Buffer.alloc(Math.min(info.size, SAMPLE_BYTES));
+		const last = Math.max(0, info.size - SAMPLE_BYTES);
+		const count = Math.min(SAMPLE_COUNT, Math.ceil(info.size / SAMPLE_BYTES));
+		for (let index = 0; index < count; index++) {
+			const offset = count === 1 ? 0 : Math.floor((last * index) / (count - 1));
+			let read = 0;
+			while (read < buffer.length) {
+				const { bytesRead } = await file.read(
+					buffer,
+					read,
+					buffer.length - read,
+					offset + read,
+				);
+				if (!bytesRead)
+					throw new Error("Footage ended while reading its identity.");
+				read += bytesRead;
+			}
+			hash.update(buffer);
+		}
+		return "sample-v1:" + hash.digest("hex");
+	} finally {
+		await file.close();
+	}
+}
+
+/** Share probes of a file version. Full hashes support existing approved cuts. */
+export function footageContentHash({
+	absolutePath,
+	version,
+	full = false,
+}: {
+	absolutePath: string;
+	version: string;
+	full?: boolean;
 }): Promise<string> {
-	const cached = footageHashes.get(version);
+	const key = full ? "full:" + version : version;
+	const cached = footageHashes.get(key);
 	if (cached) return cached;
 	const pending = (async () => {
-		const hash = createHash("sha256");
-		for await (const chunk of createReadStream(absolutePath))
-			hash.update(chunk);
+		let fingerprint: string;
+		if (full) {
+			const hash = createHash("sha256");
+			for await (const chunk of createReadStream(absolutePath))
+				hash.update(chunk);
+			fingerprint = hash.digest("hex");
+		} else {
+			fingerprint = await sampleFootage({ absolutePath, version });
+		}
 		if ((await footageVersion({ absolutePath })) !== version)
 			throw new Error("Footage changed while reading its identity.");
-		return hash.digest("hex");
+		return fingerprint;
 	})().catch((error: unknown) => {
-		if (footageHashes.get(version) === pending) footageHashes.delete(version);
+		if (footageHashes.get(key) === pending) footageHashes.delete(key);
 		throw error;
 	});
 	if (footageHashes.size >= MAX_CACHED_HASHES) {
 		const oldest = footageHashes.keys().next();
 		if (!oldest.done) footageHashes.delete(oldest.value);
 	}
-	footageHashes.set(version, pending);
+	footageHashes.set(key, pending);
 	return pending;
 }
 

@@ -11,6 +11,7 @@ import {
 import { createHash } from "node:crypto";
 import {
 	access,
+	link,
 	mkdir,
 	mkdtemp,
 	rename,
@@ -26,7 +27,11 @@ import {
 	run,
 	SOURCE_TIMELINE_FILTER,
 } from "./transcription-tools";
-import { mediaTypeForPath } from "./footage";
+import {
+	footageContentHash,
+	mediaTypeForPath,
+	versionForStats,
+} from "./footage";
 import { footagePath, invalidParams, resolveRecording } from "./transcription";
 import { createSharedWork } from "./shared-work";
 import {
@@ -78,17 +83,23 @@ export type LoudnessMeasurement = z.infer<typeof loudnessMeasurementSchema>;
 export function loudnessCacheKey({
 	path,
 	info,
+	content,
 	ranges,
 	render,
 }: {
 	path: string;
 	info: FileIdentity;
+	content?: string;
 	ranges: SourceRange[] | null;
 	/** The noise-reduced render measured, by its file name and identity. */
 	render?: { name: string; info: FileIdentity };
 }): string {
 	// Bump the version when the measurement changes.
-	const key: unknown[] = [5, path, ...fileIdentity(info), ranges];
+	const key: unknown[] = [
+		5,
+		...(content ? [content] : [path, ...fileIdentity(info)]),
+		ranges,
+	];
 	if (render) key.push({ render: [render.name, ...fileIdentity(render.info)] });
 	return createHash("sha256").update(JSON.stringify(key)).digest("hex");
 }
@@ -357,12 +368,9 @@ async function audioOnly({
 	signal: AbortSignal;
 }): Promise<string> {
 	if (mediaTypeForPath(source)?.startsWith("audio/")) return source;
-	const key = createHash("sha256")
-		.update(
-			JSON.stringify([resolve(source), ...fileIdentity(await stat(source))]),
-		)
-		.digest("hex");
-	const audio = join(cacheDir, `audio-${key}.mka`);
+	const version = versionForStats(await stat(source));
+	const content = await footageContentHash({ absolutePath: source, version });
+	const audio = join(cacheDir, `audio-${content.replace(":", "-")}.mka`);
 	if (
 		await access(audio).then(
 			() => true,
@@ -393,6 +401,8 @@ async function audioOnly({
 			],
 			signal,
 		});
+		if (versionForStats(await stat(source)) !== version)
+			throw new Error("Footage changed while copying its audio. Measure it again.");
 		await rename(partial, audio).catch(async (error) => {
 			// Another measurement published the same copy first.
 			if (
@@ -493,20 +503,27 @@ export function createLoudnessMeter({
 		target: Target;
 		signal?: AbortSignal;
 	}) {
-		const { source, info } = await resolveRecording({ root, path });
+		const { source, info, content } = await resolveRecording({ root, path });
 		let input = source;
 		let render: { name: string; info: FileIdentity } | undefined;
 		if (denoised) {
 			input = (await noiseReduction.ensure({ path, signal })).file;
 			render = { name: basename(input), info: await stat(input) };
 		}
-		const key = loudnessCacheKey({ path, info, ranges, render });
+		const key = loudnessCacheKey({ path, info, content, ranges, render });
+		const cachePath = join(cacheDir, `${key}.json`);
+		// Promoting a legacy WAV by hard link changes its ctime, so legacy
+		// measurements of that render must be measured again.
+		if (!render) {
+			const legacy = loudnessCacheKey({ path, info, ranges });
+			await link(join(cacheDir, `${legacy}.json`), cachePath).catch(() => {});
+		}
 		return {
 			input,
 			info,
 			render,
 			key,
-			cachePath: join(cacheDir, `${key}.json`),
+			cachePath,
 		};
 	}
 	type Identified = Awaited<ReturnType<typeof identify>>;

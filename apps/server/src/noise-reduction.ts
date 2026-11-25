@@ -1,7 +1,7 @@
 import { createCacheUse, type CacheUse } from "./cache-use";
 import { DENOISED_AUDIO } from "@splice/bridge";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
@@ -65,13 +65,18 @@ export interface NoiseWindow {
 export function denoiseCacheKey({
 	path,
 	info,
+	content,
 }: {
+	content?: string;
 	path: string;
 	info: FileIdentity;
 }): string {
 	return createHash("sha256")
 		.update(
-			JSON.stringify([NOISE_REDUCTION_VERSION, path, ...fileIdentity(info)]),
+			JSON.stringify([
+				NOISE_REDUCTION_VERSION,
+				...(content ? [content] : [path, ...fileIdentity(info)]),
+			]),
 		)
 		.digest("hex");
 }
@@ -381,24 +386,38 @@ export function createNoiseReducer({
 	const renders = createSharedWork<DenoisedAudio>({ stop: stop.signal });
 
 	async function identify(path: string) {
-		const { source, info } = await resolveRecording({ root, path });
-		const key = denoiseCacheKey({ path, info });
-		return { source, key, file: join(cacheDir, `${key}.wav`) };
+		const { source, info, content, version } = await resolveRecording({
+			root,
+			path,
+		});
+		const key = denoiseCacheKey({ path, info, content });
+		const legacy = denoiseCacheKey({ path, info });
+		return {
+			source,
+			key,
+			version,
+			file: join(cacheDir, `${key}.wav`),
+			legacyFile: join(cacheDir, `${legacy}.wav`),
+		};
 	}
 
 	async function renderAndCache({
 		path,
 		source,
-		key,
+		version,
 		file,
+		legacyFile,
 		signal,
 	}: {
 		path: string;
 		source: string;
-		key: string;
+		version: string;
 		file: string;
+		legacyFile: string;
 		signal: AbortSignal;
 	}): Promise<DenoisedAudio> {
+		if (await Bun.file(file).exists()) return { file, cached: true };
+		await link(legacyFile, file).catch(() => {});
 		if (await Bun.file(file).exists()) return { file, cached: true };
 		await mkdir(cacheDir, { recursive: true });
 		const temporary = await mkdtemp(join(cacheDir, ".job-"));
@@ -415,7 +434,7 @@ export function createNoiseReducer({
 				await resolveRecording({ root, path });
 				throw error;
 			});
-			if ((await identify(path)).key !== key)
+			if ((await identify(path)).version !== version)
 				throw new Error("Footage changed while reducing noise. Try again.");
 			await rename(output, file);
 			return { file, cached: false, noiseWindow };

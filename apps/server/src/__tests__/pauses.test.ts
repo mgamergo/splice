@@ -1,7 +1,15 @@
 import { expect, test } from "bun:test";
 import type { RoughCutSources, Transcript } from "@splice/bridge";
 import { roughCutTabRequestSchema } from "@splice/bridge/ops";
-import { chmod, mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	stat,
+	utimes,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -513,6 +521,22 @@ test.skipIf(!Bun.which("ffmpeg"))(
 			expect(
 				await detector.fillerCuts({ path: "take.wav", paddingSeconds: 0.2 }),
 			).toBeNull();
+
+			await rename(
+				join(root, "Footage", "take.wav"),
+				join(root, "Footage", "moved.wav"),
+			);
+			expect(
+				await detector.detect({ params: { path: "moved.wav" } }),
+			).toMatchObject({
+				path: "moved.wav",
+				cached: true,
+				pauses: first.pauses,
+			});
+			await rename(
+				join(root, "Footage", "moved.wav"),
+				join(root, "Footage", "take.wav"),
+			);
 
 			cached = transcript({ words: [word(["uh", 2.7, 3])] });
 			const second = await detector.detect({

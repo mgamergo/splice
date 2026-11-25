@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
 import { RPC_ERRORS } from "@splice/bridge";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcClient } from "../rpc-client";
@@ -200,6 +207,16 @@ test("concurrent requests join one job, then read the full cache and compact pag
 		});
 		expect(await applyCleanup()).toMatchObject({ freedBytes: 0 });
 		expect(await jobs.start({ path: source })).toMatchObject({ cached: true });
+		const moved = "Day 1/moved.m4a";
+		await rename(join(root, "Footage", source), join(root, "Footage", moved));
+		expect(await jobs.start({ path: moved })).toMatchObject({
+			cached: true,
+			path: moved,
+			transcript: { path: moved },
+		});
+		expect(await jobs.cached({ path: moved })).toMatchObject({ path: moved });
+		expect(runs).toBe(1);
+		await rename(join(root, "Footage", moved), join(root, "Footage", source));
 		// A missing transcript still rebuilds on the next explicit transcription.
 		await rm(cached.cachePath);
 		expect(await jobs.start({ path: source, waitSeconds: 1 })).toMatchObject({

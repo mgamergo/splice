@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+	copyFile,
 	mkdir,
 	mkdtemp,
 	rename,
@@ -19,7 +20,13 @@ import {
 	mediaUrlForPath,
 	sessionCookieName,
 } from "@splice/bridge";
-import { listFootage, mediaTypeForPath, resolveFootagePath } from "../footage";
+import {
+	footageContentHash,
+	footageVersion,
+	listFootage,
+	mediaTypeForPath,
+	resolveFootagePath,
+} from "../footage";
 import { startServer, type RunningServer } from "../server";
 
 const TOKEN = "test-token";
@@ -88,6 +95,37 @@ describe("footage paths", () => {
 		expect(files.map((file) => file.path)).toEqual(["Day 1/take #1.mp4"]);
 		expect(files[0]).toMatchObject({ size: 100, contentType: "video/mp4" });
 	});
+});
+
+test("sampled fingerprints survive a copy and detect edits in the head, interior, and tail", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "splice-fingerprint-"));
+	const original = join(dir, "recording.mp4");
+	const moved = join(dir, "copy.mp4");
+	const bytes = Buffer.alloc(4 * 1024 * 1024);
+	const fingerprint = async (absolutePath: string) =>
+		footageContentHash({
+			absolutePath,
+			version: await footageVersion({ absolutePath }),
+		});
+	try {
+		await writeFile(original, bytes);
+		const expected = await fingerprint(original);
+		expect(expected).toMatch(/^sample-v1:[0-9a-f]{64}$/);
+		await copyFile(original, moved);
+		expect(await fingerprint(moved)).toBe(expected);
+		for (const offset of [
+			0,
+			Math.floor(((bytes.length - 65536) * 15) / 31),
+			bytes.length - 1,
+		]) {
+			const changed = Buffer.from(bytes);
+			changed[offset] = 1;
+			await writeFile(moved, changed);
+			expect(await fingerprint(moved)).not.toBe(expected);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 describe("media route", () => {

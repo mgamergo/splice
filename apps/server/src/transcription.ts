@@ -1,10 +1,15 @@
 import { createCacheUse, type CacheUse } from "./cache-use";
 import { RPC_ERRORS, isFootagePath, type Transcript } from "@splice/bridge";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { mediaTypeForPath, resolveFootagePath } from "./footage";
+import {
+	footageContentHash,
+	mediaTypeForPath,
+	resolveFootagePath,
+	versionForStats,
+} from "./footage";
 import { BridgeError } from "./tab-bridge";
 import { type FileIdentity, fileIdentity } from "./file-identity";
 import { normalizeTranscript, transcriptSchema } from "./transcript";
@@ -66,14 +71,22 @@ export function transcriptCacheKey({
 	path,
 	info,
 	model,
+	content,
 }: {
+	content?: string;
 	path: string;
 	info: FileIdentity;
 	model: string;
 }): string {
 	// Bump the version when cached transcript semantics change.
 	return createHash("sha256")
-		.update(JSON.stringify([4, path, ...fileIdentity(info), model]))
+		.update(
+			JSON.stringify([
+				4,
+				...(content ? [content] : [path, ...fileIdentity(info)]),
+				model,
+			]),
+		)
 		.digest("hex");
 }
 
@@ -116,7 +129,10 @@ export async function resolveRecording({
 			data: isRecording ? MISSING_FOOTAGE : undefined,
 		});
 	}
-	return { source, info: await stat(source) };
+	const info = await stat(source);
+	const version = versionForStats(info);
+	const content = await footageContentHash({ absolutePath: source, version });
+	return { source, info, content, version };
 }
 
 async function waitFor({
@@ -158,10 +174,40 @@ export function createTranscriptionJobs({
 	const active = new Map<string, Job>();
 
 	async function identifySource({ path }: { path: string }) {
-		const { source, info } = await resolveRecording({ root, path });
+		const { source, info, content, version } = await resolveRecording({
+			root,
+			path,
+		});
 		const model = await identifyModel({ root });
-		const key = transcriptCacheKey({ path, info, model: model.fingerprint });
-		return { source, model, key, cachePath: join(cacheDir, `${key}.json`) };
+		const inputs = { path, info, model: model.fingerprint };
+		const key = transcriptCacheKey({ ...inputs, content });
+		const legacy = transcriptCacheKey(inputs);
+		return {
+			source,
+			model,
+			key,
+			version,
+			cachePath: join(cacheDir, `${key}.json`),
+			legacyPath: join(cacheDir, `${legacy}.json`),
+		};
+	}
+
+	async function readCurrentCache({
+		cachePath,
+		legacyPath,
+	}: Awaited<ReturnType<typeof identifySource>>) {
+		const cached = await readCache({ cachePath });
+		if (cached) return cached;
+		return cacheUse.use({
+			cache: "transcripts",
+			operation: async () => {
+				if (!(await readCache({ cachePath: legacyPath })))
+					return readCache({ cachePath });
+				// Both cache files live on the same volume. Linking publishes the complete file.
+				await link(legacyPath, cachePath).catch(() => {});
+				return readCache({ cachePath });
+			},
+		});
 	}
 
 	async function transcribe({
@@ -169,11 +215,13 @@ export function createTranscriptionJobs({
 		source,
 		model,
 		key,
+		version,
 	}: {
 		job: Job;
 		source: string;
 		model: Model;
 		key: string;
+		version: string;
 	}): Promise<Backend> {
 		await mkdir(cacheDir, { recursive: true });
 		const temporary = await mkdtemp(join(cacheDir, ".job-"));
@@ -199,7 +247,11 @@ export function createTranscriptionJobs({
 				durationSeconds,
 			});
 			const current = await identifySource({ path: job.path });
-			if (current.key !== key || current.source !== source) {
+			if (
+				current.key !== key ||
+				current.source !== source ||
+				current.version !== version
+			) {
 				throw new Error(
 					"Footage or the Whisper model changed during transcription. Start a new job.",
 				);
@@ -224,8 +276,16 @@ export function createTranscriptionJobs({
 		}
 	}
 
-	async function result({ job, page }: { job: Job; page: PageInput }) {
-		const base = { jobId: job.id, path: job.path, ...job.state };
+	async function result({
+		job,
+		page,
+		path = job.path,
+	}: {
+		job: Job;
+		page: PageInput;
+		path?: string;
+	}) {
+		const base = { jobId: job.id, path, ...job.state };
 		if (base.status !== "completed") return base;
 		const transcript = await readCache({ cachePath: job.cachePath });
 		if (!transcript) {
@@ -246,6 +306,7 @@ export function createTranscriptionJobs({
 			cachePath: job.cachePath,
 			transcript: {
 				...metadata,
+				path,
 				segments: page.includeWords
 					? selection
 					: selection.map(({ start, end, text }) => ({ start, end, text })),
@@ -258,15 +319,16 @@ export function createTranscriptionJobs({
 	return {
 		/** The cached transcript for a Footage path, or null if it hasn't been transcribed. */
 		async cached({ path }: { path: string }): Promise<Transcript | null> {
-			const { cachePath } = await identifySource({ path });
-			return readCache({ cachePath });
+			const cached = await readCurrentCache(await identifySource({ path }));
+			return cached && { ...cached, path };
 		},
 
 		async start(params: unknown) {
 			const parsed = startSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const { path, waitSeconds = 0, ...page } = parsed.data;
-			const { source, model, key, cachePath } = await identifySource({ path });
+			const identity = await identifySource({ path });
+			const { source, model, key, version, cachePath } = identity;
 			signal.throwIfAborted();
 			let job = active.get(key);
 			if (!job) {
@@ -278,7 +340,7 @@ export function createTranscriptionJobs({
 					ready: Promise.resolve(),
 					finished: Promise.resolve(),
 				};
-				created.ready = readCache({ cachePath }).then((cached) => {
+				created.ready = readCurrentCache(identity).then((cached) => {
 					if (cached) created.state = { status: "completed", cached: true };
 				});
 				created.finished = created.ready
@@ -288,7 +350,7 @@ export function createTranscriptionJobs({
 							const backend = await cacheUse.use({
 								cache: "transcripts",
 								operation: () =>
-									transcribe({ job: created, source, model, key }),
+									transcribe({ job: created, source, model, key, version }),
 							});
 							created.state = { status: "completed", cached: false, backend };
 						} catch (error) {
@@ -307,7 +369,7 @@ export function createTranscriptionJobs({
 			if (waitSeconds > 0 && job.state.status === "running") {
 				await waitFor({ finished: job.finished, seconds: waitSeconds });
 			}
-			return result({ job, page });
+			return result({ job, page, path });
 		},
 
 		async status(params: unknown) {
@@ -321,14 +383,15 @@ export function createTranscriptionJobs({
 				if (job) return result({ job, page });
 			}
 			if (path) {
-				const { cachePath, key } = await identifySource({ path });
+				const identity = await identifySource({ path });
+				const { cachePath, key } = identity;
 				const job =
 					active.get(key) ??
 					Array.from(jobs.values())
 						.reverse()
 						.find((item) => item.cachePath === cachePath);
-				if (job) return result({ job, page });
-				if (await readCache({ cachePath })) {
+				if (job) return result({ job, page, path });
+				if (await readCurrentCache(identity)) {
 					const cached: Job = {
 						id: randomUUID(),
 						path,
@@ -358,7 +421,7 @@ export function createTranscriptionJobs({
 			for (const path of new Set(parsed.data.paths)) {
 				// An unreadable or non-media path just has no words.
 				const transcript = await identifySource({ path })
-					.then(({ cachePath }) => readCache({ cachePath }))
+					.then(readCurrentCache)
 					.catch(() => null);
 				if (!transcript) {
 					missing.push(path);
