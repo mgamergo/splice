@@ -257,9 +257,16 @@ export class ProjectManager {
 	 * Exports the active Horizontal sequence as it is now: renders the MP4,
 	 * times the SRT against the same tracks and publishes both under Exports.
 	 */
-	deliver({ quality }: { quality: ExportQuality }): Promise<ExportResult> {
+	deliver({
+		quality,
+		snapshot = takeDeliverySnapshot({ editor: this.editor }),
+	}: {
+		quality: ExportQuality;
+		/** An approved checkpoint's edit, in place of the edit as it is now. */
+		snapshot?: DeliverySnapshot;
+	}): Promise<ExportResult> {
 		this.delivery = {
-			snapshot: takeDeliverySnapshot({ editor: this.editor }),
+			snapshot,
 			quality,
 			video: null,
 		};

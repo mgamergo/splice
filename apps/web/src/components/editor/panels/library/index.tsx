@@ -5,6 +5,7 @@ import { type Tab, useLibraryPanelStore } from "@/components/editor/panels/libra
 import { TabBar } from "./tabbar";
 import { Captions } from "@/subtitles/components/library-view";
 import { CaptionList } from "@/captions/components/caption-list";
+import { ReviewPanel } from "@/approval/components/review-panel";
 import { useEditor } from "@/editor/use-editor";
 import { projectFormat } from "@/project/format";
 import { MediaView } from "./views/project-items";
@@ -34,6 +35,7 @@ export function LibraryPanel() {
 			</div>
 		),
 		captions: isHorizontal ? <CaptionList /> : <Captions />,
+		review: <ReviewPanel />,
 		adjustment: (
 			<div className="text-muted-foreground p-4">
 				Adjustment view coming soon...

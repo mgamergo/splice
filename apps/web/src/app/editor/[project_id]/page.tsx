@@ -41,6 +41,7 @@ import {
 import { useCaptionsStore } from "@/captions/store";
 import { useLibraryPanelStore } from "@/components/editor/panels/library/library-panel-store";
 import { mediaTimeToSeconds } from "@/wasm";
+import { ReopenSummary } from "@/approval/components/reopen-summary";
 
 export default function Editor() {
 	const params = useParams();
@@ -51,6 +52,7 @@ export default function Editor() {
 			<EditorProvider projectId={projectId}>
 				<div className="bg-background flex h-screen w-screen flex-col overflow-hidden">
 					<DegradedRendererBanner />
+					<ReopenSummary />
 					<EditorHeader />
 					<div className="min-h-0 min-w-0 flex-1">
 						<EditorLayout />
