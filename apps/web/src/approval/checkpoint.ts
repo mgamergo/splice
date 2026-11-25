@@ -19,7 +19,7 @@ import {
 } from "@/export/deliver";
 import { projectFormat } from "@/project/format";
 import type { TProject } from "@/project/types";
-import type { Marker, SequenceTracks, TSequence } from "@/timeline/types";
+import type { Marker, SequenceTracks } from "@/timeline/types";
 import { generateUUID } from "@/utils/id";
 import { type ComparableEdit, stableStringify } from "./compare";
 import type {
@@ -101,7 +101,13 @@ export function captureApproval({
 		...(sequence.captions && {
 			sequenceCaptions: structuredClone(sequence.captions),
 		}),
-		...(project.captions && { captions: structuredClone(project.captions) }),
+		...(project.captions && {
+			captions: structuredClone({
+				...project.captions,
+				spellings:
+					project.captions.spellings ?? useCaptionsStore.getState().spellings,
+			}),
+		}),
 		srt: snapshot.srt,
 		cues: reviewedCues.map(({ id, start, end, text, correctedBy }) => ({
 			id,

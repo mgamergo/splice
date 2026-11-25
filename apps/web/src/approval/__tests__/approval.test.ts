@@ -3,7 +3,7 @@ import { EditorApi } from "@/agent/editor-api";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
-import { deliveryFingerprint } from "@/export/deliver";
+import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
 import type { ProjectItem } from "@/media/types";
 import { buildDefaultSequence } from "@/timeline/sequences";
 import { normalizeMarkers } from "@/services/storage/service";
@@ -247,6 +247,19 @@ describe("after approval", () => {
 		expect(reviewState({ editor }).comparison?.identical).toBe(false);
 	});
 
+	test("restoring the approved cut restores the reusable spellings it used", async () => {
+		const { editor } = setUp();
+		const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+		useCaptionsStore.setState({
+			spellings: [{ from: "settings", to: "preferences" }],
+		});
+		expect(takeDeliverySnapshot({ editor }).srt).toContain("preferences");
+		expect(restoreCheckpoint({ editor, checkpoint })).toBe(true);
+		expect(takeDeliverySnapshot({ editor }).srt).toBe(checkpoint.srt);
+		editor.command.undo();
+		expect(takeDeliverySnapshot({ editor }).srt).toContain("preferences");
+	});
+
 	test("a change since approval is an issue until dismissed, and comes back when it changes", async () => {
 		const { editor, api, approval } = setUp();
 		await finalizeCut({ editor, origin: "editor" });
@@ -393,6 +406,39 @@ describe("review issues", () => {
 				sequence: editor.sequences.getActiveSequence(),
 			}),
 		).toContainEqual(expect.objectContaining({ kind: "missing-footage" }));
+	});
+
+	test("adding another audible clip invalidates a caption-coverage dismissal", () => {
+		const { editor } = setUp();
+		editor.project.setActiveProject({
+			project: { ...editor.project.getActive(), captions: undefined },
+		});
+		const before = reviewState({ editor }).unresolved.find(
+			({ kind }) => kind === "no-captions",
+		);
+		if (!before) throw new Error("Expected missing captions");
+		dismissIssue({
+			editor,
+			issueId: before.id,
+			evidence: before.evidence,
+			by: "creator",
+		});
+		const sequence = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...sequence.tracks,
+			main: {
+				...sequence.tracks.main,
+				clips: [
+					...sequence.tracks.main.clips,
+					videoClip({ id: "new", start: 8, duration: 4 }),
+				],
+			},
+		});
+		expect(
+			reviewState({ editor }).unresolved.find(
+				({ kind }) => kind === "no-captions",
+			)?.evidence,
+		).not.toBe(before.evidence);
 	});
 
 	test("a dismissal lasts until the evidence changes", async () => {

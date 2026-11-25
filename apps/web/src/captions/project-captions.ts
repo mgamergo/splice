@@ -153,15 +153,22 @@ export async function correctCaption({
 	if (plan.scope === "spelling") {
 		await useCaptionsStore.getState().saveSpelling(plan.replacement);
 		// The project's own correction of these words would hide the spelling.
-		const withoutRule = withoutRuleFor({
-			captions: editor.project.getActive().captions ?? EMPTY_CAPTIONS,
-			spelling: plan.replacement,
-		});
-		if (withoutRule)
+		const current = editor.project.getActive().captions ?? EMPTY_CAPTIONS;
+		const withoutRule = withoutRuleFor({ captions: current, spelling: plan.replacement });
+		const updated = current.spellings
+			? {
+				...(withoutRule ?? current),
+				spellings: [
+					...current.spellings.filter(({ from }) => from !== plan.replacement.from),
+					plan.replacement,
+				],
+			}
+			: withoutRule;
+		if (updated)
 			editor.command.execute({
 				command: new UpdateProjectCaptionsCommand({
 					editor,
-					captions: withoutRule,
+					captions: updated,
 					label: "Use the saved spelling",
 				}),
 			});

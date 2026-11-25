@@ -95,6 +95,20 @@ describe("comparing with the approved cut", () => {
 		]);
 	});
 
+	test("reports a gap even when the clip before it was trimmed", () => {
+		const current = edit({
+			clips: [
+				videoClip({ id: "a", start: 0, duration: 3, trimStart: 0 }),
+				videoClip({ id: "b", start: 10, duration: 3, trimStart: 10 }),
+				videoClip({ id: "c", start: 13, duration: 5, trimStart: 20 }),
+			],
+		});
+		const { changes } = compareEdits({ approved, current });
+		expect(changes).toContainEqual(
+			expect.objectContaining({ kind: "gap", start: 3, end: 10 }),
+		);
+	});
+
 	test("changed caption text and markers are listed with the clips", () => {
 		const cues = [
 			{ start: 0, end: 2, text: "Open the menu." },

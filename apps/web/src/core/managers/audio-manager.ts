@@ -333,6 +333,7 @@ export class AudioManager {
 							this.playbackLatencyCompensationSeconds = nextCompensationSeconds;
 						}
 						const resyncStartTime = this.getPlaybackTime();
+						await iterator.return();
 						this.clipIterators.delete(clip.id);
 						await this.runClipIterator({
 							clip,

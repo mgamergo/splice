@@ -49,9 +49,10 @@ function playedSeconds({
 	projectItemId: string;
 	sourceIn: number;
 	sourceOut: number;
-}): { seconds: number; at?: number } {
+}): { seconds: number; at?: number; intervals: Array<[number, number]> } {
 	let total = 0;
 	let at: number | undefined;
+	const intervals: Array<[number, number]> = [];
 	for (const clip of clips) {
 		if (!("mediaId" in clip) || clip.mediaId !== projectItemId) continue;
 		const rate = "retime" in clip && clip.retime ? clip.retime.rate : 1;
@@ -60,9 +61,10 @@ function playedSeconds({
 		const overlap = Math.min(to, sourceOut) - Math.max(from, sourceIn);
 		if (overlap <= 0) continue;
 		total += overlap;
+		intervals.push([Math.max(from, sourceIn), Math.min(to, sourceOut)]);
 		at ??= clipSpan(clip).start + Math.max(0, sourceIn - from) / rate;
 	}
-	return { seconds: total, at };
+	return { seconds: total, at, intervals };
 }
 
 function changedPassageIssues({
@@ -180,13 +182,16 @@ function captionIssues({
 		Pick<CaptionCue, "id" | "start" | "end" | "text" | "correctedBy">
 	>;
 }): ReviewIssue[] {
-	const heard = new Map<string, TimelineClip>();
+	const heard = new Map<string, TimelineClip[]>();
 	for (const { clip } of audibleClips({
 		tracks: sequence.tracks,
 		projectItems,
-	}))
-		if (!projectItems.find(({ id }) => id === clip.mediaId)?.missing)
-			if (!heard.has(clip.mediaId)) heard.set(clip.mediaId, clip);
+	})) {
+		if (projectItems.find(({ id }) => id === clip.mediaId)?.missing) continue;
+		const clips = heard.get(clip.mediaId) ?? [];
+		clips.push(clip);
+		heard.set(clip.mediaId, clips);
+	}
 	const issues: ReviewIssue[] = [];
 	const sources = new Set(
 		captions?.sources
@@ -205,7 +210,7 @@ function captionIssues({
 			evidence: hashText(stableStringify([...heard])),
 		});
 	else
-		for (const [projectItemId, clip] of heard) {
+		for (const [projectItemId, clips] of heard) {
 			if (sources.has(projectItemId)) continue;
 			const name =
 				projectItems.find(({ id }) => id === projectItemId)?.name ??
@@ -215,8 +220,8 @@ function captionIssues({
 				kind: "uncaptioned-recording",
 				title: "Recording without captions",
 				detail: `${name} plays in the cut but has no caption words, so its narration is missing from the SRT.`,
-				...clipSpan(clip),
-				evidence: hashText(stableStringify(clip)),
+				...clipSpan(clips[0]),
+				evidence: hashText(stableStringify(clips)),
 			});
 		}
 	for (const cue of cues) {
@@ -235,13 +240,17 @@ function captionIssues({
 			continue;
 		}
 		const duration = Math.max(cue.end - cue.start, 0.001);
-		const lines = wrapCueText(cue.text).split("\n").length;
-		if (cue.text.length > MAX_CUE_CHARS || lines > 2)
+		const lines = wrapCueText(cue.text).split("\n");
+		if (
+			cue.text.length > MAX_CUE_CHARS ||
+			lines.length > 2 ||
+			lines.some((line) => line.length > MAX_LINE_CHARS)
+		)
 			issues.push({
 				id: `caption-overlong:${cue.id}`,
 				kind: "caption-overlong",
 				title: "Caption too long",
-				detail: `${cue.text.length} characters on ${lines} lines; keep a cue to two lines of ${MAX_LINE_CHARS}.`,
+				detail: `${cue.text.length} characters on ${lines.length} lines; keep a cue to two lines of ${MAX_LINE_CHARS}.`,
 				start: cue.start,
 				end: cue.end,
 				evidence: hashText(cue.text),
@@ -300,7 +309,10 @@ function markerIssues(sequence: TSequence): ReviewIssue[] {
 				start,
 				end: start + seconds,
 				evidence: hashText(
-					stableStringify({ take, played: seconds.toFixed(1) }),
+					stableStringify({
+						take,
+						played: played.map(({ intervals }) => intervals),
+					}),
 				),
 			});
 		});

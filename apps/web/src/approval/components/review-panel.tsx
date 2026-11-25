@@ -37,6 +37,7 @@ export function formatApproved(checkpoint: ApprovedCheckpoint): string {
 export function ReviewPanel() {
 	const editor = useEditor();
 	const review = useReviewState();
+	const isExporting = useEditor((e) => e.project.getExportState().isExporting);
 	const [showDismissed, setShowDismissed] = useState(false);
 	const [finalizing, setFinalizing] = useState(false);
 
@@ -104,6 +105,7 @@ export function ReviewPanel() {
 								size="sm"
 								variant="outline"
 								className="h-7"
+								disabled={isExporting}
 								onClick={() => watchApprovedCut({ editor, checkpoint })}
 							>
 								<Play />
@@ -142,6 +144,7 @@ export function ReviewPanel() {
 								key={`${passage.start}-${passage.approvedStart}`}
 								passage={passage}
 								checkpoint={checkpoint}
+								isExporting={isExporting}
 							/>
 						))}
 					</ul>
@@ -190,9 +193,11 @@ export function ReviewPanel() {
 function PassageRow({
 	passage,
 	checkpoint,
+	isExporting,
 }: {
 	passage: ChangedPassage;
 	checkpoint: ApprovedCheckpoint;
+	isExporting: boolean;
 }) {
 	const editor = useEditor();
 	const labels = [...new Set(passage.changes.map(({ label }) => label))];
@@ -226,6 +231,7 @@ function PassageRow({
 					size="sm"
 					variant="outline"
 					className="h-6 px-2 text-xs"
+					disabled={isExporting}
 					onClick={() =>
 						watchApprovedCut({
 							editor,

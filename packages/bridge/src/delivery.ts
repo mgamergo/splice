@@ -45,6 +45,8 @@ export const projectCaptionsSchema = z.strictObject({
 	cueEdits: z.array(cueEditSchema).default([]),
 	/** Corrections the creator applied across the project. */
 	replacements: z.array(replacementSchema).default([]),
+	/** The reusable spellings restored with an approved cut. */
+	spellings: z.array(replacementSchema).optional(),
 });
 
 /**
@@ -73,6 +75,9 @@ export function parseProjectCaptions(value: unknown): ProjectCaptions | undefine
 		sources: valid({ schema: captionSourceSchema, entries: saved.sources }),
 		cueEdits: valid({ schema: cueEditSchema, entries: saved.cueEdits }),
 		replacements: valid({ schema: replacementSchema, entries: saved.replacements }),
+		...(Array.isArray(saved.spellings) && {
+			spellings: valid({ schema: replacementSchema, entries: saved.spellings }),
+		}),
 	};
 }
 

@@ -54,6 +54,7 @@ export function watchApprovedCut({
 	checkpoint,
 	passage,
 }: { editor: EditorCore } & ApprovedPlayback): void {
+	if (editor.project.isExportRunning()) return;
 	editor.playback.pause();
 	useApprovalViewStore.getState().setPreview({ checkpoint, passage });
 }

@@ -288,10 +288,12 @@ function trackChanges({
 	approved,
 	current,
 	label,
+	toCurrent,
 }: {
 	approved: Run[];
 	current: Run[];
 	label: string;
+	toCurrent?: TimeMap;
 }): { changes: CheckpointChange[]; matched: Array<[Run, Run]> } {
 	const pairs = alignLists({
 		before: approved,
@@ -353,21 +355,23 @@ function trackChanges({
 					approvedStart: approvedAnchor,
 					approvedEnd: approvedAnchor,
 				});
-			// Nothing else changed here, yet the space before the next run did.
-			if (removed.length === 0 && added.length === 0 && next) {
-				const gap = previous ? next[1].start - previous[1].end : next[1].start;
-				const approvedGap = previous
-					? next[0].start - previous[0].end
-					: next[0].start;
-				if (Math.abs(gap - approvedGap) >= EPSILON)
+			if (next) {
+				const before = removed.at(-1)?.end ?? previous?.[0].end ?? 0;
+				const after = added.at(-1)?.end ?? previous?.[1].end ?? 0;
+				const gap = Math.max(0, next[1].start - after);
+				const approvedGap = Math.max(0, next[0].start - before);
+				const expectedGap = toCurrent
+					? Math.max(0, toCurrent(next[0].start) - toCurrent(before))
+					: approvedGap;
+				if (Math.abs(gap - expectedGap) >= EPSILON)
 					changes.push({
 						kind: "gap",
 						evidence: hashText(stableStringify([approvedGap, gap, next])),
 						what: "clip",
 						label,
-						start: previous ? previous[1].end : 0,
+						start: next[1].start - gap,
 						end: next[1].start,
-						approvedStart: previous ? previous[0].end : 0,
+						approvedStart: next[0].start - approvedGap,
 						approvedEnd: next[0].start,
 					});
 			}
@@ -586,10 +590,14 @@ export function compareEdits({
 	const currentTracks = allTracks(current.tracks);
 	const changes: CheckpointChange[] = [];
 	let mainMatches: Array<[Run, Run]> = [];
-	for (const [before, after] of pairTracks({
+	const pairs = pairTracks({
 		approved: approvedTracks,
 		current: currentTracks,
-	})) {
+	});
+	for (const [before, after] of pairs.toSorted(
+		([a], [b]) =>
+			Number(b === approved.tracks.main) - Number(a === approved.tracks.main),
+	)) {
 		const track = after ?? before;
 		if (!track) continue;
 		const label = after
@@ -613,6 +621,8 @@ export function compareEdits({
 					})
 				: [],
 			label,
+			toCurrent:
+				before === approved.tracks.main ? undefined : timeMap(mainMatches),
 		});
 		changes.push(...result.changes);
 		if (before === approved.tracks.main) mainMatches = result.matched;
