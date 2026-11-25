@@ -188,7 +188,11 @@ function PreviewCanvas({
 		// Export draws on the canvas the preview mounts; drawing here too would
 		// put preview frames into the export. A cancelled export holds the
 		// canvas until it has stopped, even after its dialog has closed.
-		if (editor.project.isExportRunning() || useApprovalViewStore.getState().preview) return;
+		if (
+			editor.project.isExportRunning() ||
+			editor.renderer.isComparingFrames ||
+			useApprovalViewStore.getState().preview
+		) return;
 
 		const renderTime = Math.min(
 			editor.playback.getCurrentTime(),
@@ -215,7 +219,7 @@ function PreviewCanvas({
 			.then(() => {
 				renderingRef.current = false;
 			});
-	}, [renderer, renderTree, editor.playback, editor.timeline, editor.project]);
+	}, [renderer, renderTree, editor.playback, editor.timeline, editor.project, editor.renderer]);
 
 	useRafLoop(render);
 

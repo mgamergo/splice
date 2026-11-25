@@ -1,3 +1,5 @@
+import { BASE_STYLE } from "@splice/bridge/style";
+import { StyleUpdateApi } from "@/agent/style-update";
 import {
 	afterEach,
 	beforeEach,
@@ -426,6 +428,26 @@ describe("after approval", () => {
 			placed: { clipId: clip.id },
 		});
 
+		const style = new StyleUpdateApi({
+			editor,
+			readDefaults: async () => ({
+				...BASE_STYLE,
+				revision: 2,
+				values: {
+					...BASE_STYLE.values,
+					highlight: { ...BASE_STYLE.values.highlight, stroke: "#ff0000" },
+				},
+			}),
+		});
+		const preview = await style.preview();
+		if (!preview) throw new Error("Expected a style preview");
+		expect(await style.apply({
+			request: { previewId: preview.id, expectedRevision: preview.revision },
+		})).toMatchObject({ ok: true });
+		expect(findGraphicClip({
+			tracks: editor.sequences.getActiveSequence().tracks, graphicId,
+		})?.clip.params.stroke).toBe("#ff0000");
+
 		rippleDelete({ editor, api });
 		expect(
 			editor.sequences.getActiveSequence().graphics?.records[0],
@@ -439,10 +461,31 @@ describe("after approval", () => {
 		availableRecording();
 		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
 		const restored = editor.sequences.getActiveSequence();
+		expect(restored.styleDefaults?.revision).toBe(1);
+		expect(editor.project.getActive().settings.styleDefaults?.revision).toBe(2);
 		expect(restored.graphics).toEqual(checkpoint.graphics);
 		expect(findGraphicClip({ tracks: restored.tracks, graphicId })).toEqual(
 			delivered,
 		);
+		const current = buildDefaultSequence({ name: "Current cut", isMain: false });
+		editor.sequences.setSequences({
+			sequences: [...editor.sequences.getSequences(), current],
+			activeSequenceId: current.id,
+		});
+		const restoredPreview = await style.preview();
+		if (!restoredPreview) throw new Error("Expected a preview for the restored sequence");
+		expect(restoredPreview).toMatchObject({ from: 1, defaults: { revision: 2 } });
+		expect(await style.apply({
+			request: { previewId: restoredPreview.id, expectedRevision: restoredPreview.revision },
+		})).toMatchObject({ ok: true });
+		const updated = editor.sequences.getSequences().find(({ id }) => id === restored.id);
+		if (!updated) throw new Error("Missing restored sequence");
+		expect(updated.styleDefaults).toBeUndefined();
+		expect(editor.sequences.getActiveSequence()).toBe(current);
+		expect(findGraphicClip({
+			tracks: updated.tracks, graphicId,
+		})?.clip.params.stroke).toBe("#ff0000");
+		expect(await style.preview()).toBeNull();
 	});
 
 	test("status and compare show what changed, and restoring is one undoable edit", async () => {

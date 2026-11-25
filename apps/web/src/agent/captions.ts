@@ -1,9 +1,10 @@
-import { CAPTION_TRACK_NAME, carryCaptionEdits } from "@/agent/short-captions";
+import { CAPTION_APPEARANCE, CAPTION_TRACK_NAME, captureCaptionAppearance, carryCaptionEdits } from "@/agent/short-captions";
 import {
 	applyCaptionCorrections,
 	recordCaptionCorrections,
 	type SavedShortCaptions,
 } from "@/agent/short-caption-corrections";
+import type { StyleDefaults } from "@splice/bridge/style";
 import type { CaptionStyle, CaptionsRequest } from "@splice/bridge/ops";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import {
@@ -17,6 +18,7 @@ import { isClipMuted } from "@/timeline/audio-state";
 import type {
 	AudioClip,
 	SequenceTracks,
+	TextClip,
 	TextTrack,
 	TSequence,
 	VideoClip,
@@ -429,6 +431,7 @@ function captionClips({
 				captionLayout: {
 					y: Number(clip.params["transform.positionY"]),
 					text: String(clip.params.content),
+					appearance: captionAppearance(clip.params),
 					parts: parts.map(({ text, words }) => ({
 						text: captions.style?.uppercase ? text.toUpperCase() : text,
 						words,
@@ -724,4 +727,85 @@ export function rebuildCaptions({
 			...content.overlay,
 		],
 	};
+}
+
+export function captionStyleFor({
+	defaults,
+	explicit,
+}: {
+	defaults: StyleDefaults["values"];
+	explicit?: CaptionStyle;
+}): CaptionStyle {
+	return { ...defaults.caption, ...explicit };
+}
+
+function captionAppearance(params: TextClip["params"]) {
+	return Object.fromEntries(CAPTION_APPEARANCE.map((key) => [key, params[key]]));
+}
+
+/** Restyle existing clips in place so their timing, wording and manual edits survive. */
+export function restyleCaptions({
+	tracks,
+	captions,
+	defaults,
+	canvas,
+}: {
+	tracks: SequenceTracks;
+	captions: SavedShortCaptions;
+	defaults: StyleDefaults["values"];
+	canvas: { width: number; height: number };
+}) {
+	const explicitStyle = captions.explicitStyle ?? captions.style ?? {};
+	const style = captionStyleFor({ defaults, explicit: explicitStyle });
+	const previous = styleOverrides({ style: captions.style ?? {} });
+	const next = styleOverrides({ style });
+	const updatedCaptions = { ...captions, style, explicitStyle };
+	if (JSON.stringify(previous) === JSON.stringify(next))
+		return { tracks, captions: updatedCaptions };
+	const ctx = createMeasurementContext();
+	const overlay = tracks.overlay.map((track) => {
+		if (!isCaptionTrack(track)) return track;
+		return {
+			...track,
+			clips: track.clips.map((clip, index) => {
+				const { captionLayout } = captureCaptionAppearance(clip);
+				const text = (captionLayout?.text ?? String(clip.params.content)).replace(/\s+/g, " ");
+				const generated = (style: SubtitleStyleOverrides) => buildSubtitleTextClip({
+					index,
+					canvasSize: canvas,
+					ctx,
+					caption: { text, style, startTime: 0, duration: 1 },
+				}).params;
+				const oldParams = generated(previous);
+				const newParams = generated(next);
+				const baseline = captionLayout?.appearance ?? captionAppearance(oldParams);
+				const params = { ...clip.params };
+				const appearance = { ...baseline };
+				for (const key of CAPTION_APPEARANCE) {
+					if (oldParams[key] === newParams[key]) continue;
+					if (captionLayout?.appearanceOverrides?.[key] === undefined &&
+						params[key] === baseline[key] && !clip.animations?.[key]) {
+						params[key] = newParams[key];
+						appearance[key] = newParams[key];
+					}
+				}
+				const rewrap = captionLayout && clip.params.content === captionLayout.text &&
+					(params.fontFamily !== clip.params.fontFamily || params.fontSize !== clip.params.fontSize) &&
+					params.fontFamily === newParams.fontFamily && params.fontSize === newParams.fontSize;
+				if (rewrap) params.content = newParams.content;
+				return {
+					...clip,
+					params,
+					...(captionLayout && {
+						captionLayout: {
+							...captionLayout,
+							appearance,
+							text: rewrap ? String(params.content) : captionLayout.text,
+						},
+					}),
+				};
+			}),
+		};
+	});
+	return { tracks: { ...tracks, overlay }, captions: updatedCaptions };
 }

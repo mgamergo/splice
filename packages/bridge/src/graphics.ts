@@ -175,6 +175,11 @@ export const graphicsApplyRequestSchema = z.strictObject({
 	sequenceId,
 	...passFields,
 	expectedRevision,
+	framingFingerprint: z
+		.string()
+		.max(100)
+		.optional()
+		.describe("Pass the framingFingerprint from graphics_plan when applying a previewed pass."),
 	label: z
 		.string()
 		.min(1)
@@ -205,6 +210,14 @@ const pointSchema = z.strictObject({ x: z.number(), y: z.number() });
  * A graphic's adjustable properties. Times are seconds, `start` measured from
  * its action on the sequence; position is canvas pixels from the center.
  */
+export const GRAPHIC_APPEARANCE_PROPERTIES = [
+	"color", "background.color", "background.cornerRadius", "fontSize",
+	"stroke", "strokeWidth", "cornerRadius", "aspect",
+] as const;
+const appearanceSchema = z.partialRecord(
+	z.enum(GRAPHIC_APPEARANCE_PROPERTIES),
+	z.union([z.string(), z.number()]),
+);
 const graphicValuesSchema = z.strictObject({
 	start: z.number().finite(),
 	duration: z.number().finite().positive(),
@@ -212,6 +225,7 @@ const graphicValuesSchema = z.strictObject({
 	scale: z.number().optional(),
 	scaleY: z.number().optional(),
 	text: z.string().optional(),
+	appearance: appearanceSchema.optional(),
 });
 
 export const GRAPHIC_PROPERTIES = [
@@ -222,6 +236,7 @@ export const GRAPHIC_PROPERTIES = [
 	"scaleY",
 	"text",
 	"hidden",
+	"appearance",
 ] as const;
 export type GraphicProperty = (typeof GRAPHIC_PROPERTIES)[number];
 
@@ -267,6 +282,15 @@ export const graphicRecordSchema = z.strictObject({
 	sourceInterval: z
 		.strictObject({ start: sourceSeconds, end: z.number().finite() })
 		.optional(),
+	/** Framing inputs captured when this graphic was planned. */
+	maxZoom: z.number().min(1).max(4).optional(),
+	zoomStyleMinScale: z.number().gt(1).max(4).optional(),
+	zoomStyleMaxScale: z.number().min(1).max(4).optional(),
+	zoomBias: z.number().min(0.5).max(2).optional(),
+	cardAnchor: z.enum(["top", "bottom"]).optional(),
+	framingCorrection: z.strictObject({ before: z.number(), after: z.number() }).optional(),
+	/** Initial scale determines the default highlight stroke on the square source. */
+	highlightScale: z.number().positive().optional(),
 	/** What the agent planned. */
 	planned: graphicValuesSchema,
 	overrides: graphicOverridesSchema,

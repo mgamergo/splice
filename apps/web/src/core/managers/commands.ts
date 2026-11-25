@@ -22,7 +22,7 @@ export class CommandManager {
 	private history: CommandHistoryEntry[] = [];
 	private redoStack: CommandHistoryEntry[] = [];
 	private reactors: Array<() => void> = [];
-	private followUpProducers: Array<() => Command | null> = [];
+	private followUpProducers: Array<(command: Command) => Command | null> = [];
 	/** Increments on every execute, undo and redo, so readers can detect change. */
 	private revision = 0;
 	private revisionListeners = new Set<(revision: number) => void>();
@@ -37,7 +37,7 @@ export class CommandManager {
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
 		this.applyRippleIfEnabled({ beforeTracks });
-		const followUps = this.runFollowUps();
+		const followUps = this.runFollowUps(command);
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
 		this.history.push({
@@ -57,7 +57,7 @@ export class CommandManager {
 		const previousSelection = this.getSelectionSnapshot();
 		this.history.push({
 			command,
-			followUps: this.runFollowUps(),
+			followUps: this.runFollowUps(command),
 			sequenceId,
 			previousSelection,
 		});
@@ -76,7 +76,7 @@ export class CommandManager {
 	 * edit's undo step, so derived state such as placed graphics never needs
 	 * an undo of its own.
 	 */
-	registerFollowUp(produce: () => Command | null): void {
+	registerFollowUp(produce: (command: Command) => Command | null): void {
 		this.followUpProducers.push(produce);
 	}
 
@@ -205,13 +205,13 @@ export class CommandManager {
 		});
 	}
 
-	private runFollowUps(): Command[] {
+	private runFollowUps(command: Command): Command[] {
 		const executed: Command[] = [];
 		for (const produce of this.followUpProducers) {
-			const command = produce();
-			if (!command) continue;
-			command.execute();
-			executed.push(command);
+			const followUp = produce(command);
+			if (!followUp) continue;
+			followUp.execute();
+			executed.push(followUp);
 		}
 		return executed;
 	}

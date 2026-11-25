@@ -206,6 +206,9 @@ export type ExportRecord = z.infer<typeof exportRecordSchema>;
 export const TAB_API_METHODS = [
 	"footage.list",
 	"transcript.words",
+	"style.defaults",
+	"framing.list",
+	"framing.reconcile",
 	"spellings.list",
 	"spellings.save",
 	"spellings.remove",

@@ -36,12 +36,27 @@ type SnapshotResult =
 export class RendererManager {
 	private renderTree: RootNode | null = null;
 	private _isDegraded = false;
+	private comparisons = 0;
 	private listeners = new Set<() => void>();
 
 	constructor(private editor: EditorCore) {}
 
 	get isDegraded(): boolean {
 		return this._isDegraded;
+	}
+
+	get isComparingFrames(): boolean {
+		return this.comparisons > 0;
+	}
+
+	/** The comparison and the active preview share a compositor. */
+	async compareFrames(render: () => Promise<void>) {
+		this.comparisons++;
+		try {
+			await render();
+		} finally {
+			this.comparisons--;
+		}
 	}
 
 	setDegraded(degraded: boolean): void {
