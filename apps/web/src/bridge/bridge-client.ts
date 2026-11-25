@@ -1,4 +1,5 @@
 import {
+	EDITOR_ACTIVITY,
 	isRpcRequest,
 	isTabMethod,
 	parseRpcMessage,
@@ -88,6 +89,11 @@ export class AgentBridgeClient {
 	notifyRevision(revision: number): void {
 		this.revision = revision;
 		this.sendRevision();
+	}
+
+	notifyActivity(): void {
+		if (this.authed && this.socket?.readyState === OPEN)
+			this.socket.send(JSON.stringify({ jsonrpc: "2.0", method: EDITOR_ACTIVITY }));
 	}
 
 	private sendRevision() {

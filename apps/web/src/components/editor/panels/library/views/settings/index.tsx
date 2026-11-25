@@ -34,10 +34,16 @@ import { formatNumberForDisplay } from "@/utils/math";
 import { OcSquarePlusIcon } from "@/components/icons";
 import type { TCanvasSize } from "@/project/types";
 
-type SettingsView = "project-info" | "background";
+import { ProfileSettings } from "@/profile/components/profile-settings";
+
+type SettingsView = "project-info" | "background" | "profile-agent";
 
 function isSettingsView(value: string): value is SettingsView {
-	return value === "project-info" || value === "background";
+	return (
+		value === "project-info" ||
+		value === "background" ||
+		value === "profile-agent"
+	);
 }
 
 const PRESET_LABELS: Record<string, string> = {
@@ -227,10 +233,12 @@ export function SettingsView() {
 					<TabsList>
 						<TabsTrigger value="project-info">Project info</TabsTrigger>
 						<TabsTrigger value="background">Background</TabsTrigger>
+						<TabsTrigger value="profile-agent">Profile agent</TabsTrigger>
 					</TabsList>
 				</Tabs>
 			}
 		>
+			{view === "profile-agent" && <ProfileSettings />}
 			{view === "project-info" && (
 				<div className="flex flex-col">
 					<Section showTopBorder={false}>
