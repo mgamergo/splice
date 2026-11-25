@@ -91,7 +91,10 @@ export function ProjectBriefDialog() {
 					Project brief
 				</Button>
 			</DialogTrigger>
-			<DialogContent className="max-h-[calc(100dvh-2rem)] overflow-auto">
+			<DialogContent
+				className="max-h-[calc(100dvh-2rem)] overflow-auto"
+				onCloseAutoFocus={(event) => event.stopPropagation()}
+			>
 				<DialogHeader>
 					<DialogTitle>Project brief</DialogTitle>
 					<DialogDescription>

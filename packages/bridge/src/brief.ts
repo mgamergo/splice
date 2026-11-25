@@ -6,7 +6,17 @@ export const projectBriefSchema = z.strictObject({
 	audience: z.string().trim().min(1).max(500).optional(),
 	goal: z.string().trim().min(1).max(500).optional(),
 	targetDurationSeconds: z.number().positive().optional(),
-	mustKeepPoints: z.array(z.string().trim().min(1).max(500)).max(30).optional(),
+	mustKeepPoints: z
+		.array(
+			z
+				.string()
+				.trim()
+				.min(1)
+				.max(500)
+				.regex(/^[^\r\n]*$/, "Use one line per must-keep point."),
+		)
+		.max(30)
+		.optional(),
 	tone: z.string().trim().min(1).max(500).optional(),
 });
 

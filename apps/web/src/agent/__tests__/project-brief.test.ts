@@ -21,6 +21,12 @@ test("project brief writes require the current project and revision and leave th
 	expect(api.briefSet({ ...args, projectId: "other" })).toMatchObject({
 		code: "REVISION_CONFLICT",
 	});
+	expect(
+		api.briefSet({
+			...args,
+			brief: { ...args.brief, mustKeepPoints: ["Setup\nPayoff"] },
+		}),
+	).toMatchObject({ code: "INVALID_REQUEST" });
 	expect(api.briefSet(args)).toMatchObject({
 		ok: true,
 		revision: args.expectedRevision + 1,

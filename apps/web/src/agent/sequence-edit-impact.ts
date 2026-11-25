@@ -179,6 +179,15 @@ function joins(clips: TimelineClip[]) {
 	});
 }
 
+function joinKey({
+	left,
+	right,
+	gapSeconds,
+	jumpCut,
+}: ReturnType<typeof transition>) {
+	return JSON.stringify([left?.clipId, right?.clipId, gapSeconds, jumpCut]);
+}
+
 /** Compare the complete batch, including derived graphics and all tracks. */
 export function sequenceEditImpact({
 	before,
@@ -203,7 +212,7 @@ export function sequenceEditImpact({
 	const picture = after.tracks.main.clips.toSorted(
 		(a, b) => a.startTime - b.startTime,
 	);
-	const oldJoins = new Set(joins(oldPicture).map(stableStringify));
+	const oldJoins = new Set(joins(oldPicture).map(joinKey));
 	return {
 		affectedRange: affectedRange
 			? {
@@ -233,7 +242,7 @@ export function sequenceEditImpact({
 				}
 			: null,
 		newGapsAndJumpCuts: joins(picture).filter(
-			(join) => !oldJoins.has(stableStringify(join)),
+			(join) => !oldJoins.has(joinKey(join)),
 		),
 	};
 }

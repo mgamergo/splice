@@ -9,7 +9,7 @@ const range = ([start, end]: [number, number]) => ({
 	end: time(end),
 });
 
-function fixture() {
+function fixture({ payoffStart = 4 }: { payoffStart?: number } = {}) {
 	const editor = setUpEditor({
 		tracks: {
 			main: {
@@ -21,7 +21,12 @@ function fixture() {
 				clips: [
 					videoClip({ id: "setup", start: 0, duration: 2 }),
 					videoClip({ id: "detail", start: 2, duration: 2, trimStart: 2 }),
-					videoClip({ id: "payoff", start: 4, duration: 2, trimStart: 4 }),
+					videoClip({
+						id: "payoff",
+						start: payoffStart,
+						duration: 2,
+						trimStart: 4,
+					}),
 				],
 			},
 			overlay: [
@@ -158,4 +163,17 @@ test("scope checks overlay clips and marker ranges as well as V1", () => {
 		ok: true,
 	});
 	expect(sequence().markers).toHaveLength(1);
+});
+
+test("an existing gap is not new when ripple delete shifts both of its clips", () => {
+	const { api, request } = fixture({ payoffStart: 6 });
+	const edit: ApplyRequest = {
+		...request,
+		scope: range([0, 2]),
+		ops: [{ op: "ripple_delete", ranges: [range([0, 2])] }],
+	};
+	expect(api.previewOps(edit)).toMatchObject({
+		ok: true,
+		impact: { outsideScopeUntouched: false, newGapsAndJumpCuts: [] },
+	});
 });
