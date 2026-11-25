@@ -169,6 +169,55 @@ describe("the export store", () => {
 		expect(await store.abort(pair)).toEqual({ aborted: false });
 	});
 
+	test("starting another export keeps the files of a concurrent publish", async () => {
+		const at = new Date(2026, 10, 24, 9, 5, 7);
+		const store = createExportStore({ root: await tempRoot(), now: () => at });
+		const first = await begin({ store });
+		await store.write({ ...first, kind: "mp4", offset: 0, body: body("v") });
+		await store.write({ ...first, kind: "srt", offset: 0, body: body("s") });
+
+		const starting = begin({ store, revision: 43 });
+		const publishing = store.publish(first);
+		const [second, published] = await Promise.all([starting, publishing]);
+		await publishPair({ store, ...second });
+		expect((await store.list({})).exports).toEqual([
+			expect.objectContaining({ revision: 43, present: true }),
+			expect.objectContaining({ stem: published.stem, present: true }),
+		]);
+	});
+
+	test("lists and recovers exports for dot-prefixed project names and older stems", async () => {
+		const root = await tempRoot();
+		const at = new Date(2026, 10, 24, 9, 5, 7);
+		const store = createExportStore({ root, now: () => at });
+		const dotSource = { ...source, projectName: ".NET tutorial" };
+		const started = await begin({ store, ...dotSource });
+		const published = await publishPair({ store, ...started });
+		expect(published.stem).toBe("NET tutorial 2026-11-24 09.05.07");
+
+		const legacy = {
+			...published,
+			stem: `.${published.stem}`,
+			deliveryId: crypto.randomUUID(),
+		};
+		const legacyFolder = join(store.folder, legacy.stem);
+		await Bun.write(join(legacyFolder, "export.json"), JSON.stringify(legacy));
+		await Bun.write(join(legacyFolder, `${legacy.stem}.mp4`), "video");
+		await Bun.write(join(legacyFolder, `${legacy.stem}.srt`), "1\n");
+
+		const restarted = createExportStore({ root });
+		expect((await restarted.list({})).exports).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ ...published, present: true }),
+				expect.objectContaining({ ...legacy, present: true }),
+			]),
+		);
+		for (const record of [published, legacy]) {
+			const retry = await restarted.begin({ ...dotSource, deliveryId: record.deliveryId });
+			expect(retry).toEqual({ committed: record });
+		}
+	});
+
 	test("retrying an Export whose publish answer was lost returns the pair it published", async () => {
 		const root = await tempRoot();
 		const store = createExportStore({ root });

@@ -65,7 +65,7 @@ export function exportStem({
 			// Characters Windows forbids in file names, and control characters.
 			.replace(/[<>:"/\\|?*\p{Cc}]/gu, " ")
 			.replace(/\s+/g, " ")
-			.trim()
+			.replace(/^[. ]+/, "")
 			.slice(0, MAX_STEM_LENGTH)
 			// Windows drops trailing dots and spaces.
 			.replace(/[. ]+$/, "") || "Export";
@@ -86,6 +86,7 @@ interface PendingExport {
 	source: BeginExportRequest;
 	dir: string;
 	written: Map<ExportFileKind, number>;
+	publishing: boolean;
 }
 
 /** A published pair and where its files are, relative to Exports. */
@@ -112,8 +113,13 @@ export function createExportStore({
 	const folder = join(root, EXPORTS_FOLDER);
 	const staging = join(folder, STAGING_FOLDER);
 	const pending = new Map<string, PendingExport>();
-	// Publishing picks a free stem and moves a folder in, one at a time.
-	let publishing: Promise<unknown> = Promise.resolve();
+	// Staging cleanup, reservation and publishing share the same queue.
+	let stagingQueue: Promise<unknown> = Promise.resolve();
+	function withStaging<T>(operation: () => Promise<T>): Promise<T> {
+		const run = stagingQueue.then(operation);
+		stagingQueue = run.catch(() => {});
+		return run;
+	}
 
 	/** Pairs published before per-export folders, from `exports.json`. */
 	async function readLegacyHistory(): Promise<PublishedExport[]> {
@@ -146,7 +152,7 @@ export function createExportStore({
 		}
 		const published = await Promise.all(
 			entries
-				.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+				.filter((entry) => entry.isDirectory() && entry.name !== STAGING_FOLDER)
 				.map(async ({ name }): Promise<PublishedExport | null> => {
 					let text: string;
 					try {
@@ -192,7 +198,7 @@ export function createExportStore({
 		const parsed = exportIdRequestSchema.safeParse(params);
 		if (!parsed.success) throw invalidParams(parsed.error.message);
 		const found = pending.get(parsed.data.exportId);
-		if (!found)
+		if (!found || found.publishing)
 			throw invalidParams(
 				"That export was not started or has already finished. Start it again.",
 			);
@@ -251,21 +257,23 @@ export function createExportStore({
 		): Promise<{ exportId: string } | { committed: ExportRecord }> {
 			const parsed = beginExportRequestSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			await publishing;
-			const earlier = await committed(parsed.data.deliveryId);
-			if (earlier) return { committed: earlier };
-			// Staged files nothing waits for any more are temporary renders.
-			if (pending.size === 0)
-				await rm(staging, { recursive: true, force: true });
-			const exportId = randomUUID();
-			const dir = join(staging, exportId);
-			await mkdir(dir, { recursive: true });
-			pending.set(exportId, {
-				source: parsed.data,
-				dir,
-				written: new Map(),
+			return withStaging(async () => {
+				const earlier = await committed(parsed.data.deliveryId);
+				if (earlier) return { committed: earlier };
+				// Staged files nothing waits for any more are temporary renders.
+				if (pending.size === 0)
+					await rm(staging, { recursive: true, force: true });
+				const exportId = randomUUID();
+				const dir = join(staging, exportId);
+				await mkdir(dir, { recursive: true });
+				pending.set(exportId, {
+					source: parsed.data,
+					dir,
+					written: new Map(),
+					publishing: false,
+				});
+				return { exportId };
 			});
-			return { exportId };
 		},
 
 		/**
@@ -303,25 +311,26 @@ export function createExportStore({
 				if (!entry.written.has(kind))
 					throw invalidParams(`The ${kind.toUpperCase()} was not written yet.`);
 			if (!entry.written.get("mp4")) throw invalidParams("The MP4 is empty.");
-			// Publishing owns the staged files now; a late abort or write can't
-			// touch them.
-			pending.delete(id);
-			const run = publishing.then(() =>
-				publish(entry).finally(() =>
-					rm(entry.dir, { recursive: true, force: true }).catch(() => {}),
-				),
-			);
-			publishing = run.catch(() => {});
-			return run;
+			// Publishing owns the staged files, including while it waits in the queue.
+			entry.publishing = true;
+			return withStaging(async () => {
+				try {
+					return await publish(entry);
+				} finally {
+					await rm(entry.dir, { recursive: true, force: true }).catch(() => {});
+					pending.delete(id);
+				}
+			});
 		},
 
 		async abort(params: unknown) {
 			const parsed = exportIdRequestSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const entry = pending.get(parsed.data.exportId);
+			if (!entry || entry.publishing) return { aborted: false };
 			pending.delete(parsed.data.exportId);
-			if (entry) await rm(entry.dir, { recursive: true, force: true });
-			return { aborted: !!entry };
+			await rm(entry.dir, { recursive: true, force: true });
+			return { aborted: true };
 		},
 
 		/** Published pairs, newest first, with whether both files are still there. */
@@ -362,7 +371,7 @@ export function createExportStore({
 		},
 
 		async stop() {
-			await publishing;
+			await stagingQueue;
 		},
 	};
 }
