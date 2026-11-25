@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { EditorApi } from "@/agent/editor-api";
-import { validateProtectedSections } from "@/agent/protected-sections";
 import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
 import type { ApplyRequest } from "@splice/bridge/ops";
 
@@ -367,51 +366,46 @@ test("staged preview and unscoped apply protect a tagged removal-marker section"
 	]);
 });
 
-test("section validation rejects an inversion even when both tagged source spans survive", () => {
-	const { sequence } = fixture();
+test("preview and apply preserve teaching order when both sections still have material", () => {
+	const { editor, api, sequence, request } = fixture();
 	const source = sequence();
-	const bestTake = (sourceIn: number) => ({
-		projectItemId: "rec",
-		sourceIn,
-		sourceOut: sourceIn + 2,
-	});
 	const main = {
 		...source.tracks.main,
 		clips: source.tracks.main.clips.map((clip) => ({
 			...clip,
-			bestTakeMarkerIds: [clip.id],
+			bestTakeMarkerIds: [
+				clip.id === "detail" ? "detail-section" : "setup-section",
+			],
 		})),
 	};
 	const before = {
 		...source,
 		protectedSections: [
-			{ id: "setup", sectionName: "Setup", bestTake: bestTake(0) },
-			{ id: "payoff", sectionName: "Payoff", bestTake: bestTake(4) },
+			{
+				id: "setup-section",
+				sectionName: "Setup",
+				bestTake: { projectItemId: "rec", sourceIn: 0, sourceOut: 6 },
+			},
+			{
+				id: "detail-section",
+				sectionName: "Detail",
+				bestTake: { projectItemId: "rec", sourceIn: 2, sourceOut: 4 },
+			},
 		],
 		tracks: { ...source.tracks, main },
 	};
-	const after = {
-		...before,
-		tracks: {
-			...before.tracks,
-			main: {
-				...main,
-				clips: main.clips.map((clip) => ({
-					...clip,
-					startTime:
-						clip.id === "setup"
-							? s(4)
-							: clip.id === "payoff"
-								? s(0)
-								: clip.startTime,
-				})),
-			},
-		},
+	editor.sequences.setSequences({ sequences: [before] });
+	const { scope: _scope, ...unscoped } = request;
+	const edit: ApplyRequest = {
+		...unscoped,
+		ops: [{ op: "delete", clipIds: ["setup"] }],
 	};
-	expect(() => validateProtectedSections({ before, after })).toThrow(
-		"This edit puts “Payoff” before “Setup”",
-	);
-	expect(() =>
-		validateProtectedSections({ before, after, restructure: true }),
-	).not.toThrow();
+	const error = {
+		code: "INVALID_OP",
+		message: expect.stringContaining("This edit puts “Detail” before “Setup”"),
+	};
+	expect(api.previewOps(edit)).toMatchObject(error);
+	expect(api.apply(edit)).toMatchObject(error);
+	expect(sequence()).toBe(before);
+	expect(api.apply({ ...edit, restructure: true })).toMatchObject({ ok: true });
 });
