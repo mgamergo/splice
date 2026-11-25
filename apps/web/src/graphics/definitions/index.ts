@@ -1,5 +1,9 @@
 import { graphicsRegistry } from "../registry";
 import { ellipseGraphicDefinition } from "./ellipse";
+import {
+	highlightGraphicDefinition,
+	zoomGraphicDefinition,
+} from "./graphics-pass";
 import { polygonGraphicDefinition } from "./polygon";
 import { rectangleGraphicDefinition } from "./rectangle";
 import { starGraphicDefinition } from "./star";
@@ -9,6 +13,8 @@ const defaultGraphicDefinitions = [
 	ellipseGraphicDefinition,
 	polygonGraphicDefinition,
 	starGraphicDefinition,
+	highlightGraphicDefinition,
+	zoomGraphicDefinition,
 ];
 
 export function registerDefaultGraphics(): void {
@@ -25,6 +31,8 @@ export function registerDefaultGraphics(): void {
 
 export {
 	ellipseGraphicDefinition,
+	highlightGraphicDefinition,
+	zoomGraphicDefinition,
 	polygonGraphicDefinition,
 	rectangleGraphicDefinition,
 	starGraphicDefinition,

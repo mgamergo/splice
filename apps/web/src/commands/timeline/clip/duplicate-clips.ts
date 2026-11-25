@@ -126,6 +126,8 @@ function buildDuplicateClip({
 		...clip,
 		bestTakeMarkerIds: undefined,
 		sourceAudioGroupId: undefined,
+		// A copy is a standalone clip. Only the original belongs to the graphics pass.
+		graphicId: undefined,
 		id,
 		name: `${clip.name} (copy)`,
 		startTime,

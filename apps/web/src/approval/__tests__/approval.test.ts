@@ -8,8 +8,10 @@ import {
 	test,
 } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
+import { findGraphicClip } from "@/agent/graphics";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { useCaptionsStore } from "@/captions/store";
+import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
 import type { EditorCore } from "@/core";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
 import type { ProjectItem } from "@/media/types";
@@ -145,6 +147,28 @@ function rippleDelete({
 		],
 	});
 	expect(result).toMatchObject({ ok: true });
+}
+
+function applyHighlight({ editor, api }: { editor: EditorCore; api: EditorApi }) {
+	const result = api.graphicsApply({
+		expectedRevision: api.getRevision(),
+		graphics: [
+			{
+				kind: "highlight",
+				projectItemId: "rec",
+				action: 11,
+				passage: { start: 10, end: 13 },
+				target: { x: 0.2, y: 0.3, width: 0.1, height: 0.1 },
+			},
+		],
+	});
+	expect(result).toMatchObject({ ok: true, graphics: [{ status: "create" }] });
+	const sequence = editor.sequences.getActiveSequence();
+	const graphicId = sequence.graphics?.records[0]?.id;
+	if (!graphicId) throw new Error("Expected a graphic");
+	const placed = findGraphicClip({ tracks: sequence.tracks, graphicId });
+	if (!placed) throw new Error("Expected a graphic clip");
+	return { graphicId, ...placed };
 }
 
 describe("finalizing the cut", () => {
@@ -298,6 +322,55 @@ describe("finalizing the cut", () => {
 });
 
 describe("after approval", () => {
+	test("an approved checkpoint keeps graphic clips and adjustments after reload", async () => {
+		const { editor, api } = setUp();
+		const { graphicId, trackId, clip } = applyHighlight({ editor, api });
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [
+					{
+						trackId,
+						clipId: clip.id,
+						patch: {
+							params: { ...clip.params, "transform.positionX": 123 },
+						},
+					},
+				],
+			}),
+		});
+		await finalizeCut({ editor, origin: "editor" });
+		const parsed = parseProjectApproval({
+			raw: JSON.parse(JSON.stringify(editor.project.getActive().approval)),
+			parseMarkers: (raw) => normalizeMarkers({ raw }),
+		});
+		const checkpoint = parsed?.checkpoints[0];
+		if (!checkpoint) throw new Error("Expected the saved checkpoint");
+		expect(checkpoint.graphics?.records[0]).toMatchObject({
+			id: graphicId,
+			action: { projectItemId: "rec", time: 11 },
+			overrides: { position: { x: 123 } },
+			placed: { clipId: clip.id },
+		});
+
+		rippleDelete({ editor, api });
+		expect(
+			editor.sequences.getActiveSequence().graphics?.records[0],
+		).toMatchObject({
+			flags: [{ code: "action_missing" }],
+		});
+		const { scene } = checkpointDeliverySnapshot({ editor, checkpoint });
+		const delivered = findGraphicClip({ tracks: scene.tracks, graphicId });
+		expect(delivered?.clip.params["transform.positionX"]).toBe(123);
+
+		availableRecording();
+		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
+		const restored = editor.sequences.getActiveSequence();
+		expect(restored.graphics).toEqual(checkpoint.graphics);
+		expect(findGraphicClip({ tracks: restored.tracks, graphicId })).toEqual(
+			delivered,
+		);
+	});
+
 	test("status and compare show what changed, and restoring is one undoable edit", async () => {
 		const { editor, api, approval } = setUp();
 		await finalizeCut({ editor, origin: "editor" });
@@ -767,6 +840,64 @@ describe("review issues", () => {
 		expect(flagged()).toEqual([]);
 		flag("TODO check the intro again");
 		expect(flagged()).toHaveLength(1);
+	});
+
+	test("graphic review dismissals survive a timeline move and lapse when the reason changes", async () => {
+		const { editor, api, approval } = setUp();
+		const { graphicId } = applyHighlight({ editor, api });
+		expect(
+			api.apply({
+				sequenceId: editor.sequences.getActiveSequence().id,
+				expectedRevision: api.getRevision(),
+				label: "Replace picture",
+				ops: [
+					{
+						op: "picture_repair",
+						at: { seconds: 4 },
+						duration: { seconds: 4 },
+						projectItemId: "rec",
+						sourceIn: 24,
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		const listed = await approval.issuesList({});
+		const issue =
+			listed.ok && listed.issues.find(({ kind }) => kind === "graphic-flag");
+		if (!issue) throw new Error("Expected the graphic review issue");
+		expect(issue).toMatchObject({
+			graphicId,
+			start: 5,
+			end: 5,
+			detail: expect.stringContaining("covers the action"),
+		});
+		expect(
+			await approval.dismissIssue({
+				issueId: issue.id,
+				evidence: issue.evidence,
+			}),
+		).toMatchObject({ ok: true });
+
+		rippleDelete({ editor, api, start: 0, end: 1 });
+		const { issues, unresolved } = reviewState({ editor });
+		const moved = issues.find(({ id }) => id === issue.id);
+		expect(moved).toMatchObject({
+			start: 4,
+			evidence: issue.evidence,
+			dismissed: { by: "agent" },
+		});
+		expect(unresolved.some(({ id }) => id === issue.id)).toBe(false);
+
+		rippleDelete({ editor, api, start: 3, end: 7 });
+		const missing = reviewState({ editor }).unresolved.find(
+			({ kind }) => kind === "graphic-flag",
+		);
+		expect(missing).toMatchObject({
+			graphicId,
+			start: 3,
+			detail: expect.stringContaining("no longer in the cut"),
+		});
+		expect(missing?.evidence).not.toBe(issue.evidence);
 	});
 });
 

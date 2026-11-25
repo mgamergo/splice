@@ -13,6 +13,7 @@ import { DiagnosticsManager } from "./managers/diagnostics-manager";
 import { registerDefaultEffects } from "@/effects";
 import { registerDefaultMasks } from "@/masks";
 import { registerTranscriptionDiagnostics } from "@/transcription/diagnostics";
+import { graphicsFollowUp } from "@/agent/graphics-follow-up";
 
 export class EditorCore {
 	private static instance: EditorCore | null = null;
@@ -46,6 +47,7 @@ export class EditorCore {
 		this.diagnostics = new DiagnosticsManager(this);
 		registerTranscriptionDiagnostics({ diagnostics: this.diagnostics });
 		this.playback.bindTimelineScope();
+		this.command.registerFollowUp(() => graphicsFollowUp({ editor: this }));
 		this.command.registerReactor(() => {
 			const activeSequence = this.sequences.getActiveSequenceOrNull();
 			if (!activeSequence) {

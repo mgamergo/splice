@@ -2,6 +2,7 @@
 
 import type { ReviewIssue } from "@splice/bridge/approval";
 import { RotateCcw, X } from "lucide-react";
+import { findGraphicClip } from "@/agent/graphics";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEditor } from "@/editor/use-editor";
@@ -26,7 +27,20 @@ export function IssueRow({
 	const { dismissed } = issue;
 	const play =
 		onPlay ??
-		(() => playPassage({ editor, start: issue.start, end: issue.end }));
+		(() => {
+			if (issue.graphicId) {
+				const sequence = editor.sequences.getActiveSequence();
+				const placed = findGraphicClip({
+					tracks: sequence.tracks,
+					graphicId: issue.graphicId,
+				});
+				if (placed)
+					editor.selection.setSelectedClips({
+						clips: [{ trackId: placed.trackId, clipId: placed.clip.id }],
+					});
+			}
+			playPassage({ editor, start: issue.start, end: issue.end });
+		});
 	return (
 		<li
 			className="flex items-start gap-1 rounded-md border p-1.5 text-xs"

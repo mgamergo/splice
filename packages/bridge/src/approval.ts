@@ -37,6 +37,7 @@ export const ISSUE_KINDS = [
 	"caption-fast",
 	"marker-conflict",
 	"flagged",
+	"graphic-flag",
 	"stale-mix",
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
@@ -50,6 +51,8 @@ export interface ReviewIssue {
 	detail: string;
 	start: number;
 	end: number;
+	/** The linked graphic, which may be off the timeline. */
+	graphicId?: string;
 	/** A hash of what raised the issue; a dismissal holds only while it matches. */
 	evidence: string;
 	dismissed?: { at: string; by: DismissedBy; reason?: string };
