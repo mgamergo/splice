@@ -133,6 +133,10 @@ test("concurrent requests join one job, then read the full cache and compact pag
 	let runs = 0;
 	const cacheUse = createCacheUse();
 	const storage = createStorage({ root, cacheUse, exportStore: createExportStore({ root }) });
+	async function applyCleanup() {
+		const { previewToken } = await storage.report({});
+		return storage.cleanup({ dryRun: false, previewToken });
+	}
 	const jobs = createTranscriptionJobs({
 		root,
 		cacheUse,
@@ -160,7 +164,7 @@ test("concurrent requests join one job, then read the full cache and compact pag
 		expect(one.status).toBe("running");
 		expect(two.jobId).toBe(one.jobId);
 		await started.promise;
-		expect(await storage.cleanup({ dryRun: false })).toMatchObject({
+		expect(await applyCleanup()).toMatchObject({
 			freedBytes: 0,
 			kept: expect.arrayContaining([expect.objectContaining({
 				category: "temporary-renders", reason: "In use by a running job", bytes: 13,
@@ -194,7 +198,7 @@ test("concurrent requests join one job, then read the full cache and compact pag
 				},
 			],
 		});
-		expect(await storage.cleanup({ dryRun: false })).toMatchObject({ freedBytes: 0 });
+		expect(await applyCleanup()).toMatchObject({ freedBytes: 0 });
 		expect(await jobs.start({ path: source })).toMatchObject({ cached: true });
 		// A missing transcript still rebuilds on the next explicit transcription.
 		await rm(cached.cachePath);

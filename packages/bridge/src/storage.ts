@@ -17,10 +17,13 @@ export const storageSelectionSchema = z.object({
 
 export const storageCleanupSchema = storageSelectionSchema.extend({
 	dryRun: z.boolean().default(true),
+	previewToken: z.uuid().optional(),
 });
 
 export const storageReportSchema = z.object({
 	dryRun: z.boolean(),
+	previewToken: z.uuid().optional(),
+	newOrChangedItems: z.number(),
 	reclaimableBytes: z.number(),
 	freedBytes: z.number(),
 	categories: z.array(

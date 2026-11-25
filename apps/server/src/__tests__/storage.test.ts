@@ -3,14 +3,17 @@ import { BRIDGE_PATHS, denoisedAudioUrlForPath } from "@splice/bridge";
 import { storageReportSchema } from "@splice/bridge/storage";
 import {
 	link,
+	lstat,
 	mkdir,
 	mkdtemp,
 	readFile,
+	rename,
 	rm,
 	symlink,
 	utimes,
 	writeFile,
 } from "node:fs/promises";
+import { renameSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createCacheUse } from "../cache-use";
@@ -20,9 +23,11 @@ import { createRpcClient } from "../rpc-client";
 import { lockRoot } from "../root-lock";
 import { startServer } from "../server";
 import { createStorage } from "../storage";
+import { removeStorageEntry } from "../storage-removal";
 
 const roots: string[] = [];
 const KEY = "a".repeat(64);
+const STAGING_ID = "1c4dcd2e-f635-4d8a-92da-86fc21a16bb8";
 
 afterEach(async () => {
 	for (const root of roots.splice(0))
@@ -41,17 +46,21 @@ async function setup() {
 		await writeFile(file, "1234");
 		return file;
 	}
-	return { root, storage, cacheUse, exportStore, save };
+	async function apply(selection = {}) {
+		const { previewToken } = await storage.report(selection);
+		return storage.cleanup({ dryRun: false, previewToken });
+	}
+	return { root, storage, cacheUse, exportStore, save, apply };
 }
 
 test("classifies disk data, defaults to dry run, and applies age and category filters", async () => {
-	const { root, storage, save } = await setup();
+	const { root, storage, save, apply } = await setup();
 	const pause = await save(`Cache/pauses/${KEY}.json`);
 	const loudness = await save(`Cache/loudness/audio-${KEY}.mka`);
 	const temporary = await save(
-		"Cache/noise-reduction/.job-abandoned/denoised.wav",
+		"Cache/noise-reduction/.job-Ab1234/denoised.wav",
 	);
-	const abandoned = await save("Exports/.staging/abandoned/mp4");
+	const abandoned = await save(`Exports/.staging/${STAGING_ID}/mp4`);
 	const kept = [
 		await save("Footage/original.mov"),
 		await save("Footage/approved-graphic.png"),
@@ -61,6 +70,8 @@ test("classifies disk data, defaults to dry run, and applies age and category fi
 		await save("Exports/published/published.mp4"),
 		await save("Exports/published/published.srt"),
 		await save("Profile/spellings.json"),
+		await save("Profile/corrections.jsonl"),
+		await save("Profile/style-defaults.json"),
 		await save("Profile/Cache/pauses/unknown.json"),
 		await save("Tools/ffmpeg"),
 		await save("outside-folders.txt"),
@@ -86,8 +97,7 @@ test("classifies disk data, defaults to dry run, and applies age and category fi
 	expect(await readFile(pause, "utf8")).toBe("1234");
 
 	expect(
-		await storage.cleanup({
-			dryRun: false,
+		await apply({
 			olderThanDays: 1,
 			categories: ["pauses", "loudness"],
 		}),
@@ -95,7 +105,7 @@ test("classifies disk data, defaults to dry run, and applies age and category fi
 	await expect(readFile(pause)).rejects.toHaveProperty("code", "ENOENT");
 	expect(await readFile(loudness, "utf8")).toBe("1234");
 
-	const applied = await storage.cleanup({ dryRun: false });
+	const applied = await apply();
 	expect(applied).toMatchObject({
 		freedBytes: 12,
 		reclaimableBytes: 12,
@@ -114,18 +124,18 @@ test("classifies disk data, defaults to dry run, and applies age and category fi
 });
 
 test("preserves links, their protected targets, and files shared with original recordings", async () => {
-	const { root, storage, save } = await setup();
+	const { root, apply, save } = await setup();
 	const original = await save("Projects/checkpoint.json");
 	const hardLink = join(root, "Cache", "pauses", `${KEY}.json`);
 	const aliasTarget = await save(`Cache/noise-reduction/${KEY}.wav`);
-	const staged = await save("Exports/.staging/old/mp4");
+	const staged = await save(`Exports/.staging/${STAGING_ID}/mp4`);
 	await mkdir(dirname(hardLink), { recursive: true });
 	await link(original, hardLink);
 	await symlink(dirname(aliasTarget), join(root, "Footage"), "junction");
 	await symlink(original, join(dirname(staged), "link"), "file");
 	await symlink(dirname(original), join(root, "Cache", "loudness"), "junction");
 
-	const result = await storage.cleanup({ dryRun: false });
+	const result = await apply();
 	expect(result).toMatchObject({
 		freedBytes: 0,
 		reclaimableBytes: 0,
@@ -139,7 +149,7 @@ test("preserves links, their protected targets, and files shared with original r
 });
 
 test("skips a reserved export and removes only abandoned staging while the export can publish", async () => {
-	const { storage, exportStore, save } = await setup();
+	const { apply, exportStore, save } = await setup();
 	const request = {
 		deliveryId: crypto.randomUUID(),
 		projectId: "project",
@@ -151,7 +161,7 @@ test("skips a reserved export and removes only abandoned staging while the expor
 		durationSeconds: 2,
 		cueCount: 1,
 	};
-	const stale = await save("Exports/.staging/from-a-prior-run/mp4");
+	const stale = await save(`Exports/.staging/${STAGING_ID}/mp4`);
 	const begun = await exportStore.begin(request);
 	if (!("exportId" in begun)) throw new Error("Expected a reservation.");
 	await exportStore.write({
@@ -160,7 +170,7 @@ test("skips a reserved export and removes only abandoned staging while the expor
 		offset: 0,
 		body: new Response("video").body,
 	});
-	const result = await storage.cleanup({ dryRun: false });
+	const result = await apply();
 	expect(result.freedBytes).toBe(4);
 	expect(result.kept).toContainEqual({
 		category: "export-staging",
@@ -178,13 +188,13 @@ test("skips a reserved export and removes only abandoned staging while the expor
 	await expect(exportStore.publish(begun)).resolves.toMatchObject({
 		bytes: { mp4: 5, srt: 8 },
 	});
-	expect(await storage.cleanup({ dryRun: false })).toMatchObject({
+	expect(await apply()).toMatchObject({
 		freedBytes: 0,
 	});
 });
 
 test("protects shared work after its last caller disconnects and until the job settles", async () => {
-	const { root, storage, cacheUse, save } = await setup();
+	const { root, apply, cacheUse, save } = await setup();
 	await save("Footage/source.wav");
 	const idle = await save(`Cache/noise-reduction/${KEY}.wav`);
 	const started = Promise.withResolvers<string>();
@@ -209,7 +219,7 @@ test("protects shared work after its last caller disconnects and until the job s
 		const output = await started.promise;
 		caller.abort();
 		await expect(rendering).rejects.toBe(caller.signal.reason);
-		const result = await storage.cleanup({ dryRun: false });
+		const result = await apply();
 		expect(result.kept).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -228,18 +238,163 @@ test("protects shared work after its last caller disconnects and until the job s
 		finished.resolve();
 		await reducer.stop();
 	}
-	expect(await storage.cleanup({ dryRun: false })).toMatchObject({
+	expect(await apply()).toMatchObject({
 		freedBytes: 4,
 	});
 });
 
+test("keeps unknown lookalike cache and export staging data", async () => {
+	const { save, apply } = await setup();
+	const known = await save("Cache/loudness/.audio-Ab12c3/audio.mka");
+	const kept = [
+		await save(`Cache/loudness/${KEY}.json/personal-data`),
+		await save("Cache/noise-reduction/.job-Xy1234/manual.wav"),
+		await save("Cache/noise-reduction/.job-not-an-app-job/denoised.wav"),
+		await save("Exports/.staging/manual.txt"),
+		await save("Exports/.staging/manual/mp4"),
+		await save(`Exports/.staging/${STAGING_ID}/mp4`),
+		await save(`Exports/.staging/${STAGING_ID}/manual.txt`),
+		await save(`Exports/.staging/${crypto.randomUUID()}`),
+	];
+
+	const result = await apply();
+	expect(result).toMatchObject({ freedBytes: 4, errors: [] });
+	expect(result.kept).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ reason: "Unrecognized cache data" }),
+			expect.objectContaining({ reason: "Unrecognized export staging data" }),
+		]),
+	);
+	await expect(readFile(known)).rejects.toHaveProperty("code", "ENOENT");
+	for (const path of kept) expect(await readFile(path, "utf8")).toBe("1234");
+});
+
+test("keeps the original and outside files when a managed ancestor becomes a junction", async () => {
+	const { root, storage, save } = await setup();
+	const managed = await save(`Cache/pauses/${KEY}.json`);
+	const outside = await save(`Profile/${KEY}.json`);
+	const preview = await storage.report({});
+	expect(preview.reclaimableBytes).toBe(4);
+
+	const moved = join(root, "moved");
+	await rename(dirname(managed), moved);
+	await symlink(dirname(outside), dirname(managed), "junction");
+
+	const result = await storage.cleanup({
+		dryRun: false,
+		previewToken: preview.previewToken,
+	});
+	expect(result.freedBytes).toBe(0);
+	expect(await readFile(outside, "utf8")).toBe("1234");
+	expect(await readFile(join(moved, `${KEY}.json`), "utf8")).toBe("1234");
+});
+
+test.skipIf(process.platform === "win32")(
+	"stops when a job ancestor is swapped after deletion starts",
+	async () => {
+		const { root, save } = await setup();
+		const dir = "Cache/transcripts/.job-Ab1234";
+		const wav = await save(`${dir}/audio.wav`);
+		const draft = await save(`${dir}/whisper.json`);
+		const outside = await save("Profile/.job-Ab1234/whisper.json");
+		const moved = join(root, "moved");
+		const snapshot = async (path: string) => ({
+			path,
+			info: await lstat(path),
+		});
+		const ancestors = await Promise.all(
+			[root, join(root, "Cache"), join(root, "Cache/transcripts")].map(
+				snapshot,
+			),
+		);
+		const entry = await snapshot(join(root, dir));
+		const files = await Promise.all([wav, draft].map(snapshot));
+
+		expect(() =>
+			removeStorageEntry({
+				ancestors,
+				entry,
+				files,
+				onRemove() {
+					renameSync(join(root, "Cache/transcripts"), moved);
+					symlinkSync(
+						join(root, "Profile"),
+						join(root, "Cache/transcripts"),
+						"junction",
+					);
+				},
+			}),
+		).toThrow("could not be safely opened");
+		expect(await readFile(outside, "utf8")).toBe("1234");
+		expect(
+			await readFile(join(moved, ".job-Ab1234/whisper.json"), "utf8"),
+		).toBe("1234");
+	},
+);
+
+test("keeps a scanned job when files are added inside its directory", async () => {
+	const { storage, save } = await setup();
+	const pending = await save("Cache/noise-reduction/.job-Ab1234/denoised.wav");
+	const preview = await storage.report({});
+	expect(preview.reclaimableBytes).toBe(4);
+	const added = await save("Cache/noise-reduction/.job-Ab1234/nested/new.wav");
+
+	const result = await storage.cleanup({
+		dryRun: false,
+		previewToken: preview.previewToken,
+	});
+	expect(result.freedBytes).toBe(0);
+	for (const path of [pending, added])
+		expect(await readFile(path, "utf8")).toBe("1234");
+});
+
+test("applies only unchanged entries from the confirmed preview and reports new candidates", async () => {
+	const { storage, cacheUse, save } = await setup();
+	const pause = await save(`Cache/pauses/${KEY}.json`);
+	const changed = await save(`Cache/pauses/${"b".repeat(64)}.json`);
+	const excluded = await save(`Cache/loudness/${KEY}.json`);
+	const release = await cacheUse.acquire("noise-reduction");
+	const preview = await storage.report({});
+	expect(preview.categories).toContainEqual(
+		expect.objectContaining({
+			category: "noise-reduction",
+			items: 0,
+		}),
+	);
+	release();
+	const fresh = await save(`Cache/noise-reduction/${KEY}.wav`);
+	await writeFile(changed, "changed");
+	const newPause = await save(`Cache/pauses/${"c".repeat(64)}.json`);
+
+	const params = {
+		dryRun: false,
+		previewToken: preview.previewToken,
+		categories: ["pauses"],
+	};
+	await expect(storage.cleanup({ dryRun: false })).rejects.toThrow(
+		"fresh storage preview",
+	);
+	expect(await storage.cleanup(params)).toMatchObject({
+		freedBytes: 4,
+		newOrChangedItems: 3,
+		errors: [],
+	});
+	await expect(storage.cleanup(params)).rejects.toThrow(
+		"fresh storage preview",
+	);
+	await expect(readFile(pause)).rejects.toHaveProperty("code", "ENOENT");
+	expect(await readFile(changed, "utf8")).toBe("changed");
+	for (const path of [fresh, excluded, newPause])
+		expect(await readFile(path, "utf8")).toBe("1234");
+});
+
 test("holds one runtime lock per root and releases it for a restart", async () => {
-	const { root, storage } = await setup();
+	const { root, apply } = await setup();
 	await mkdir(join(root, "Cache"));
 	const release = lockRoot({ root });
 	try {
 		expect(() => lockRoot({ root })).toThrow("Splice is already using");
-		expect(await storage.cleanup({ dryRun: false })).toMatchObject({
+		expect(await apply()).toMatchObject({
 			freedBytes: 0,
 			kept: [{ category: "Cache", reason: "Splice runtime state" }],
 		});
@@ -305,7 +460,7 @@ test.skipIf(!ffmpeg)(
 					jsonrpc: "2.0",
 					id: 1,
 					method: "storage.cleanup",
-					params: { dryRun: false },
+					params: { dryRun: false, previewToken: report.previewToken },
 				}),
 			});
 			expect(await response.json()).toMatchObject({

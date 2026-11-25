@@ -163,7 +163,7 @@ Each successful horizontal export adds an identifiable MP4/SRT pair under the Ex
 
 Cleanup may reclaim temporary renders and rebuildable analysis caches. Preserve original recordings, approved checkpoints, corrected captions, exports and the exact graphics used in approved edits so the creator can reproduce them.
 
-Open **Storage** from the editor menu to review the disk inventory and choose categories. `storage_report` and `storage_cleanup` cover the Splice root. Both accept `categories` and `olderThanDays`. Cleanup previews by default. An apply uses the current inventory and skips files held by Splice jobs and reserved exports.
+Open **Storage** from the editor menu to review the disk inventory and choose categories. `storage_report` and `storage_cleanup` cover the Splice root. Use `categories` and `olderThanDays` to filter a preview. Cleanup previews by default. To apply a preview, send its `previewToken` with `dryRun: false`. You can narrow the category selection when you apply. Cleanup removes only unchanged entries from that preview and keeps files held by Splice jobs and reserved exports. Review a fresh preview before removing newly eligible files.
 
 Keep completed transcripts. Caption and editing profile corrections can use their word timings or identifiers, and creating a new transcript can change both. Keep project data and media in IndexedDB and OPFS, including approved checkpoints, graphics, mix settings and thumbnails saved with project metadata. The editor can clear completed waveform summaries from the tab and downloaded transcription models from the browser cache. Browser transcription downloads any missing model files when it next loads.
 

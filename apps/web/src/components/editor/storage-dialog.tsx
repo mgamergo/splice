@@ -76,15 +76,23 @@ export function StorageDialog({ onClose }: { onClose: () => void }) {
 		const failures: string[] = [];
 
 		try {
-			if (clean && hasDiskItems) {
+			if (clean && report?.previewToken && selectedDiskCategories.length > 0) {
 				try {
 					const result = storageReportSchema.parse(
 						await callSplice({
 							method: "storage.cleanup",
-							params: { dryRun: false, categories: selection },
+							params: {
+								dryRun: false,
+								previewToken: report.previewToken,
+								categories: selectedDiskCategories,
+							},
 						}),
 					);
 					messages.push(`Freed ${formatBytes(result.freedBytes)} on disk.`);
+					if (result.newOrChangedItems > 0)
+						messages.push(
+							"Review the refreshed list to clean up new or changed files.",
+						);
 					failures.push(
 						...result.errors.map(({ path, message }) => `${path} · ${message}`),
 					);
@@ -150,12 +158,15 @@ export function StorageDialog({ onClose }: { onClose: () => void }) {
 				total + (selection.includes(row.category) ? row.bytes : 0),
 			0,
 		) ?? 0;
-	const hasDiskItems = report?.categories.some(
-		({ category, items }) => items > 0 && selection.includes(category),
-	);
+	const selectedDiskCategories =
+		report?.categories
+			.filter(
+				({ category, items }) => items > 0 && selection.includes(category),
+			)
+			.map(({ category }) => category) ?? [];
 	const modelAvailable = model?.kind === "ready" && model.items > 0;
 	const canClean =
-		hasDiskItems ||
+		(report?.previewToken && selectedDiskCategories.length > 0) ||
 		(clearWaveforms && waveforms.bytes > 0) ||
 		(clearModel && modelAvailable);
 
@@ -186,7 +197,7 @@ export function StorageDialog({ onClose }: { onClose: () => void }) {
 							>
 								<input
 									type="checkbox"
-									checked={selection.includes(category)}
+									checked={items > 0 && selection.includes(category)}
 									disabled={items === 0}
 									onChange={(event) => {
 										const checked = event.currentTarget.checked;

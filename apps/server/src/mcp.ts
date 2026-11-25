@@ -62,6 +62,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { SpliceConfig } from "./config";
+import { invalidParams } from "./transcription";
 import { createRpcClient, RpcCallError, type RpcCall } from "./rpc-client";
 import { readSession } from "./session";
 import { startDetached } from "./background";
@@ -1086,7 +1087,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Report Splice disk storage",
 			description:
-				"Reports reclaimable disk bytes by cache category and what Splice keeps, with reasons. Optional filters restrict the preview to selected categories or older files.",
+				"Reports reclaimable disk bytes by cache category and what Splice keeps, with reasons. Optional filters restrict the preview to selected categories or older files. Returns a previewToken for a confirmed cleanup.",
 			inputSchema: storageSelectionSchema.shape,
 		},
 		(args) =>
@@ -1098,11 +1099,15 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Clean up Splice disk storage",
 			description:
-				"Previews cleanup by default. With the creator's confirmation, pass dryRun: false to remove eligible caches and abandoned export staging files. Returns freed bytes and any removal failures. Get storage_report first if you need to review the categories and sizes.",
+				"Previews cleanup by default. Show the creator the preview from storage_report or a dry run. After they confirm, pass dryRun: false and its previewToken to remove only the unchanged entries they reviewed. You can narrow the confirmed categories. New or changed data needs a fresh preview and confirmation.",
 			inputSchema: storageCleanupSchema.shape,
 		},
 		(args) =>
-			guard(async () => text(await rpc({ method: "storage.cleanup", params: args }))),
+			guard(async () => {
+				if (!args.dryRun && !args.previewToken)
+					throw invalidParams("Get a fresh storage preview before applying cleanup.");
+				return text(await rpc({ method: "storage.cleanup", params: args }));
+			}),
 	);
 
 	server.registerTool(

@@ -6,11 +6,14 @@ import {
 	type StorageReport,
 } from "@splice/bridge/storage";
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
-import { lstat, readdir, realpath, rename, rm, unlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { lstat, readdir, realpath } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import type { AnalysisCache, CacheUse } from "./cache-use";
-import { sameFileIdentity } from "./file-identity";
+import { fileIdentity } from "./file-identity";
+import {
+	removeStorageEntry,
+	type StorageEntry as Entry,
+} from "./storage-removal";
 import { EXPORT_STAGING_FOLDER, type ExportStore } from "./exports";
 import { invalidParams } from "./transcription";
 import { ROOT_LOCK_FILE } from "./root-lock";
@@ -26,29 +29,57 @@ const PROTECTED_FOLDERS = new Map([
 	["Tools", "Installed tools and models"],
 ]);
 
+type JobLayout = { name: RegExp; files: readonly string[] };
+
 const ANALYSIS_FOLDERS = {
-	transcripts: { temporary: /^\.job-.+$/ },
-	pauses: { file: /^[0-9a-f]{64}\.json$/, temporary: /^\.scan-.+$/ },
+	transcripts: {
+		jobs: [
+			{
+				name: /^\.job-[a-zA-Z0-9]{6}$/,
+				files: ["audio.wav", "whisper.json", "transcript.json"],
+			},
+		],
+	},
+	pauses: {
+		file: /^[0-9a-f]{64}\.json$/,
+		jobs: [{ name: /^\.scan-[a-zA-Z0-9]{6}$/, files: ["scan.json"] }],
+	},
 	loudness: {
 		file: /^(?:[0-9a-f]{64}\.json|audio-[0-9a-f]{64}\.mka)$/,
-		temporary: /^\.(?:job|audio|ranges)-.+$/,
+		jobs: [
+			{ name: /^\.job-[a-zA-Z0-9]{6}$/, files: ["loudness.json"] },
+			{ name: /^\.audio-[a-zA-Z0-9]{6}$/, files: ["audio.mka"] },
+			{ name: /^\.ranges-[a-zA-Z0-9]{6}$/, files: ["ranges.ffconcat"] },
+		],
 	},
-	"noise-reduction": { file: /^[0-9a-f]{64}\.wav$/, temporary: /^\.job-.+$/ },
-} satisfies Record<AnalysisCache, { file?: RegExp; temporary: RegExp }>;
+	"noise-reduction": {
+		file: /^[0-9a-f]{64}\.wav$/,
+		jobs: [{ name: /^\.job-[a-zA-Z0-9]{6}$/, files: ["denoised.wav"] }],
+	},
+} satisfies Record<
+	AnalysisCache,
+	{ file?: RegExp; jobs: readonly JobLayout[] }
+>;
+
+const EXPORT_JOB: JobLayout = {
+	name: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+	files: ["mp4", "srt"],
+};
 
 function isAnalysisCache(name: string): name is AnalysisCache {
 	return Object.hasOwn(ANALYSIS_FOLDERS, name);
 }
 
-const CLEANUP_FOLDER = /^\.cleanup-[0-9a-f-]{36}$/;
-
-type Entry = { path: string; info: Stats };
-type Summary = {
-	bytes: number;
-	items: number;
-	newest: number;
-	containsProtected: boolean;
+type Selection = ReturnType<typeof storageSelectionSchema.parse>;
+type Cleanup = ReturnType<typeof storageCleanupSchema.parse>;
+type Candidate = { category: StorageCategory; signature: string };
+type Preview = {
+	selection: Selection;
+	candidates: Map<string, Candidate>;
 };
+const MAX_PREVIEWS = 16;
+
+type Summary = { bytes: number; items: number };
 
 function isWithin({
 	parent,
@@ -85,14 +116,37 @@ export function createStorage({
 	exportStore: Pick<ExportStore, "withStagingInventory">;
 }) {
 	let queue: Promise<unknown> = Promise.resolve();
+	const previews = new Map<string, Preview>();
 
-	async function inventory({
-		dryRun,
-		categories,
-		olderThanDays,
-	}: ReturnType<typeof storageCleanupSchema.parse>): Promise<StorageReport> {
+	async function inventory(options: Cleanup): Promise<StorageReport> {
+		const { dryRun, previewToken, categories: requested } = options;
+		const preview = previewToken && previews.get(previewToken);
+		if (!dryRun && !preview)
+			throw invalidParams(
+				"Get a fresh storage preview before applying cleanup.",
+			);
+		if (dryRun && previewToken)
+			throw invalidParams("Pass previewToken only when applying cleanup.");
+
+		const selection = preview
+			? preview.selection
+			: {
+					categories: requested,
+					olderThanDays: options.olderThanDays,
+				};
+		const { categories, olderThanDays } = selection;
+		if (
+			preview &&
+			options.olderThanDays !== undefined &&
+			options.olderThanDays !== olderThanDays
+		)
+			throw invalidParams("Preview cleanup again to change the age threshold.");
+
+		const candidates = new Map<string, Candidate>();
+		let newOrChangedItems = 0;
 		const canonicalRoot = await realpath(root);
 		const rootInfo = await lstat(canonicalRoot);
+		const managedRoot = { path: canonicalRoot, info: rootInfo };
 		const errors: StorageReport["errors"] = [];
 		const kept = new Map<string, StorageReport["kept"][number]>();
 		const reclaimable = STORAGE_CATEGORIES.map((category) => ({
@@ -129,7 +183,9 @@ export function createStorage({
 						issue({ path: child, message: "Couldn't read file information." });
 				}
 			}
-			return entries;
+			return entries.sort((a, b) =>
+				a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+			);
 		}
 
 		// A protected folder may be a link to a directory inside a cache.
@@ -149,25 +205,16 @@ export function createStorage({
 		}
 
 		async function summarize({ path, info }: Entry): Promise<Summary> {
-			const containsProtected =
-				info.dev !== rootInfo.dev ||
-				(info.isFile() ? info.nlink > 1 : !info.isDirectory());
-			const total: Summary = {
+			const total = {
 				bytes: info.isFile() ? info.size : 0,
 				items: info.isDirectory() ? 0 : 1,
-				newest: info.mtimeMs,
-				containsProtected,
 			};
-			if (!info.isDirectory() || containsProtected) return total;
-			const before = errors.length;
+			if (!info.isDirectory() || info.dev !== rootInfo.dev) return total;
 			for (const child of await children(path)) {
 				const part = await summarize(child);
 				total.bytes += part.bytes;
 				total.items += part.items;
-				total.newest = Math.max(total.newest, part.newest);
-				total.containsProtected ||= part.containsProtected;
 			}
-			total.containsProtected ||= errors.length !== before;
 			return total;
 		}
 
@@ -184,17 +231,61 @@ export function createStorage({
 			kept.set(key, row);
 		}
 
-		async function candidate({
+		async function jobFiles({
 			entry,
+			layouts,
+		}: {
+			entry: Entry;
+			layouts: readonly JobLayout[];
+		}) {
+			if (!entry.info.isDirectory() || entry.info.dev !== rootInfo.dev)
+				return null;
+			const layout = layouts.find(({ name }) =>
+				name.test(basename(entry.path)),
+			);
+			if (!layout) return null;
+			const before = errors.length;
+			const files = await children(entry.path);
+			// Empty folders and jobs with unfamiliar contents are kept.
+			return files.length > 0 &&
+				errors.length === before &&
+				files.every(
+					({ path, info }) =>
+						info.isFile() && layout.files.includes(basename(path)),
+				)
+				? files
+				: null;
+		}
+
+		function candidate({
+			entry,
+			ancestors,
+			files,
 			category,
 			busy,
 		}: {
 			entry: Entry;
+			ancestors: Entry[];
+			files: Entry[];
 			category: StorageCategory;
 			busy: boolean;
 		}) {
-			const { path, info } = entry;
-			const total = await summarize(entry);
+			const { path } = entry;
+			const total = {
+				bytes: 0,
+				items: 0,
+				newest: entry.info.mtimeMs,
+				containsProtected: false,
+			};
+			for (const { info } of [entry, ...files]) {
+				if (info.isFile()) {
+					total.bytes += info.size;
+					total.items++;
+				}
+				total.newest = Math.max(total.newest, info.mtimeMs);
+				total.containsProtected ||=
+					info.dev !== rootInfo.dev || (info.isFile() && info.nlink > 1);
+			}
 			const linked = protectedTargets.some(
 				(target) =>
 					isWithin({ parent: target, child: path }) ||
@@ -214,47 +305,57 @@ export function createStorage({
 				return;
 			}
 
+			const signature = JSON.stringify([
+				ancestors.map(({ path, info }) => [path, info.dev, info.ino]),
+				[entry, ...files].map(({ path, info }) => [
+					path,
+					info.dev,
+					info.mode,
+					info.nlink,
+					...fileIdentity(info),
+				]),
+			]);
+			if (preview) {
+				const confirmed = preview.candidates.get(path);
+				if (
+					confirmed?.category !== category ||
+					confirmed.signature !== signature
+				) {
+					newOrChangedItems++;
+					keep({
+						category,
+						reason: "New or changed since preview. Review again to clean up.",
+						...total,
+					});
+					return;
+				}
+				if (requested && !requested.includes(category)) {
+					keep({ category, reason: "Category excluded", ...total });
+					return;
+				}
+			} else {
+				candidates.set(path, { category, signature });
+			}
+
 			const row = reclaimable.find((item) => item.category === category);
 			if (!row) return;
 			row.bytes += total.bytes;
 			row.items++;
 			if (dryRun) return;
 			try {
-				if (
-					relative(path, await realpath(path)) ||
-					!sameFileIdentity({ a: info, b: await lstat(path) })
-				) {
-					issue({
-						path,
-						message: "Item changed during cleanup. Refresh and try again.",
-					});
-					return;
-				}
-				if (info.isDirectory()) {
-					// Remove the whole job from its namespace before deleting its contents.
-					const detached = join(dirname(path), `.cleanup-${randomUUID()}`);
-					await rename(path, detached);
-					try {
-						await rm(detached, { recursive: true });
-					} catch (error) {
-						const before = errors.length;
-						const remaining = await summarize({
-							path: detached,
-							info: await lstat(detached),
-						});
-						if (errors.length === before)
-							row.freedBytes += Math.max(0, total.bytes - remaining.bytes);
-						throw error;
-					}
-				} else {
-					await unlink(path);
-				}
-				row.freedBytes += total.bytes;
-			} catch (error) {
-				if (isMissing(error)) return;
+				removeStorageEntry({
+					ancestors,
+					entry,
+					files,
+					onRemove: (bytes) => {
+						row.freedBytes += bytes;
+					},
+				});
+			} catch {
 				issue({
 					path,
-					message: "Couldn't remove item. A later cleanup can retry.",
+					message:
+						"Item changed or couldn't be safely removed. Refresh and try again.",
 				});
 			}
 		}
@@ -280,30 +381,33 @@ export function createStorage({
 				await cacheUse.inspect({
 					cache: name,
 					operation: async (busy) => {
-						const { temporary } = ANALYSIS_FOLDERS[name];
+						const { jobs } = ANALYSIS_FOLDERS[name];
+						const ancestors = [managedRoot, entry, directory];
 						for (const file of await children(directory.path)) {
-							const leaf = basename(file.path);
-							if (
-								file.info.isDirectory() &&
-								(temporary.test(leaf) || CLEANUP_FOLDER.test(leaf))
-							) {
-								await candidate({
+							const files = await jobFiles({ entry: file, layouts: jobs });
+							if (files) {
+								candidate({
 									entry: file,
+									ancestors,
+									files,
 									category: "temporary-renders",
 									busy,
 								});
 							} else if (
 								name !== "transcripts" &&
-								ANALYSIS_FOLDERS[name].file.test(leaf)
+								file.info.isFile() &&
+								ANALYSIS_FOLDERS[name].file.test(basename(file.path))
 							) {
-								await candidate({
+								candidate({
 									entry: file,
+									ancestors,
+									files: [],
 									category: name,
 									busy,
 								});
 							} else {
 								const reason =
-									name === "transcripts"
+									name === "transcripts" && file.info.isFile()
 										? "Word timings and identities used by captions and corrections"
 										: "Unrecognized cache data";
 								keep({ category: name, reason, ...(await summarize(file)) });
@@ -341,12 +445,29 @@ export function createStorage({
 						});
 						return;
 					}
+					const ancestors = [managedRoot, entry, { path, info }];
 					for (const staged of await children(path)) {
-						await candidate({
+						const files = await jobFiles({
 							entry: staged,
-							category: "export-staging",
-							busy: isPending(basename(staged.path)),
+							layouts: [EXPORT_JOB],
 						});
+						if (files) {
+							candidate({
+								entry: staged,
+								ancestors,
+								files,
+								category: "export-staging",
+								busy: isPending(basename(staged.path)),
+							});
+						} else {
+							keep({
+								category: "export-staging",
+								reason: isPending(basename(staged.path))
+									? "In use by a running job"
+									: "Unrecognized export staging data",
+								...(await summarize(staged)),
+							});
+						}
 					}
 				});
 				for (const exported of await children(entry.path)) {
@@ -367,8 +488,18 @@ export function createStorage({
 			}
 		}
 
+		let nextToken: string | undefined;
+		if (dryRun) {
+			nextToken = randomUUID();
+			previews.set(nextToken, { selection, candidates });
+			const oldest = previews.keys().next().value;
+			if (previews.size > MAX_PREVIEWS && oldest) previews.delete(oldest);
+		}
+
 		return {
 			dryRun,
+			previewToken: nextToken,
+			newOrChangedItems,
 			reclaimableBytes: reclaimable.reduce((sum, row) => sum + row.bytes, 0),
 			freedBytes: reclaimable.reduce((sum, row) => sum + row.freedBytes, 0),
 			categories: reclaimable,
@@ -378,7 +509,14 @@ export function createStorage({
 	}
 
 	function run(options: ReturnType<typeof storageCleanupSchema.parse>) {
-		const next = queue.then(() => inventory(options));
+		const next = queue.then(async () => {
+			try {
+				return await inventory(options);
+			} finally {
+				if (!options.dryRun && options.previewToken)
+					previews.delete(options.previewToken);
+			}
+		});
 		queue = next.catch(() => {});
 		return next;
 	}

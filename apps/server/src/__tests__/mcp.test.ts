@@ -221,7 +221,8 @@ describe("splice mcp tools", () => {
 		}
 	});
 
-	test("storage tools forward filters and require an explicit apply flag", async () => {
+	test("storage tools default to dry run and require a preview token to apply", async () => {
+		const previewToken = randomUUID();
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {
 			calls.push([method, params]);
@@ -231,14 +232,26 @@ describe("splice mcp tools", () => {
 			for (const request of [
 				{ name: "storage_report", arguments: { olderThanDays: 7 } },
 				{ name: "storage_cleanup" },
-				{ name: "storage_cleanup", arguments: { dryRun: false, categories: ["pauses"] } },
+				{
+					name: "storage_cleanup",
+					arguments: { dryRun: false, previewToken, categories: ["pauses"] },
+				},
 			]) {
 				expect((await client.callTool(request)).isError).toBeFalsy();
 			}
+			expect(
+				(await client.callTool({
+					name: "storage_cleanup",
+					arguments: { dryRun: false },
+				})).isError,
+			).toBe(true);
 			expect(calls).toEqual([
 				["storage.report", { olderThanDays: 7 }],
 				["storage.cleanup", { dryRun: true }],
-				["storage.cleanup", { dryRun: false, categories: ["pauses"] }],
+				[
+					"storage.cleanup",
+					{ dryRun: false, previewToken, categories: ["pauses"] },
+				],
 			]);
 		} finally {
 			await client.close();
