@@ -145,6 +145,9 @@ function editMatch({
 		: "words";
 }
 
+const hasPlacement = (edit: CueEdit) =>
+	edit.words.every(({ clipId }) => clipId !== undefined);
+
 /**
  * Replaces the run of words each cue edit names with the creator's text, at
  * the placement the edit was made on, so a repeat of the same words keeps
@@ -172,7 +175,8 @@ function applyCueEdits({
 		const key = refKey(token.words[0]);
 		startsAt.set(key, [...(startsAt.get(key) ?? []), i]);
 	}
-	const claims = new Map<number, CueEdit>();
+	const placedClaims = new Map<number, CueEdit>();
+	const legacyClaims = new Map<number, CueEdit>();
 	for (const edit of relevant) {
 		const placements: number[] = [];
 		const elsewhere: number[] = [];
@@ -188,12 +192,21 @@ function applyCueEdits({
 		const followsSplit =
 			elsewhere.length === 1 &&
 			edit.words.every(({ clipId }) => !clipId || clipIds.has(clipId));
+		const claims = hasPlacement(edit) ? placedClaims : legacyClaims;
 		for (const i of placements.length ? placements : followsSplit ? elsewhere : [])
 			if (!claims.has(i)) claims.set(i, edit);
 	}
+	// A placed edit overrides any legacy edit covering the same words here.
+	const placedWords = new Set<number>();
+	for (const [start, edit] of placedClaims)
+		for (let i = start; i < start + edit.words.length; i++) placedWords.add(i);
+	for (const [start, edit] of legacyClaims)
+		if (!edit.words.some((_, offset) => placedWords.has(start + offset)))
+			placedClaims.set(start, edit);
+
 	const result: Token[] = [];
 	for (let i = 0; i < tokens.length; ) {
-		const edit = claims.get(i);
+		const edit = placedClaims.get(i);
 		if (!edit) {
 			result.push(tokens[i]);
 			i++;
@@ -729,17 +742,18 @@ export function planCorrection({
 					(!ref.clipId || ref.clipId === word.clipId),
 			);
 		// Other placements of the same words keep their own edits.
+		const overlaps = (edit: CueEdit) =>
+			shaping.has(edit) ||
+			((!edit.sequenceId || edit.sequenceId === sequenceId) &&
+				edit.words.some(atThisPlacement));
 		const others = captions.cueEdits.filter(
-			(edit) =>
-				!shaping.has(edit) &&
-				!(
-					(!edit.sequenceId || edit.sequenceId === sequenceId) &&
-					edit.words.some(atThisPlacement)
-				),
+			(edit) => !hasPlacement(edit) || !overlaps(edit),
 		);
-		// Typing the transcript's words back removes the edit.
+		// Restoring the transcript needs an override if a legacy edit still applies.
 		const restores =
-			corrected === (cue.originalText ?? cue.text) && cue.correctedBy === "cue";
+			corrected === (cue.originalText ?? cue.text) &&
+			cue.correctedBy === "cue" &&
+			!others.some((edit) => !hasPlacement(edit) && overlaps(edit));
 		return {
 			scope,
 			captions: {

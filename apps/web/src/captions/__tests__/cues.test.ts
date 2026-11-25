@@ -440,6 +440,44 @@ describe("cue corrections fix one placement", () => {
 			),
 		).toEqual(["Ship it."]);
 	});
+
+	test("re-editing a legacy correction overrides it only at the selected placement", () => {
+		const legacy = captionsOf(speak(1, "versel."), {
+			cueEdits: [{ words: [{ projectItemId: "rec", index: 0 }], text: "Vercel." }],
+		});
+		const args = { tracks: repeated, sequenceEnd: 15, sequenceId: "seq" };
+		const before = buildCaptionCues({ ...args, captions: legacy });
+		expect(cueTexts(before)).toEqual(["Vercel.", "Vercel."]);
+		const edited = planCorrection({
+			cue: before[0],
+			text: "Vercel.io.",
+			scope: "cue",
+			captions: legacy,
+			sequenceId: args.sequenceId,
+		});
+		if (edited.scope !== "cue") throw new Error("expected a cue correction");
+		const after = buildCaptionCues({ ...args, captions: edited.captions });
+		expect(cueTexts(after)).toEqual(["Vercel.io.", "Vercel."]);
+		const other = buildCaptionCues({
+			...args,
+			captions: edited.captions,
+			sequenceId: "other",
+		});
+		expect(cueTexts(other)).toEqual(["Vercel.", "Vercel."]);
+
+		const restored = planCorrection({
+			cue: after[0],
+			text: "versel.",
+			scope: "cue",
+			captions: edited.captions,
+			sequenceId: args.sequenceId,
+		});
+		if (restored.scope !== "cue") throw new Error("expected a cue correction");
+		expect(cueTexts(buildCaptionCues({ ...args, captions: restored.captions }))).toEqual([
+			"versel.",
+			"Vercel.",
+		]);
+	});
 });
 
 describe("re-correcting corrected words", () => {
