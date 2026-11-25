@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
+import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { EditorApi } from "@/agent/editor-api";
 import type { ApplyRequest } from "@splice/bridge/ops";
 
@@ -267,4 +267,30 @@ test("razoring a clip before an existing gap does not report a new gap", () => {
 			ops: [{ op: "razor", at: time(3), clipIds: ["first"] }],
 		}),
 	).toMatchObject({ ok: true, impact: { newGapsAndJumpCuts: [] } });
+});
+
+test("scoped ops and markers share the frame grid", () => {
+	const { api, request, sequence } = fixture();
+	const edit: ApplyRequest = {
+		...request,
+		scope: range([2.01, 3.975]),
+		ops: [
+			{ op: "add_marker", at: time(2.01) },
+			{ op: "add_marker", at: time(3.99) },
+		],
+	};
+	const impact = {
+		scope: { start: 2, end: 4 },
+		outsideScopeUntouched: true,
+	};
+	expect(api.previewOps(edit)).toMatchObject({ ok: true, impact });
+	expect(api.apply(edit)).toMatchObject({ ok: true, impact });
+	expect(sequence().markers.map(({ time }) => time)).toEqual([s(2), s(4)]);
+	expect(
+		api.previewOps({
+			...edit,
+			expectedRevision: api.getRevision(),
+			scope: range([2.02, 2.01]),
+		}),
+	).toMatchObject({ code: "INVALID_OP" });
 });

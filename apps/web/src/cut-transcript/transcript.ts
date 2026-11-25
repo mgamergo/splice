@@ -1,3 +1,5 @@
+import type { FrameRate } from "opencut-wasm";
+import { resolveEditRange } from "@/agent/time";
 /**
  * The cut transcript: the narration heard in a sequence, read as sentences
  * and paragraphs. Like the SRT cues it is built from, it is derived, never
@@ -218,15 +220,28 @@ export function summarizeSentence({
 export function summarizeSelection({
 	sequence,
 	sentences,
+	fps,
 }: {
 	sequence: { id: string; name: string };
 	sentences: TranscriptSentence[];
+	fps: FrameRate;
 }): TranscriptSelectionSummary {
+	const start = sentences[0].start;
+	const end = Math.max(...sentences.map((sentence) => sentence.end));
+	const bounds = resolveEditRange({
+		start: { seconds: start },
+		end: { seconds: end },
+		fps,
+	});
 	return {
 		sequenceId: sequence.id,
 		sequenceName: sequence.name,
-		start: toMs(sentences[0].start),
-		end: toMs(Math.max(...sentences.map(({ end }) => end))),
+		start: toMs(start),
+		end: toMs(end),
+		editBounds: {
+			start: mediaTimeToSeconds({ time: bounds.start }),
+			end: mediaTimeToSeconds({ time: bounds.end }),
+		},
 		text: sentences.map(({ text }) => text).join(" "),
 		sentences: sentences.map(summarizeSentence),
 	};

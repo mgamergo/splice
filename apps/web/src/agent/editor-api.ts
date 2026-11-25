@@ -109,7 +109,12 @@ import {
 	shortHookRequestSchema,
 	shortCaptionPlacementRequestSchema,
 } from "@splice/bridge/ops";
-import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
+import {
+	formatSeconds,
+	resolveEditRange,
+	resolveTimeSpec,
+	TimeSpecError,
+} from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";
 import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
@@ -131,7 +136,7 @@ import type {
 	TimelineClip,
 	TSequence,
 } from "@/timeline";
-import { addMediaTime, mediaTimeFromSeconds, mediaTimeToSeconds } from "@/wasm";
+import { addMediaTime, mediaTimeToSeconds } from "@/wasm";
 
 export type ApplyErrorCode =
 	| "INVALID_REQUEST"
@@ -988,7 +993,11 @@ export class EditorApi {
 		return {
 			ok: true as const,
 			revision,
-			selection: summarizeSelection({ sequence, sentences }),
+			selection: summarizeSelection({
+				sequence,
+				sentences,
+				fps: project.settings.fps,
+			}),
 			...(sequence.id !== this.editor.sequences.getActiveSequenceOrNull()?.id && {
 				hint: "The selection is on a sequence the creator is not viewing now.",
 			}),
@@ -1429,17 +1438,12 @@ export class EditorApi {
 		try {
 			if (preview || request.scope) {
 				const before = this.editor.sequences.getActiveSequence();
-				const fps = this.editor.project.getActive().settings.fps;
-				const scopeTime = (spec: Parameters<typeof resolveTimeSpec>[0]["spec"]) =>
-					"seconds" in spec
-						? mediaTimeFromSeconds({ seconds: spec.seconds })
-						: resolveTimeSpec({ spec, fps });
-				const scope = request.scope && {
-					start: scopeTime(request.scope.start),
-					end: scopeTime(request.scope.end),
-				};
-				if (scope && scope.end <= scope.start)
-					return this.invalidOp("The scope end must be after its start.");
+				const scope =
+					request.scope &&
+					resolveEditRange({
+						...request.scope,
+						fps: this.editor.project.getActive().settings.fps,
+					});
 				const staged = this.editor.command.previewSequenceEdit({ command: batch });
 				const after = staged.sequences.find(({ id }) => id === before.id);
 				if (!after) throw new Error("A sequence edit removed the active sequence.");
