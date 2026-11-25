@@ -4,7 +4,7 @@ Splice is a browser video editor where an agent makes the rough cut from raw rec
 
 - Vocabulary: [GLOSSARY.md](GLOSSARY.md)
 - Settled decisions: [docs/decisions.md](docs/decisions.md)
-- Architecture: [docs/agentic-layer-architecture.md](docs/agentic-layer-architecture.md)
+- What's built and what's next: [SCOPE.md](SCOPE.md)
 
 ## Develop
 
