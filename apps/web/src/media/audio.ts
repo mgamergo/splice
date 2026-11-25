@@ -50,7 +50,12 @@ import {
 } from "@/media/waveform-summary";
 
 const MAX_AUDIO_CHANNELS = 2;
-export const EXPORT_SAMPLE_RATE = 44100;
+/**
+ * The rate sequences mix and export at. Cameras, phones and OBS record at
+ * 48 kHz, so their audio mixes without resampling, and 48 kHz is what
+ * video platforms expect.
+ */
+export const EXPORT_SAMPLE_RATE = 48000;
 
 interface CollectedAudioClip {
 	timelineClip: AudioCapableClip;

@@ -5,6 +5,7 @@ import type { ProjectItem } from "@/media/types";
 import {
 	createTimelineAudioBuffer,
 	createTimelineAudioReader,
+	EXPORT_SAMPLE_RATE,
 } from "@/media/audio";
 import type { LibraryAudioClip, SequenceTracks } from "@/timeline";
 import { buildDefaultSequence } from "@/timeline/sequences";
@@ -162,7 +163,7 @@ test("a late seek and sequential export render the same samples with one-second 
 			},
 		};
 	};
-	const rate = 44100;
+	const rate = EXPORT_SAMPLE_RATE;
 	const buffer = makeBuffer(1, rate, rate);
 	const data = buffer.getChannelData(0);
 	for (let index = 0; index < data.length; index++)

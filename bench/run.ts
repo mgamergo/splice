@@ -3,7 +3,8 @@
  * and the final mix's loudness measure, in a real browser against a real
  * `splice`. Also records how long the page's main thread stalls meanwhile.
  *
- *   bun run bench [--minutes 5 | --seconds 20] [--chrome <path>] [--headed] [--skip-mix]
+ *   bun run bench [--minutes 5 | --seconds 20] [--chrome <path>] [--headed]
+ *                 [--skip-mix] [--skip-export] [--profile]
  *
  * Needs FFmpeg on PATH and `bun run build:web` first. Results print as JSON
  * and append to bench/results.jsonl, so runs on different machines compare.
@@ -80,7 +81,8 @@ function fixture(): string {
 		],
 		{ stdio: "inherit" },
 	);
-	if (result.status !== 0) throw new Error("FFmpeg failed to encode the fixture.");
+	if (result.status !== 0)
+		throw new Error("FFmpeg failed to encode the fixture.");
 	copyFileSync(`${path}.part.mp4`, path);
 	return path;
 }
@@ -117,7 +119,10 @@ async function rpc(method: string, params?: unknown): Promise<any> {
 		},
 		body: JSON.stringify({ jsonrpc: "2.0", id: rpcId++, method, params }),
 	});
-	const body = (await response.json()) as { result?: unknown; error?: { message: string } };
+	const body = (await response.json()) as {
+		result?: unknown;
+		error?: { message: string };
+	};
 	if (body.error) throw new Error(`${method}: ${body.error.message}`);
 	return body.result;
 }
@@ -145,7 +150,9 @@ const results: Record<string, unknown> = {
 };
 
 try {
-	const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+	const page = await browser.newPage({
+		viewport: { width: 1600, height: 900 },
+	});
 	page.on("console", (message) => {
 		if (message.type() === "error") console.error(`[page] ${message.text()}`);
 	});
@@ -201,66 +208,85 @@ try {
 	await page.evaluate(() => {
 		(window as any).__benchStalls.length = 0;
 	});
-	const peakMemory = { browserMb: 0 };
-	const sampler = setInterval(async () => {
-		const browserMb = browserMemoryMb();
-		peakMemory.browserMb = Math.max(peakMemory.browserMb, browserMb);
-		const progress = await page
-			.evaluate(() => (window as any).__spliceEditor.project.getExportState())
-			.catch(() => null);
-		if (progress)
-			console.error(
-				`  export ${progress.step ?? ""} ${Math.round(progress.progress * 100)}%  browser ${browserMb} MB`,
-			);
-	}, 5000);
+	if (!flag("skip-export")) {
+		const peakMemory = { browserMb: 0 };
+		const sampler = setInterval(async () => {
+			const browserMb = browserMemoryMb();
+			peakMemory.browserMb = Math.max(peakMemory.browserMb, browserMb);
+			const progress = await page
+				.evaluate(() => (window as any).__spliceEditor.project.getExportState())
+				.catch(() => null);
+			if (progress)
+				console.error(
+					`  export ${progress.step ?? ""} ${Math.round(progress.progress * 100)}%  browser ${browserMb} MB`,
+				);
+		}, 5000);
+		const exportProfiler = flag("profile") ? await page.context().newCDPSession(page) : null;
+	await exportProfiler?.send("Profiler.enable");
+	await exportProfiler?.send("Profiler.setSamplingInterval", { interval: 2000 });
+	await exportProfiler?.send("Profiler.start");
 	const exported = await page.evaluate(async () => {
-		const editor = (window as any).__spliceEditor;
-		const marks: Array<[number, number]> = [];
-		const started = performance.now();
-		const unsubscribe = editor.project.subscribe?.(() => {
-			const { progress } = editor.project.getExportState();
-			if (!marks.length || progress - marks[marks.length - 1][1] >= 0.05)
-				marks.push([(performance.now() - started) / 1000, progress]);
+			const editor = (window as any).__spliceEditor;
+			const marks: Array<[number, number]> = [];
+			const started = performance.now();
+			const unsubscribe = editor.project.subscribe?.(() => {
+				const { progress } = editor.project.getExportState();
+				if (!marks.length || progress - marks[marks.length - 1][1] >= 0.05)
+					marks.push([(performance.now() - started) / 1000, progress]);
+			});
+			const result = await editor.project.deliver({
+				quality: "high",
+				acceptStaleGain: true,
+			});
+			unsubscribe?.();
+			return {
+				success: result.success,
+				encoder: result.encoder,
+				error: result.error,
+				failedStep: result.failedStep,
+				seconds: (performance.now() - started) / 1000,
+				marks,
+			};
 		});
-		const result = await editor.project.deliver({
-			quality: "high",
-			acceptStaleGain: true,
-		});
-		unsubscribe?.();
-		return {
-			success: result.success,
-			encoder: result.encoder,
-			error: result.error,
-			failedStep: result.failedStep,
-			seconds: (performance.now() - started) / 1000,
-			marks,
+		clearInterval(sampler);
+	if (exportProfiler) {
+		const { profile } = await exportProfiler.send("Profiler.stop");
+		console.error(`Export profile:\n${summarizeProfile(profile)}`);
+	}
+		const stalls = await page.evaluate(() =>
+			[...(window as any).__benchStalls].sort((a: number, b: number) => b - a),
+		);
+		const firstRender = exported.marks.find(
+			([, progress]: [number, number]) => progress > 0.06,
+		);
+		results.export = {
+			success: exported.success,
+			error: exported.error,
+			failedStep: exported.failedStep,
+			seconds: round(exported.seconds),
+			realtimeFactor: round(seconds / exported.seconds),
+			secondsBeforeFirstFrames: firstRender ? round(firstRender[0]) : null,
+			longestStallMs: Math.round(stalls[0] ?? 0),
+			stallsOver200ms: stalls.filter((stall: number) => stall > 200).length,
+			peakBrowserMemoryMb: peakMemory.browserMb || null,
+			encoder: exported.encoder ?? null,
 		};
-	});
-	clearInterval(sampler);
-	const stalls = await page.evaluate(() =>
-		[...(window as any).__benchStalls].sort((a: number, b: number) => b - a),
-	);
-	const firstRender = exported.marks.find(([, progress]: [number, number]) => progress > 0.06);
-	results.export = {
-		success: exported.success,
-		error: exported.error,
-		failedStep: exported.failedStep,
-		seconds: round(exported.seconds),
-		realtimeFactor: round(seconds / exported.seconds),
-		secondsBeforeFirstFrames: firstRender ? round(firstRender[0]) : null,
-		longestStallMs: Math.round(stalls[0] ?? 0),
-		stallsOver200ms: stalls.filter((stall: number) => stall > 200).length,
-		peakBrowserMemoryMb: peakMemory.browserMb || null,
-		encoder: exported.encoder ?? null,
-	};
+	}
 	console.error(`Export: ${JSON.stringify(results.export)}`);
 
 	if (!flag("skip-mix")) {
 		const { sequenceId } = await rpc("editor.getState");
+		const profiler = flag("profile") ? await page.context().newCDPSession(page) : null;
+		await profiler?.send("Profiler.enable");
+		await profiler?.send("Profiler.start");
 		const started = performance.now();
 		await rpc("editor.mixLoudness", { sequenceId, apply: false });
 		results.mixLoudnessSeconds = round((performance.now() - started) / 1000);
 		console.error(`Mix loudness: ${results.mixLoudnessSeconds} s`);
+		if (profiler) {
+			const { profile } = await profiler.send("Profiler.stop");
+			console.error(summarizeProfile(profile));
+		}
 	}
 	results.memoryMb = await page.evaluate(() =>
 		Math.round(((performance as any).memory?.usedJSHeapSize ?? 0) / 2 ** 20),
@@ -280,8 +306,39 @@ try {
 }
 
 console.log(JSON.stringify(results, null, 2));
-appendFileSync(join(repo, "bench", "results.jsonl"), `${JSON.stringify(results)}\n`);
+appendFileSync(
+	join(repo, "bench", "results.jsonl"),
+	`${JSON.stringify(results)}\n`,
+);
 process.exit(0);
+
+/** The main thread's self time by function, heaviest first. */
+function summarizeProfile(profile: {
+	nodes: Array<{
+		id: number;
+		callFrame: { functionName: string; url: string; lineNumber: number; columnNumber: number };
+	}>;
+	samples: number[];
+	timeDeltas: number[];
+}): string {
+	const byId = new Map(profile.nodes.map((node) => [node.id, node]));
+	const self = new Map<string, number>();
+	let total = 0;
+	profile.samples.forEach((id, index) => {
+		const frame = byId.get(id)?.callFrame;
+		const delta = profile.timeDeltas[index] ?? 0;
+		total += delta;
+		const key = frame
+			? `${frame.functionName || "(anonymous)"} ${frame.url.split("/").at(-1)}:${frame.lineNumber + 1}:${frame.columnNumber + 1}`
+			: "?";
+		self.set(key, (self.get(key) ?? 0) + delta);
+	});
+	return [...self]
+		.sort((a, b) => b[1] - a[1])
+		.slice(0, 25)
+		.map(([key, micros]) => `${((100 * micros) / total).toFixed(1).padStart(5)}%  ${key}`)
+		.join("\n");
+}
 
 /** Resident memory of every Chrome process, where `ps` can tell (Linux and macOS). */
 function browserMemoryMb(): number {
