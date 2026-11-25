@@ -1,6 +1,6 @@
 # Splice decisions
 
-The settled outcome of the design grilling that ended on 2026-11-22. Terms follow [GLOSSARY.md](../GLOSSARY.md). Where this file and [agentic-layer-architecture.md](agentic-layer-architecture.md) disagree, this file wins until the report is rewritten.
+The settled outcome of the design grilling that ended on 2026-11-22. Terms follow [GLOSSARY.md](../GLOSSARY.md). What is built and what comes next is in [SCOPE.md](../SCOPE.md); where the two disagree about future work, SCOPE.md wins.
 
 ## Baseline and repo
 
@@ -72,12 +72,7 @@ The settled outcome of the design grilling that ended on 2026-11-22. Terms follo
 
 ## Build order
 
-1. **Phase 0**: rewrite the architecture report to match this file. Restore classic, strip it, rename to Premiere terms, start the fresh save format, and get tests and type checks green. Create `LAPTOP-CHECKS.md`.
-2. **Phase 1**: the editing API (atomic `apply(ops)` as one undoable batch, revision checks, sequence digest).
-3. **Phase 2**: the `splice` server, the bridge, and `splice mcp`.
-4. **Phase 3a**: transcription (whisper.cpp), take removal and removal markers.
-5. **Phase 3b**: pauses, false starts, filler words, loudness, and the Short format with captions.
-6. **Later**: the profile agent and the Profile panel, transitions and effects, GIF/WebP stickers, ducking, evaluations.
+Phases 0–3b and the horizontal workflow are built. The next work, in order, is in [SCOPE.md](../SCOPE.md).
 
 ## End-to-end editing workflow
 
