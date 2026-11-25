@@ -92,7 +92,17 @@ export function retrimCorrections({
 	}));
 }
 
-type CutDecision = TimeRange & { kind: TighteningKind; pauseSeconds?: number };
+type PlacedWindow = TimeRange & {
+	placement: {
+		projectItemId: string;
+		clipIds: Set<string>;
+		sourceAudioGroupIds: Set<string>;
+	};
+};
+type CutDecision = PlacedWindow & {
+	kind: TighteningKind;
+	pauseSeconds?: number;
+};
 
 /** Tags the surviving clip edges before ripple moves them away from the cut. */
 export function tagTighteningEdges({
@@ -104,9 +114,9 @@ export function tagTighteningEdges({
 }: {
 	cuts: TimeRange[];
 	takeCuts: TimeRange[];
-	falseStarts: TimeRange[];
-	fillerWords: TimeRange[];
-	pauses: Array<{ windows: TimeRange[]; pauseSeconds: number }>;
+	falseStarts: PlacedWindow[];
+	fillerWords: PlacedWindow[];
+	pauses: Array<{ windows: PlacedWindow[]; pauseSeconds: number }>;
 }) {
 	const silent: CutDecision[] = pauses.flatMap(({ windows, pauseSeconds }) =>
 		windows.map((window) => ({ ...window, kind: "pause", pauseSeconds })),
@@ -116,16 +126,25 @@ export function tagTighteningEdges({
 		windows,
 		kind,
 	}: {
-		windows: TimeRange[];
+		windows: PlacedWindow[];
 		kind: TighteningKind;
 	}): CutDecision[] =>
-		windows.map(({ start, end }) => ({
+		windows.map(({ start, end, placement }) => ({
 			start:
-				silent.find((pause) => pause.start <= start && start < pause.end)
-					?.start ?? start,
+				silent.find(
+					(pause) =>
+						pause.placement === placement &&
+						pause.start <= start &&
+						start < pause.end,
+				)?.start ?? start,
 			end:
-				silent.find((pause) => pause.start < end && end <= pause.end)?.end ??
-				end,
+				silent.find(
+					(pause) =>
+						pause.placement === placement &&
+						pause.start < end &&
+						end <= pause.end,
+				)?.end ?? end,
+			placement,
 			kind,
 		}));
 	const decisions = [
@@ -135,7 +154,7 @@ export function tagTighteningEdges({
 	];
 	const removed = normalizeRanges({ ranges: cuts });
 	const atEdge = (edge: "start" | "end") => {
-		const byTime = new Map<MediaTime, CutDecision>();
+		const byTime = new Map<MediaTime, CutDecision[]>();
 		for (const cut of removed) {
 			const time = cut[edge];
 			const touches = ({ start, end }: TimeRange) =>
@@ -143,8 +162,10 @@ export function tagTighteningEdges({
 					? start <= time && time < end
 					: start < time && time <= end;
 			if (takeCuts.some(touches)) continue;
-			const decision = decisions.find(touches);
-			if (decision) byTime.set(time, { ...decision, ...cut });
+			const matching = decisions
+				.filter(touches)
+				.map((decision) => ({ ...decision, ...cut }));
+			if (matching.length) byTime.set(time, matching);
 		}
 		return byTime;
 	};
@@ -172,8 +193,15 @@ export function tagTighteningEdges({
 					}),
 			);
 		const describe = (
-			decision: CutDecision | undefined,
+			candidates: CutDecision[] | undefined,
 		): TighteningEdge | undefined => {
+			const decision = candidates?.find(
+				({ placement }) =>
+					original.mediaId === placement.projectItemId &&
+					(placement.clipIds.has(original.id) ||
+						(original.sourceAudioGroupId !== undefined &&
+							placement.sourceAudioGroupIds.has(original.sourceAudioGroupId))),
+			);
 			if (!decision) return undefined;
 			const sourceIn = toSource(Math.max(decision.start, original.startTime));
 			const sourceOut = toSource(Math.min(decision.end, originalEnd));

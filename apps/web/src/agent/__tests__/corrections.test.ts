@@ -1,9 +1,15 @@
 import { expect, test } from "bun:test";
 import { correctionEventSchema } from "@splice/bridge/profile";
 import { EditorApi } from "@/agent/editor-api";
-import { s, setUpEditor } from "@/agent/__tests__/fixtures";
+import {
+	audioClip,
+	s,
+	setUpEditor,
+	videoClip,
+} from "@/agent/__tests__/fixtures";
 import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
 import { RazorClipsCommand } from "@/commands/timeline/clip/razor-clips";
+import { buildEmptyTrack } from "@/timeline/placement";
 
 const range = ([sourceIn, sourceOut]: [number, number]) => ({
 	projectItemId: "rec",
@@ -256,4 +262,104 @@ test("a false-start edge keeps its provenance when it snaps into a pause", () =>
 			},
 		},
 	]);
+});
+
+test("a pause tags only its recording placement and linked picture", () => {
+	const linked = "dialogue-link";
+	const editor = setUpEditor({
+		tracks: {
+			main: {
+				...buildEmptyTrack({ id: "picture", type: "video" }),
+				clips: [
+					{
+						...videoClip({ id: "linked-video", start: 0, duration: 20 }),
+						sourceAudioGroupId: linked,
+						isSourceAudioEnabled: false,
+					},
+					{
+						...videoClip({ id: "other-placement", start: 21, duration: 20 }),
+						isSourceAudioEnabled: false,
+					},
+				],
+			},
+			audio: [
+				{
+					...buildEmptyTrack({ id: "dialogue", type: "audio" }),
+					clips: [
+						{
+							...audioClip({ id: "split-audio", start: 0, duration: 20 }),
+							sourceType: "upload",
+							mediaId: "rec",
+							sourceAudioGroupId: linked,
+						},
+					],
+				},
+				{
+					...buildEmptyTrack({ id: "background", type: "audio" }),
+					muted: true,
+					clips: [audioClip({ id: "background-clip", start: 0, duration: 20 })],
+				},
+			],
+			overlay: [
+				{
+					...buildEmptyTrack({ id: "overlay", type: "video" }),
+					clips: [
+						{
+							...videoClip({ id: "unlinked-copy", start: 0, duration: 20 }),
+							isSourceAudioEnabled: false,
+						},
+					],
+				},
+			],
+		},
+	});
+	editor.media.setProjectItems({
+		projectItems: [
+			{
+				id: "rec",
+				name: "talk.mp4",
+				type: "video",
+				duration: 20,
+				hasAudio: true,
+				file: new File([], "talk.mp4"),
+			},
+			{
+				id: "music",
+				name: "music.wav",
+				type: "audio",
+				duration: 20,
+				hasAudio: true,
+				file: new File([], "music.wav"),
+			},
+		],
+	});
+	const api = new EditorApi(editor);
+	expect(
+		api.roughCut({
+			sequenceId: editor.sequences.getActiveSequence().id,
+			expectedRevision: api.getRevision(),
+			pauses: [range([5, 8])],
+		}),
+	).toMatchObject({ ok: true });
+	const { main, audio, overlay } = editor.sequences.getActiveSequence().tracks;
+	for (const clips of [main.clips, audio[0].clips]) {
+		expect(clips[0].tighteningOut?.kind).toBe("pause");
+		expect(clips[1].tighteningIn?.kind).toBe("pause");
+	}
+	expect(main.clips[2].tighteningIn).toBeUndefined();
+	expect(overlay[0].clips[0].tighteningOut).toBeUndefined();
+	expect(overlay[0].clips[1].tighteningIn).toBeUndefined();
+	const [left, right] = audio[1].clips;
+	expect(left.tighteningOut).toBeUndefined();
+	expect(right.tighteningIn).toBeUndefined();
+	editor.timeline.updateClipTrim({
+		clipId: right.id,
+		trimStart: s(7.5),
+		trimEnd: s(0),
+		startTime: s(4.9),
+		duration: s(12.5),
+	});
+	expect(
+		editor.command.getUnsavedCorrections({ projectId: "project-1" }),
+	).toEqual([]);
 });

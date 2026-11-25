@@ -557,10 +557,10 @@ export function mapSourceRangeToSequence({
 }: {
 	tracks: SequenceTracks;
 	range: ResolvedRange;
-}): Array<{ start: MediaTime; end: MediaTime }> {
+}): Array<{ start: MediaTime; end: MediaTime; clipIds: string[] }> {
 	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
 		findTakeWindows({ track, take: range, complete: false }).map(
-			({ start, end }) => ({ start, end }),
+			({ start, end, clipIds }) => ({ start, end, clipIds }),
 		),
 	);
 }

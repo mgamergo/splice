@@ -287,9 +287,10 @@ function pausesInSource({
 }
 
 /** A run of heard clips that plays one recording without a jump. */
-type Placement = {
+type Placement = Window & {
 	projectItemId: string;
 	clipIds: Set<string>;
+	sourceAudioGroupIds: Set<string>;
 	sourceIn: number;
 	sourceOut: number;
 };
@@ -315,7 +316,6 @@ function continuousPlacements({
 		let last:
 			| {
 					placement: Placement;
-					end: MediaTime;
 					sourceEnd: MediaTime;
 					rate: number;
 			  }
@@ -336,7 +336,7 @@ function continuousPlacements({
 			const continues =
 				last &&
 				last.placement.projectItemId === clip.mediaId &&
-				last.end === clip.startTime &&
+				last.placement.end === clip.startTime &&
 				last.sourceEnd === clip.trimStart &&
 				last.rate === rate;
 			const placement: Placement =
@@ -345,15 +345,20 @@ function continuousPlacements({
 					: {
 							projectItemId: clip.mediaId,
 							clipIds: new Set(),
+							sourceAudioGroupIds: new Set(),
+							start: clip.startTime,
+							end: clip.startTime,
 							sourceIn: mediaTimeToSeconds({ time: clip.trimStart }),
 							sourceOut: 0,
 						};
 			if (placement !== last?.placement) placements.push(placement);
 			placement.clipIds.add(clip.id);
+			if (clip.sourceAudioGroupId)
+				placement.sourceAudioGroupIds.add(clip.sourceAudioGroupId);
+			placement.end = addMediaTime({ a: clip.startTime, b: clip.duration });
 			placement.sourceOut = mediaTimeToSeconds({ time: sourceEnd });
 			last = {
 				placement,
-				end: addMediaTime({ a: clip.startTime, b: clip.duration }),
 				sourceEnd,
 				rate,
 			};
@@ -373,7 +378,7 @@ function mapSourceRanges({
 	ranges: ItemRange[];
 	projectItems: ProjectItem[];
 	context: string;
-}): Window[][] {
+}) {
 	return ranges.map((range, index) => {
 		if (range.sourceOut <= range.sourceIn) return [];
 		try {
@@ -501,7 +506,9 @@ export function buildRoughCut({
 	// Each silent part maps only through the clip it was checked on, never to
 	// another placement of the same source time. One group per pause, however
 	// many silent parts it has.
-	const pauses: Window[][] = clamped.pauses.map(() => []);
+	const pauses: ReturnType<typeof mapSourceRanges> = clamped.pauses.map(
+		() => [],
+	);
 	const partsByClip = Map.groupBy(silentParts, ({ clipId }) => clipId);
 	for (const [clipId, parts] of partsByClip)
 		map({
@@ -524,6 +531,24 @@ export function buildRoughCut({
 			[...placement.clipIds].map((clipId) => [clipId, placement] as const),
 		),
 	);
+	const withPlacement = ({
+		start,
+		end,
+		clipIds,
+	}: (typeof pauses)[number][number]) => {
+		return [...new Set(clipIds.map((id) => placementOf.get(id)))].flatMap(
+			(placement) =>
+				placement
+					? [
+							{
+								start: start < placement.start ? placement.start : start,
+								end: end > placement.end ? placement.end : end,
+								placement,
+							},
+						]
+					: [],
+		);
+	};
 	const partsByPlacement = Map.groupBy(silentParts, ({ clipId }) =>
 		placementOf.get(clipId),
 	);
@@ -660,10 +685,10 @@ export function buildRoughCut({
 		mapPiece: tagTighteningEdges({
 			cuts,
 			takeCuts,
-			falseStarts: falseStarts.flat(),
-			fillerWords: fillerWords.flat(),
+			falseStarts: falseStarts.flat().flatMap(withPlacement),
+			fillerWords: fillerWords.flat().flatMap(withPlacement),
 			pauses: pauses.map((windows, index) => ({
-				windows,
+				windows: windows.flatMap(withPlacement),
 				pauseSeconds:
 					clamped.pauses[index].sourceOut - clamped.pauses[index].sourceIn,
 			})),
