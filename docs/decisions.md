@@ -18,7 +18,7 @@ The settled outcome of the design grilling that ended on 2026-11-22. Terms follo
   - `splice mcp` is a stdio MCP server launched by T3 Code. It connects to `splice` and starts it if it isn't running. The editor tab reconnects on its own.
 - The agent (T3 Code) runs locally on the laptop, not on remote machines.
 - Project items reference files on disk; nothing is copied into browser storage ([ADR 0002](adr/0002-project-items-reference-files-on-disk.md)). The editor offers to relink missing files.
-- All data lives under `D:\Splice\`, in these folders: `Footage\`, `Projects\`, `Cache\` (safe to delete), `Profile\`, `Exports\`, `Tools\`.
+- All data lives under `D:\Splice\`, in these folders: `Footage\`, `Projects\`, `Cache\` (analysis data and runtime state), `Profile\`, `Exports\`, `Tools\`.
 - Transcription for the agent uses whisper.cpp. `splice` downloads a pinned, prebuilt Windows CUDA build (the RTX 5050 needs CUDA 12.8+) and falls back to the CPU. The browser's Whisper stays for captions.
 - All laptop testing is done on the Radeon 860M first. Forcing the RTX 5050 comes later.
 
@@ -162,6 +162,10 @@ Measure the complete mix, including narration, application sounds and optional m
 Each successful horizontal export adds an identifiable MP4/SRT pair under the Exports folder on D:. Give both files the same stem. Show the project, export date and approved revision in Splice, with an Open folder action. Keep earlier exports available.
 
 Cleanup may reclaim temporary renders and rebuildable analysis caches. Preserve original recordings, approved checkpoints, corrected captions, exports and the exact graphics used in approved edits so the creator can reproduce them.
+
+Open **Storage** from the editor menu to review the disk inventory and choose categories. `storage_report` and `storage_cleanup` cover the Splice root. Use `categories` and `olderThanDays` to filter a preview. Cleanup previews by default. To apply a preview, send its `previewToken` with `dryRun: false`. You can narrow the category selection when you apply. Cleanup removes only unchanged entries from that preview and keeps files held by Splice jobs and reserved exports. Review a fresh preview before removing newly eligible files.
+
+Keep completed transcripts. Caption and editing profile corrections can use their word timings or identifiers, and creating a new transcript can change both. Keep project data and media in IndexedDB and OPFS, including approved checkpoints, graphics, mix settings and thumbnails saved with project metadata. The editor can clear completed waveform summaries from the tab and downloaded transcription models from the browser cache. Browser transcription downloads any missing model files when it next loads.
 
 Verify a relinked recording against the original before reusing its edits and analysis. Treat changed content as an explicit replacement and flag affected passages for review.
 

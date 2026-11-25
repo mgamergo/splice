@@ -28,6 +28,8 @@ const LONG_METHODS: ReadonlySet<string> = new Set([
 	"editor.addMusic",
 	"editor.updateMusic",
 	"editor.mixLoudness",
+	"storage.report",
+	"storage.cleanup",
 ]);
 
 /** Whether `splice mcp` gives a call the long deadline. */

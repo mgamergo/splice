@@ -31,7 +31,7 @@ export const EXPORTS_FOLDER = "Exports";
 /** The most an export file chunk may hold; Bun refuses bodies over 128 MB. */
 export const MAX_EXPORT_CHUNK_BYTES = 64 * 1024 * 1024;
 /** Where an export's files wait until both are written. */
-const STAGING_FOLDER = ".staging";
+export const EXPORT_STAGING_FOLDER = ".staging";
 /** Each export's record, next to its files. */
 const RECORD_FILE = "export.json";
 const LEGACY_HISTORY_FILE = "exports.json";
@@ -109,7 +109,7 @@ export function createExportStore({
 	now?: () => Date;
 }) {
 	const folder = join(root, EXPORTS_FOLDER);
-	const staging = join(folder, STAGING_FOLDER);
+	const staging = join(folder, EXPORT_STAGING_FOLDER);
 	const pending = new Map<string, PendingExport>();
 	// Staging cleanup, reservation and publishing share the same queue.
 	let stagingQueue: Promise<unknown> = Promise.resolve();
@@ -153,7 +153,7 @@ export function createExportStore({
 		}
 		const published = await Promise.all(
 			entries
-				.filter((entry) => entry.isDirectory() && entry.name !== STAGING_FOLDER)
+				.filter((entry) => entry.isDirectory() && entry.name !== EXPORT_STAGING_FOLDER)
 				.map(async ({ name }): Promise<PublishedExport | null> => {
 					let text: string;
 					try {
@@ -264,9 +264,6 @@ export function createExportStore({
 			return withStaging(async () => {
 				const earlier = await committed(parsed.data.deliveryId);
 				if (earlier) return { committed: earlier };
-				// Staged files nothing waits for any more are temporary renders.
-				if (pending.size === 0)
-					await rm(staging, { recursive: true, force: true });
 				const exportId = randomUUID();
 				const dir = join(staging, exportId);
 				await mkdir(dir, { recursive: true });
@@ -295,20 +292,24 @@ export function createExportStore({
 			offset: number;
 			body: ReadableStream<Uint8Array> | null;
 		}) {
-			const [, entry] = pendingExport({ exportId });
-			if (kind === "srt" && entry.source.includeSrt === false)
-				throw invalidParams("This export does not include an SRT.");
-			const written = entry.written.get(kind) ?? 0;
-			if (offset !== 0 && offset !== written)
-				throw invalidParams(
-					`The ${kind.toUpperCase()} continues at byte ${written}, not ${offset}.`,
-				);
+			pendingExport({ exportId });
 			const data = new Uint8Array(await new Response(body).arrayBuffer());
-			const file = join(entry.dir, kind);
-			if (offset === 0) await writeFile(file, data);
-			else await appendFile(file, data);
-			entry.written.set(kind, offset + data.length);
-			return { bytes: offset + data.length };
+			return withStaging(async () => {
+				// The reservation can be aborted while this chunk is arriving.
+				const [, entry] = pendingExport({ exportId });
+				if (kind === "srt" && entry.source.includeSrt === false)
+					throw invalidParams("This export does not include an SRT.");
+				const written = entry.written.get(kind) ?? 0;
+				if (offset !== 0 && offset !== written)
+					throw invalidParams(
+						`The ${kind.toUpperCase()} continues at byte ${written}, not ${offset}.`,
+					);
+				const file = join(entry.dir, kind);
+				if (offset === 0) await writeFile(file, data);
+				else await appendFile(file, data);
+				entry.written.set(kind, offset + data.length);
+				return { bytes: offset + data.length };
+			});
 		},
 
 		async publish(params: unknown): Promise<ExportRecord> {
@@ -332,11 +333,20 @@ export function createExportStore({
 		async abort(params: unknown) {
 			const parsed = exportIdRequestSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			const entry = pending.get(parsed.data.exportId);
-			if (!entry || entry.publishing) return { aborted: false };
-			pending.delete(parsed.data.exportId);
-			await rm(entry.dir, { recursive: true, force: true });
-			return { aborted: true };
+			return withStaging(async () => {
+				const entry = pending.get(parsed.data.exportId);
+				if (!entry || entry.publishing) return { aborted: false };
+				pending.delete(parsed.data.exportId);
+				await rm(entry.dir, { recursive: true, force: true });
+				return { aborted: true };
+			});
+		},
+
+		/** Inventory and removal see the same reservations as begin and publish. */
+		withStagingInventory<T>(
+			operation: (isPending: (id: string) => boolean) => Promise<T>,
+		): Promise<T> {
+			return withStaging(() => operation((id) => pending.has(id)));
 		},
 
 		/** Published exports, newest first, with whether their files are still present. */
