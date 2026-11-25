@@ -70,7 +70,7 @@ export function ReopenSummary() {
 		if (
 			!ready ||
 			!projectId ||
-			!review ||
+			!sequenceId ||
 			(exports === null && !error) ||
 			shown.current
 		)

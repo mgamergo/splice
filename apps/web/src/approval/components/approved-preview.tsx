@@ -61,7 +61,7 @@ function Playback({
 	passage?: { start: number; end: number };
 }) {
 	const editor = useEditor();
-	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const canvasMountRef = useRef<HTMLDivElement>(null);
 	const playbackRef = useRef<PlaybackManager | null>(null);
 	const [playing, setPlaying] = useState(false);
 	const [caption, setCaption] = useState("");
@@ -70,8 +70,8 @@ function Playback({
 	const { width, height } = canvasSize;
 
 	useEffect(() => {
-		const canvas = canvasRef.current;
-		if (!canvas) return;
+		const mount = canvasMountRef.current;
+		if (!mount) return;
 		const { tracks } = checkpoint;
 		const duration = calculateTotalDuration({ tracks });
 		if (duration <= 0) return;
@@ -83,6 +83,24 @@ function Playback({
 			sequences,
 			project: editor.project,
 		});
+		const controller = new AbortController();
+		const videoCache = new VideoCache({ signal: controller.signal });
+		const renderer = new CanvasRenderer({ width, height, fps, videoCache });
+		const tree = buildScene({
+			tracks,
+			projectItems,
+			duration,
+			canvasSize: { width, height },
+			background: checkpoint.background,
+			isPreview: true,
+		});
+		let canvas: HTMLCanvasElement;
+		try {
+			canvas = renderer.getOutputCanvas();
+		} catch (failure) {
+			setError(failure instanceof Error ? failure.message : String(failure));
+			return;
+		}
 		const audio = new AudioManager({
 			playback,
 			timeline,
@@ -95,17 +113,8 @@ function Playback({
 		const unsubscribe = playback.subscribe(() =>
 			setPlaying(playback.getIsPlaying()),
 		);
-		const controller = new AbortController();
-		const videoCache = new VideoCache({ signal: controller.signal });
-		const renderer = new CanvasRenderer({ width, height, fps, videoCache });
-		const tree = buildScene({
-			tracks,
-			projectItems,
-			duration,
-			canvasSize: { width, height },
-			background: checkpoint.background,
-			isPreview: true,
-		});
+		const previewMount = canvas.parentElement;
+		mount.appendChild(canvas);
 		playbackRef.current = playback;
 		if (passage)
 			playCue({ editor: { playback }, cue: passageWithContext(passage) });
@@ -127,11 +136,7 @@ function Playback({
 					)?.text ?? "",
 				);
 				try {
-					await renderer.renderToCanvas({
-						node: tree,
-						time,
-						targetCanvas: canvas,
-					});
+					await renderer.render({ node: tree, time });
 				} catch (failure) {
 					if (!disposed) {
 						playback.pause();
@@ -153,17 +158,19 @@ function Playback({
 			audio.dispose();
 			controller.abort();
 			videoCache.clearAll();
+			if (canvas.parentElement === mount) {
+				canvas.remove();
+				if (previewMount?.isConnected) previewMount.appendChild(canvas);
+			}
 			playbackRef.current = null;
 		};
 	}, [editor, checkpoint, passage, fps, width, height]);
 
 	return (
 		<div className="flex flex-col gap-2">
-			<canvas
-				ref={canvasRef}
-				width={width}
-				height={height}
-				className="max-h-[60vh] w-full object-contain bg-black"
+			<div
+				ref={canvasMountRef}
+				className="flex justify-center bg-black [&>canvas]:max-h-[60vh] [&>canvas]:w-full [&>canvas]:object-contain"
 			/>
 			{caption && <p className="text-center text-sm">{caption}</p>}
 			{error && (
