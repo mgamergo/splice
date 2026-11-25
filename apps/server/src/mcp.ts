@@ -1,4 +1,4 @@
-import { relinkItemInput } from "@splice/bridge/items";
+import { relinkItemInput, relinkItemSchema } from "@splice/bridge/items";
 import { briefSetRequestSchema } from "@splice/bridge/brief";
 import {
 	storageCleanupSchema,
@@ -173,6 +173,7 @@ const itemsSchema = z.array(
 		id: z.string(),
 		type: z.string(),
 		path: z.string().nullable(),
+		recordingVersion: z.string().nullable().optional(),
 		missing: z.boolean(),
 	}),
 );
@@ -199,26 +200,29 @@ async function captionSources({ rpc }: { rpc: RpcCall }): Promise<{
 }> {
 	const items = itemsSchema
 		.parse(await rpc({ method: "editor.listItems" }))
-		.flatMap(({ id, type, path, missing }) =>
+		.flatMap(({ id, type, path, missing, recordingVersion }) =>
 			path && !missing && (type === "video" || type === "audio")
-				? [{ id, path }]
+				? [{ id, path, expectedVersion: recordingVersion ?? null }]
 				: [],
 		);
 	if (!items.length)
 		throw new Error(
 			"No available recordings in this project reference Footage. Import them with items_import first.",
 		);
-	const paths = [...new Set(items.map(({ path }) => path))];
+	const recordings = items.map(({ path, expectedVersion }) => ({
+		path,
+		expectedVersion,
+	}));
 	const wordsByPath = new Map<
 		string,
 		Array<{ start: number; end: number; text: string }>
 	>();
 	// transcript.words takes at most 200 paths per call.
-	for (let offset = 0; offset < paths.length; offset += 200) {
+	for (let offset = 0; offset < recordings.length; offset += 200) {
 		const { transcripts } = transcriptWordsSchema.parse(
 			await rpc({
 				method: "transcript.words",
-				params: { paths: paths.slice(offset, offset + 200) },
+				params: { recordings: recordings.slice(offset, offset + 200) },
 			}),
 		);
 		for (const { path, words } of transcripts) wordsByPath.set(path, words);
@@ -343,7 +347,10 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 	const server = new McpServer({ name: SERVER_NAME, version: "0.1.0" });
 	const measure: MeasureLoudness = async (params) => {
 		try {
-			const result = await rpc({ method: "loudness.measure", params });
+			const result = await rpc({
+				method: "loudness.measure",
+				params: { ...params, expectedVersion: params.expectedVersion ?? null },
+			});
 			return loudnessMeasurementSchema.parse(result);
 		} catch (error) {
 			// The file left Footage after the editor last checked it.
@@ -357,23 +364,32 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 	};
 	/** Renders ahead, so playback starts at once and FFmpeg errors surface here. */
 	const renderNoiseReduction = async (audioSources: AudioSource[]) => {
-		const paths = new Set(
-			audioSources.flatMap(({ path, missing, noiseReduction }) =>
-				noiseReduction && path !== null && !missing ? [path] : [],
-			),
-		);
+		const sources = new Map<
+			string,
+			{ path: string; expectedVersion: string | null }
+		>();
+		for (const {
+			path,
+			missing,
+			noiseReduction,
+			recordingVersion,
+		} of audioSources) {
+			if (!noiseReduction || path === null || missing) continue;
+			sources.set(JSON.stringify([path, recordingVersion]), {
+				path,
+				expectedVersion: recordingVersion ?? null,
+			});
+		}
 		const recordings: unknown[] = [];
 		// Files that left Footage after the editor last checked them.
 		const vanished = new Set<string>();
 		// One at a time: each render already decodes a whole file.
-		for (const path of paths) {
+		for (const params of sources.values()) {
 			try {
-				recordings.push(
-					await rpc({ method: "noiseReduction.render", params: { path } }),
-				);
+				recordings.push(await rpc({ method: "noiseReduction.render", params }));
 			} catch (error) {
 				if (!isMissingFootageError(error)) throw error;
-				vanished.add(path);
+				vanished.add(params.path);
 			}
 		}
 		const skipped = [...vanished].map((path) => ({
@@ -485,13 +501,17 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Relink a recording",
 			description:
-				"Verify a Footage file against a project item's original content and relink it. Confirm with the creator before passing replace for changed or unverifiable content. Pass expectedVersion from the verification result to confirm the same file.",
+				"Verify a Footage file against a project item's original content and relink it. Confirm with the creator before passing replace for changed or unverifiable content. Replacement requires expectedVersion from the preview and clears the project’s undo history.",
 			inputSchema: relinkItemInput,
 		},
 		(args) =>
-			guard(async () =>
-				text(await rpc({ method: "editor.relinkItem", params: args })),
-			),
+			guard(async () => {
+				const parsed = relinkItemSchema.safeParse(args);
+				if (!parsed.success) throw invalidParams(parsed.error.message);
+				return text(
+					await rpc({ method: "editor.relinkItem", params: parsed.data }),
+				);
+			}),
 	);
 
 	server.registerTool(

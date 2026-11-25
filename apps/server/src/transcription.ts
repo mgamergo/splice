@@ -44,7 +44,21 @@ export const transcriptWordsInput = {
 };
 
 const startSchema = z.object(transcribeInput);
-const wordsSchema = z.object(transcriptWordsInput);
+export const expectedRecordingVersion = z.string().min(1).nullable().optional();
+const wordsSchema = z.union([
+	z.strictObject(transcriptWordsInput),
+	z.strictObject({
+		recordings: z
+			.array(
+				z.strictObject({
+					path: footagePath,
+					expectedVersion: z.string().min(1).nullable(),
+				}),
+			)
+			.min(1)
+			.max(200),
+	}),
+]);
 const statusSchema = z.object(transcribeStatusInput);
 type PageInput = z.infer<z.ZodObject<typeof transcriptPageInput>>;
 
@@ -111,14 +125,17 @@ export function invalidParams(message: string): BridgeError {
 /** Error data for a recording that isn't in Footage, so callers can skip it. */
 export const MISSING_FOOTAGE = { missingFootage: true } as const;
 
-/** A video or audio file under Footage, with what identifies its contents. */
-export async function resolveRecording({
+export type RecordingRequest = {
+	path: string;
+	expectedVersion?: string | null;
+};
+
+/** Check a project binding using filesystem metadata before touching analysis. */
+export async function locateRecording({
 	root,
 	path,
-}: {
-	root: string;
-	path: string;
-}) {
+	expectedVersion,
+}: RecordingRequest & { root: string }) {
 	const type = mediaTypeForPath(path);
 	const isRecording = type?.startsWith("audio/") || type?.startsWith("video/");
 	const source = await resolveFootagePath({ root, path });
@@ -131,8 +148,25 @@ export async function resolveRecording({
 	}
 	const info = await stat(source);
 	const version = versionForStats(info);
-	const content = await footageContentHash({ absolutePath: source, version });
-	return { source, info, content, version };
+	if (expectedVersion !== undefined && expectedVersion !== version)
+		throw invalidParams(
+			`The recording changed on disk or has not been verified: ${path}. Verify or relink it in the project first.`,
+		);
+	return { source, info, version };
+}
+
+/** The full digest keys analysis shared across locations and file versions. */
+export async function resolveRecording({
+	signal,
+	...request
+}: RecordingRequest & { root: string; signal?: AbortSignal }) {
+	const located = await locateRecording(request);
+	const content = await footageContentHash({
+		absolutePath: located.source,
+		version: located.version,
+		signal,
+	});
+	return { ...located, content };
 }
 
 async function waitFor({
@@ -173,10 +207,16 @@ export function createTranscriptionJobs({
 	const jobs = new Map<string, Job>();
 	const active = new Map<string, Job>();
 
-	async function identifySource({ path }: { path: string }) {
+	async function identifySource({
+		path,
+		expectedVersion,
+		signal: caller,
+	}: RecordingRequest & { signal?: AbortSignal }) {
 		const { source, info, content, version } = await resolveRecording({
 			root,
 			path,
+			expectedVersion,
+			signal: caller ? AbortSignal.any([signal, caller]) : signal,
 		});
 		const model = await identifyModel({ root });
 		const inputs = { path, info, model: model.fingerprint };
@@ -316,12 +356,24 @@ export function createTranscriptionJobs({
 		};
 	}
 
+	/** The cached transcript for a Footage path, or null if it hasn't been transcribed. */
+	async function cached({
+		path,
+		expectedVersion,
+		signal,
+	}: RecordingRequest & {
+		signal?: AbortSignal;
+	}): Promise<Transcript | null> {
+		const cached = await readCurrentCache(
+			await identifySource({ path, expectedVersion, signal }),
+		);
+		if (expectedVersion !== undefined)
+			await locateRecording({ root, path, expectedVersion });
+		return cached && { ...cached, path };
+	}
+
 	return {
-		/** The cached transcript for a Footage path, or null if it hasn't been transcribed. */
-		async cached({ path }: { path: string }): Promise<Transcript | null> {
-			const cached = await readCurrentCache(await identifySource({ path }));
-			return cached && { ...cached, path };
-		},
+		cached,
 
 		async start(params: unknown) {
 			const parsed = startSchema.safeParse(params);
@@ -410,7 +462,7 @@ export function createTranscriptionJobs({
 		},
 
 		/** Word timings from cached transcripts. Never starts a job; uncached paths are listed as missing. */
-		async words(params: unknown) {
+		async words({ params, signal }: { params: unknown; signal?: AbortSignal }) {
 			const parsed = wordsSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
 			const transcripts: Array<{
@@ -418,11 +470,17 @@ export function createTranscriptionJobs({
 				words: Array<{ start: number; end: number; text: string }>;
 			}> = [];
 			const missing: string[] = [];
-			for (const path of new Set(parsed.data.paths)) {
-				// An unreadable or non-media path just has no words.
-				const transcript = await identifySource({ path })
-					.then(readCurrentCache)
-					.catch(() => null);
+			const scoped = "recordings" in parsed.data;
+			const recordings: RecordingRequest[] =
+				"recordings" in parsed.data
+					? parsed.data.recordings
+					: Array.from(new Set(parsed.data.paths), (path) => ({ path }));
+			for (const { path, expectedVersion } of recordings) {
+				const read = () => cached({ path, expectedVersion, signal });
+				// Project reads must fail before any results can be attached.
+				const transcript = scoped
+					? await read()
+					: await read().catch(() => null);
 				if (!transcript) {
 					missing.push(path);
 					continue;

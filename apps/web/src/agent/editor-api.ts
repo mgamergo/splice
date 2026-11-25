@@ -370,8 +370,13 @@ export class EditorApi {
 			items: projectItems
 				.filter(({ id }) => heard.has(id))
 				.map((item) => {
-					const { id, name, path } = summarizeItem(item);
-					return { id, name, path };
+					const { id, name, path, recordingVersion } = summarizeItem(item);
+					return {
+						id,
+						name,
+						path,
+						...(recordingVersion !== undefined && { recordingVersion }),
+					};
 				}),
 		};
 	}

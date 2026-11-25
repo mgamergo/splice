@@ -276,7 +276,7 @@ export class MediaManager {
 					(isDiskMedia(next.file) && next.file.version !== item.file.version);
 				if (
 					(verification === "match" || verification === "backfilled") &&
-					(changed || !item.file.contentHash)
+					(changed || verification === "backfilled")
 				) {
 					await storageService.saveProjectItem({
 						projectId,
@@ -297,10 +297,18 @@ export class MediaManager {
 	async relinkRecording({
 		request,
 		beforeCommit,
+		signal,
+		onProgress,
 	}: {
 		request: RelinkItemRequest;
 		beforeCommit?: () => void;
+		signal?: AbortSignal;
+		onProgress?: (progress: number) => void;
 	}): Promise<RelinkItemResult> {
+		if (request.replace && !request.expectedVersion)
+			throw new Error(
+				"Pass expectedVersion from the relink preview when replacing a recording.",
+			);
 		const projectId = this.editor.project.getActive().metadata.id;
 		const generation = this.generation;
 		const item = this.projectItems.find(
@@ -314,7 +322,12 @@ export class MediaManager {
 			throw new Error("This recording is being checked. Try again.");
 		this.checking.add(key);
 		try {
-			const candidate = await probeRecording({ original, path: request.path });
+			const candidate = await probeRecording({
+				original,
+				path: request.path,
+				signal,
+				onProgress,
+			});
 			if (!candidate?.contentHash || !candidate.version)
 				throw new Error("The recording is unavailable in Footage.");
 			if (mediaTypeOf({ mime: candidate.type }) !== item.type)
@@ -347,36 +360,46 @@ export class MediaManager {
 					originalLocation: undefined,
 				};
 			}
-			const current = await probeDiskMedia({
-				path: request.path,
-				includeContentHash: false,
-			});
-			if (current?.version !== candidate.version)
-				throw new Error(
-					"The recording changed during relink. Verify it again.",
-				);
-			const checkCurrent = () => {
+			const checkCurrent = async () => {
+				const current = await probeDiskMedia({
+					path: request.path,
+					signal,
+					includeContentHash: false,
+				});
+				signal?.throwIfAborted();
 				beforeCommit?.();
 				if (!this.isCurrent({ item, generation }))
 					throw new Error("The project changed. Relink the recording again.");
+				if (current?.version !== candidate.version)
+					throw new Error("The recording changed during relink. Verify it again.");
 			};
-			checkCurrent();
+			const publish = () => {
+				if (this.isCurrent({ item, generation }))
+					this.publishRecording({ item, next });
+			};
 			if (replacement) {
-				await this.editor.project.discardRecordingAnalysis({
+				// Checkpoints and replacements share the project write queue.
+				// A checkpoint must only wait for saves outside that queue.
+				await this.editor.project.replaceRecording({
 					projectId,
-					projectItemId: item.id,
+					replacement: next,
+					checkCurrent,
+					publish,
 				});
-				checkCurrent();
+			} else {
+				await checkCurrent();
+				const save = storageService.saveProjectItem({
+					projectId,
+					projectItem: next,
+				});
+				this.pendingSaves.set(item.id, save);
+				try {
+					await save;
+					publish();
+				} finally {
+					this.pendingSaves.delete(item.id);
+				}
 			}
-			const save = storageService.saveProjectItem({ projectId, projectItem: next });
-			this.pendingSaves.set(item.id, save);
-			try {
-				await save;
-			} finally {
-				this.pendingSaves.delete(item.id);
-			}
-			if (this.isCurrent({ item, generation }))
-				this.publishRecording({ item, next });
 			return { kind: "relinked", verification, item: summarizeItem(next) };
 		} finally {
 			this.checking.delete(key);

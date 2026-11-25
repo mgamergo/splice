@@ -92,6 +92,10 @@ async function resolveTightening({
 				`“${item.name}” isn't a file under Footage, so Splice can't find its pauses or filler words. Pass pauses explicitly (or []) and set removeFillerWords to false.`,
 			);
 		const path = item.path;
+		const recording = {
+			path,
+			expectedVersion: item.recordingVersion ?? null,
+		};
 		const range = ({ start, end }: { start: number; end: number }) => ({
 			projectItemId: item.id,
 			sourceIn: start,
@@ -99,11 +103,11 @@ async function resolveTightening({
 		});
 		if (pauses === "auto")
 			detected.push(
-				...(await pauseRanges({ path, ...pauseDetection })).map(range),
+				...(await pauseRanges({ ...recording, ...pauseDetection })).map(range),
 			);
 		if (removeFillerWords) {
 			const cuts = await fillerCuts({
-				path,
+				...recording,
 				noiseDb: pauseDetection?.noiseDb,
 				paddingSeconds: pausePaddingSeconds,
 			});

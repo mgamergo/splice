@@ -30,6 +30,7 @@ import type { Server, ServerWebSocket } from "bun";
 import {
 	FOOTAGE_FOLDER,
 	footageContentHash,
+	streamFootageIdentity,
 	footageVersion,
 	listFootage,
 	mediaTypeForPath,
@@ -208,7 +209,7 @@ export function startServer({
 	/** What the editor tab may ask of `splice` itself. */
 	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
 		"footage.list": () => listFootage({ root }),
-		"transcript.words": (params) => transcription.words(params),
+		"transcript.words": (params) => transcription.words({ params }),
 		"profile.capture": async (params) => {
 			const result = await profile.capture(params);
 			profileAgent.workAvailable();
@@ -251,7 +252,10 @@ export function startServer({
 	>([
 		["transcribe.start", ({ params }) => transcription.start(params)],
 		["transcribe.status", ({ params }) => transcription.status(params)],
-		["transcript.words", ({ params }) => transcription.words(params)],
+		[
+			"transcript.words",
+			({ params, signal }) => transcription.words({ params, signal }),
+		],
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
 		["noiseReduction.render", (request) => noiseReduction.render(request)],
@@ -602,21 +606,31 @@ export function startServer({
 		}
 		const denoised = wantsDenoisedAudio(url);
 		const expected = url.searchParams.get(MEDIA_VERSION_PARAM);
+		const hashMode = request.headers.get(MEDIA_CONTENT_HEADER);
+		const progress =
+			request.method === "GET" && hashMode === "progress" && !denoised;
 		const probe = request.method === "HEAD" && !denoised;
 		const changed = () =>
 			new Response("The recording changed on disk.", { status: 412 });
 		let version: string | undefined;
 		let contentHash: string | undefined;
-		if (expected !== null || probe) {
+		if (expected !== null || probe || progress) {
 			try {
 				version = await footageVersion({ absolutePath });
 				if (expected !== null && expected !== version) return changed();
-				const hashMode = request.headers.get(MEDIA_CONTENT_HEADER);
-				if (probe && (hashMode === "sample" || hashMode === "1"))
+				if (progress) {
+					return streamFootageIdentity({
+						request,
+						absolutePath,
+						contentType,
+						version,
+					});
+				}
+				if (probe && hashMode === "1")
 					contentHash = await footageContentHash({
 						absolutePath,
 						version,
-						full: hashMode === "1",
+						signal: request.signal,
 					});
 				// The path can be replaced while a content hash is computed.
 				if ((await footageVersion({ absolutePath })) !== version)
@@ -635,6 +649,7 @@ export function startServer({
 		try {
 			const { file } = await noiseReduction.ensure({
 				path,
+				expectedVersion: expected ?? undefined,
 				signal: request.signal,
 			});
 			if (version && (await footageVersion({ absolutePath })) !== version) {
@@ -831,7 +846,7 @@ export function startServer({
 				// The first request for denoised audio renders it, which takes a while.
 				if (
 					wantsDenoisedAudio(url) ||
-					request.headers.get(MEDIA_CONTENT_HEADER) === "1"
+					request.headers.has(MEDIA_CONTENT_HEADER)
 				)
 					srv.timeout(request, 0);
 				return handleMedia({ request, url, port: actualPort });

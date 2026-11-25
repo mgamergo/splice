@@ -11,10 +11,20 @@ export function compareRecording({
 	candidate: DiskMedia;
 }): Exclude<ItemVerification, "missing"> {
 	if (!candidate.contentHash) return "unverified";
+	if (original.contentHash?.startsWith("sample-v1:")) {
+		// A sampled baseline can only be upgraded while the verified file version
+		// is still at the recorded path.
+		return original.path === candidate.path &&
+			original.version &&
+			original.version === candidate.version
+			? "backfilled"
+			: "unverified";
+	}
 	if (original.contentHash)
 		return original.contentHash === candidate.contentHash ? "match" : "changed";
 	if (original.path !== candidate.path) return "unverified";
-	return original.size === candidate.size &&
+	return (!original.version || original.version === candidate.version) &&
+		original.size === candidate.size &&
 		original.lastModified === candidate.lastModified
 		? "backfilled"
 		: "changed";
@@ -23,22 +33,30 @@ export function compareRecording({
 export async function probeRecording({
 	original,
 	path = original.path,
+	signal,
+	onProgress,
 }: {
 	original: DiskMedia;
 	path?: string;
+	signal?: AbortSignal;
+	onProgress?: (progress: number) => void;
 }): Promise<DiskMedia | null> {
-	if (path === original.path && original.version && original.contentHash) {
-		const current = await probeDiskMedia({ path, includeContentHash: false });
+	if (
+		path === original.path &&
+		original.version &&
+		original.contentHash &&
+		!original.contentHash.startsWith("sample-v1:")
+	) {
+		const current = await probeDiskMedia({
+			path,
+			signal,
+			includeContentHash: false,
+		});
 		if (!current) return null;
 		if (current.version === original.version)
 			return { ...current, contentHash: original.contentHash };
 	}
-	return probeDiskMedia({
-		path,
-		fullHash: Boolean(
-			original.contentHash && !original.contentHash.startsWith("sample-v1:"),
-		),
-	});
+	return probeDiskMedia({ path, signal, onProgress });
 }
 
 export function pinDiskMedia(file: DiskMedia): DiskMedia {

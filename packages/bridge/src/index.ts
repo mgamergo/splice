@@ -191,6 +191,8 @@ export interface ItemSummary {
 	duration: number | null;
 	/** Set for items that reference a file under Footage. */
 	path: string | null;
+	/** The verified on-disk version, or null when verification is unavailable. */
+	recordingVersion?: string | null;
 	/** The file is no longer in Footage. */
 	missing: boolean;
 	recordingChange?: "changed" | "unverified";

@@ -21,6 +21,9 @@ export function summarizeItem(item: ProjectItem): ItemSummary {
 		type: item.type,
 		duration: item.duration ?? null,
 		path: isDiskMedia(item.file) ? item.file.path : null,
+		...(isDiskMedia(item.file) && {
+			recordingVersion: item.file.version ?? null,
+		}),
 		missing: item.missing ?? false,
 		...(item.recordingChange && { recordingChange: item.recordingChange.kind }),
 	};

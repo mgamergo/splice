@@ -23,13 +23,17 @@ test("turns off Bun's fetch idle timeout, so a long pause scan can finish", asyn
 test("gives scans, imports, rough cuts and renders half an hour and other calls two minutes", () => {
 	for (const method of [
 		"editor.importItems",
+		"editor.relinkItem",
+		"transcribe.start",
+		"transcribe.status",
+		"transcript.words",
 		"editor.roughCut",
 		"pauses.detect",
 		"loudness.measure",
 		"noiseReduction.render",
 	])
 		expect(rpcDeadlineMs(method)).toBe(30 * 60_000);
-	for (const method of ["editor.getState", "transcribe.start", "footage.list"])
+	for (const method of ["editor.getState", "footage.list"])
 		expect(rpcDeadlineMs(method)).toBe(2 * 60_000);
 });
 

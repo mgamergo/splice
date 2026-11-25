@@ -260,11 +260,21 @@ export class ProjectManager {
 		};
 	}
 
-	private async saveProjectSnapshot({ project }: { project: TProject }) {
+	private async saveProjectSnapshot({
+		project,
+		replacement,
+	}: {
+		project: TProject;
+		replacement?: ProjectItem;
+	}) {
 		const events = this.editor.command.getUnsavedCorrections({
 			projectId: project.metadata.id,
 		});
-		await storageService.saveProject({ project, correctionEvents: events });
+		await storageService.saveProject({
+			project,
+			correctionEvents: events,
+			replacement,
+		});
 		this.editor.command.markCorrectionsSaved({ events });
 	}
 
@@ -293,17 +303,22 @@ export class ProjectManager {
 		}
 	}
 
-	/** Persist invalidation while the candidate is still unavailable to the editor. */
-	async discardRecordingAnalysis({
+	/** Commit the new recording and its analysis invalidation together. */
+	async replaceRecording({
 		projectId,
-		projectItemId,
+		replacement,
+		checkCurrent,
+		publish,
 	}: {
 		projectId: string;
-		projectItemId: string;
+		replacement: ProjectItem;
+		checkCurrent: () => Promise<void>;
+		publish: () => void;
 	}): Promise<void> {
 		const generation = this.editor.media.getGeneration();
 		await this.queueProjectWrite({
 			write: async () => {
+				await checkCurrent();
 				const project = this.getActive();
 				if (
 					project.metadata.id !== projectId ||
@@ -314,13 +329,13 @@ export class ProjectManager {
 					invalidateRecordingAnalysis({
 						project: this.getActive(),
 						sequences: this.editor.sequences.getSequences(),
-						projectItemId,
+						projectItemId: replacement.id,
 					});
 				const snapshot = {
 					...this.projectForStorage({ project }),
 					...invalidated(),
 				};
-				await this.saveProjectSnapshot({ project: snapshot });
+				await this.saveProjectSnapshot({ project: snapshot, replacement });
 				if (
 					this.active?.metadata.id !== projectId ||
 					this.editor.media.getGeneration() !== generation
@@ -331,7 +346,7 @@ export class ProjectManager {
 				this.editor.sequences.setSequences({ sequences: updated.sequences });
 				// Older undo snapshots can still contain the discarded words.
 				this.editor.command.clearUndoHistory();
-				this.editor.command.bumpRevision();
+				publish();
 				this.editor.save.markDirty();
 			},
 		});

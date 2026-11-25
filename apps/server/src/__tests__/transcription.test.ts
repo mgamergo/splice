@@ -1,3 +1,4 @@
+import { footageVersion } from "../footage";
 import { expect, test } from "bun:test";
 import { RPC_ERRORS } from "@splice/bridge";
 import {
@@ -380,7 +381,7 @@ test("transcript words come from the cache and skip paths without one instead of
 		await writeFile(join(root, "Footage", "untranscribed.mp4"), "video");
 		await jobs.start({ path: source, waitSeconds: 5 });
 		const result = await jobs.words({
-			paths: [source, "logo.png", "untranscribed.mp4", "gone.mp4"],
+			params: { paths: [source, "logo.png", "untranscribed.mp4", "gone.mp4"] },
 		});
 		expect(result.missing).toEqual([
 			"logo.png",
@@ -393,10 +394,59 @@ test("transcript words come from the cache and skip paths without one instead of
 			expect.objectContaining({ text: expect.stringContaining("blue") }),
 		);
 		await expect(
-			jobs.words({ paths: ["../escape.mp4"] }),
+			jobs.words({ params: { paths: ["../escape.mp4"] } }),
 		).rejects.toMatchObject({
 			code: RPC_ERRORS.INVALID_PARAMS,
 		});
+	} finally {
+		await jobs.stop();
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("project transcript reads reject freshly transcribed bytes at an overwritten path", async () => {
+	const root = await mkdtemp(join(tmpdir(), "splice-bound-transcript-"));
+	let spoken = "Original";
+	const jobs = createTranscriptionJobs({
+		root,
+		extract: async () => 9.7,
+		createTools: () => ({
+			async transcribe() {
+				return {
+					value: JSON.parse(
+						JSON.stringify(whisperOutput).replaceAll("blue", spoken),
+					),
+					backend: "cpu",
+				};
+			},
+		}),
+	});
+	try {
+		const file = join(root, "Footage", source);
+		await mkdir(join(root, "Footage", "Day 1"), { recursive: true });
+		await writeFile(file, "original");
+		const expectedVersion = await footageVersion({ absolutePath: file });
+		const request = { recordings: [{ path: source, expectedVersion }] };
+		await jobs.start({ path: source, waitSeconds: 5 });
+		const original = await jobs.words({ params: request });
+		expect(JSON.stringify(original)).toContain("Original");
+		spoken = "Replacement";
+		await writeFile(file, "replaced");
+		await jobs.start({ path: source, waitSeconds: 5 });
+		expect(JSON.stringify(await jobs.words({ params: { paths: [source] } }))).toContain(
+			"Replacement",
+		);
+		await expect(jobs.words({ params: request })).rejects.toThrow(
+			"recording changed on disk",
+		);
+
+		await writeFile(file, "original");
+		const restoredVersion = await footageVersion({ absolutePath: file });
+		expect(
+			await jobs.words({
+				params: { recordings: [{ path: source, expectedVersion: restoredVersion }] },
+			}),
+		).toEqual(original);
 	} finally {
 		await jobs.stop();
 		await rm(root, { force: true, recursive: true });

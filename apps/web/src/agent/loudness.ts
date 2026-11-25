@@ -128,6 +128,10 @@ export function collectAudioSources({
 			source = {
 				projectItemId: clip.mediaId,
 				path,
+				...(item &&
+					isDiskMedia(item.file) && {
+						recordingVersion: item.file.version ?? null,
+					}),
 				noiseReduction,
 				missing: item?.missing === true,
 				clipIds: [],

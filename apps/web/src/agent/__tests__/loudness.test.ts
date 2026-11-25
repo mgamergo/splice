@@ -46,6 +46,7 @@ function diskItem(id: string): ProjectItem {
 			type: "video/quicktime",
 			size: 1,
 			lastModified: 0,
+			version: id,
 		},
 	};
 }
@@ -127,6 +128,7 @@ test("collects each recording's audible source ranges, one per clip in playing o
 		{
 			projectItemId: first,
 			path: `Day 1/${first}.mov`,
+			recordingVersion: first,
 			noiseReduction: false,
 			missing: false,
 			clipIds: ["a", "b", "c", "e"],
@@ -149,6 +151,7 @@ test("collects each recording's audible source ranges, one per clip in playing o
 		{
 			projectItemId: "gone",
 			path: "Day 1/gone.mov",
+			recordingVersion: "gone",
 			noiseReduction: false,
 			missing: true,
 			clipIds: ["f"],
@@ -173,6 +176,7 @@ test("a planned rough cut reports what it keeps without changing anything", () =
 			{
 				projectItemId: first,
 				path: `Day 1/${first}.mov`,
+				recordingVersion: first,
 				noiseReduction: false,
 				missing: false,
 				clipIds: [expect.any(String)],
@@ -181,6 +185,7 @@ test("a planned rough cut reports what it keeps without changing anything", () =
 			{
 				projectItemId: second,
 				path: `Day 1/${second}.mov`,
+				recordingVersion: second,
 				noiseReduction: false,
 				missing: false,
 				clipIds: [expect.any(String)],

@@ -1,3 +1,4 @@
+import { footageVersion } from "../footage";
 import { afterEach, expect, test } from "bun:test";
 import { BRIDGE_PATHS, denoisedAudioUrlForPath } from "@splice/bridge";
 import { storageReportSchema } from "@splice/bridge/storage";
@@ -16,6 +17,7 @@ import {
 import { renameSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promoteCacheFile } from "../cache-promotion";
 import { createCacheUse } from "../cache-use";
 import { createExportStore } from "../exports";
 import { createNoiseReducer } from "../noise-reduction";
@@ -121,6 +123,52 @@ test("classifies disk data, defaults to dry run, and applies age and category fi
 	expect(await readFile(join(root, "Cache", "session.json"), "utf8")).toBe(
 		"1234",
 	);
+});
+
+test("reports both names of promoted analysis and recognizes sampled audio intermediates", async () => {
+	const { root, storage, save, apply } = await setup();
+	const rebuilt = [
+		await save(`Cache/loudness/audio-sample-v1-${KEY}.mka`),
+		await save(`Cache/loudness/audio-${KEY}.mka`),
+	];
+	const entries = [
+		{
+			dir: "pauses",
+			extension: "json",
+			jobPrefix: ".scan-",
+			jobFile: "scan.json",
+		},
+		{
+			dir: "loudness",
+			extension: "json",
+			jobPrefix: ".job-",
+			jobFile: "loudness.json",
+		},
+		{
+			dir: "noise-reduction",
+			extension: "wav",
+			jobPrefix: ".job-",
+			jobFile: "denoised.wav",
+		},
+	];
+	for (const { dir, extension, jobPrefix, jobFile } of entries) {
+		const legacy = await save(`Cache/${dir}/${KEY}.${extension}`);
+		const target = join(root, "Cache", dir, `${"b".repeat(64)}.${extension}`);
+		await promoteCacheFile({ legacy, target, jobPrefix, jobFile });
+		expect(await readFile(target, "utf8")).toBe(await readFile(legacy, "utf8"));
+		expect((await lstat(legacy)).nlink).toBe(1);
+		expect((await lstat(target)).nlink).toBe(1);
+		rebuilt.push(legacy, target);
+	}
+	const kept = [
+		await save("Cache/loudness/audio-sample-v1-unknown.mka"),
+		await save(`Cache/transcripts/${KEY}.json`),
+	];
+	expect(await storage.report({})).toMatchObject({ reclaimableBytes: 32 });
+	expect(await apply()).toMatchObject({ freedBytes: 32, errors: [] });
+	for (const path of rebuilt)
+		await expect(readFile(path)).rejects.toHaveProperty("code", "ENOENT");
+	for (const path of kept) expect(await readFile(path, "utf8")).toBe("1234");
 });
 
 test("preserves links, their protected targets, and files shared with original recordings", async () => {
@@ -427,7 +475,12 @@ test.skipIf(!ffmpeg)(
 		const token = "test-token";
 		const server = startServer({ root, token, port: 0, upstream: null });
 		const rpc = createRpcClient({ origin: server.origin, token });
-		const params = { path: "take.wav" };
+		const params = {
+			path: "take.wav",
+			expectedVersion: await footageVersion({
+				absolutePath: join(root, "Footage", "take.wav"),
+			}),
+		};
 		try {
 			for (const method of [
 				"pauses.detect",
@@ -437,6 +490,17 @@ test.skipIf(!ffmpeg)(
 				expect(await rpc({ method, params })).toMatchObject({ cached: false });
 				expect(await rpc({ method, params })).toMatchObject({ cached: true });
 			}
+			for (const method of [
+				"pauses.detect",
+				"loudness.measure",
+				"noiseReduction.render",
+			])
+				await expect(
+					rpc({
+						method,
+						params: { ...params, expectedVersion: "old-version" },
+					}),
+				).rejects.toThrow("recording changed on disk");
 			const denoised = new URL(
 				denoisedAudioUrlForPath(params.path),
 				server.origin,

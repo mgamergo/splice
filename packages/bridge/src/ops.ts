@@ -500,6 +500,7 @@ export const audioSourceSchema = z.strictObject({
 	projectItemId: z.string(),
 	/** The Footage path, or null for items stored in the browser. */
 	path: z.string().nullable(),
+	recordingVersion: z.string().nullable().optional(),
 	/** Whether these clips play the noise-reduced render. */
 	noiseReduction: z.boolean(),
 	/** The file has left Footage, so playback skips it until it's relinked. */
@@ -606,6 +607,7 @@ export const roughCutSourcesSchema = z.discriminatedUnion("ok", [
 				name: z.string(),
 				/** Null for items that don't reference a file under Footage. */
 				path: z.string().nullable(),
+				recordingVersion: z.string().nullable().optional(),
 			}),
 		),
 	}),

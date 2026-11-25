@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { isFootagePath } from "@splice/bridge";
 import type { RelinkItemResult } from "@splice/bridge/items";
 import { toast } from "sonner";
@@ -31,16 +31,30 @@ export function RelinkDialog({
 	const pathId = useId();
 	const [path, setPath] = useState(file.path);
 	const [pending, setPending] = useState(false);
+	const [committing, setCommitting] = useState(false);
+	const [progress, setProgress] = useState<number>();
+	const abortRef = useRef<AbortController | null>(null);
+	useEffect(() => () => abortRef.current?.abort(), []);
+	const cancel = () => {
+		abortRef.current?.abort();
+		onClose();
+	};
 	const [error, setError] = useState("");
 	const [confirmation, setConfirmation] = useState<Extract<
 		RelinkItemResult,
 		{ kind: "confirmation-required" }
 	> | null>(null);
 	const submit = async () => {
+		const abort = new AbortController();
+		abortRef.current = abort;
 		setPending(true);
+		setProgress(undefined);
 		setError("");
 		try {
 			const result = await editor.media.relinkRecording({
+				signal: abort.signal,
+				onProgress: setProgress,
+				beforeCommit: () => setCommitting(true),
 				request: {
 					projectItemId: item.id,
 					path: path.trim(),
@@ -59,9 +73,12 @@ export function RelinkDialog({
 				onClose();
 			}
 		} catch (failure) {
+			if (abort.signal.aborted) return;
 			setError(failure instanceof Error ? failure.message : String(failure));
 			setConfirmation(null);
 		} finally {
+			abortRef.current = null;
+			setCommitting(false);
 			setPending(false);
 		}
 	};
@@ -70,7 +87,7 @@ export function RelinkDialog({
 		<Dialog
 			open
 			onOpenChange={(open) => {
-				if (!open && !pending) onClose();
+				if (!open && !committing) cancel();
 			}}
 		>
 			<DialogContent>
@@ -102,9 +119,16 @@ export function RelinkDialog({
 									? "This file differs from the original recording."
 									: "Splice could not verify this file against the original recording."}
 								{
-									" Your edits will stay in place. Review the affected passages after replacing the recording."
+									" Your edits will stay in place and the project’s undo history will be cleared. Review the affected passages after replacing the recording."
 								}
 							</p>
+						)}
+						{pending && progress !== undefined && (
+							<progress
+								aria-label="Checking recording contents"
+								max={100}
+								value={progress}
+							/>
 						)}
 						{error && <p role="alert">{error}</p>}
 					</DialogBody>
@@ -112,8 +136,8 @@ export function RelinkDialog({
 						<Button
 							type="button"
 							variant="outline"
-							onClick={onClose}
-							disabled={pending}
+							onClick={cancel}
+							disabled={committing}
 						>
 							Cancel
 						</Button>

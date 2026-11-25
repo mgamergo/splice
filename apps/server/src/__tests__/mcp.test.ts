@@ -1,3 +1,4 @@
+import { footageVersion } from "../footage";
 import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -70,6 +71,14 @@ describe("splice mcp tools", () => {
 				kind: "confirmation-required",
 				verification: "changed",
 			});
+			for (const expectedVersion of [undefined, ""]) {
+				const rejected = await client.callTool({
+					name: "items_relink",
+					arguments: { ...args, replace: true, expectedVersion },
+				});
+				expect(rejected.isError).toBe(true);
+				expect(textOf(rejected)).toContain("expectedVersion");
+			}
 			await client.callTool({
 				name: "items_relink",
 				arguments: { ...args, replace: true, expectedVersion: "new" },
@@ -473,11 +482,23 @@ describe("splice mcp tools", () => {
 			if (method === "editor.getState") return { project: { format } };
 			if (method === "editor.listItems")
 				return [
-					{ id: "rec", type: "video", path: "rec.mp4", missing: false },
+					{
+						id: "rec",
+						type: "video",
+						path: "rec.mp4",
+						missing: false,
+						recordingVersion: "original",
+					},
 					{ id: "logo", type: "image", path: "logo.png", missing: false },
 					{ id: "gone", type: "video", path: "gone.mp4", missing: true },
 					{ id: "pasted", type: "video", path: null, missing: false },
-					{ id: "other", type: "audio", path: "other.mp4", missing: false },
+					{
+						id: "other",
+						type: "audio",
+						path: "other.mp4",
+						missing: false,
+						recordingVersion: "other",
+					},
 				];
 			if (method === "transcript.words")
 				return {
@@ -511,7 +532,12 @@ describe("splice mcp tools", () => {
 		expect(output).not.toHaveProperty("uncaptionedItemIds");
 		expect(
 			calls.find(([method]) => method === "transcript.words")?.[1],
-		).toEqual({ paths: ["rec.mp4", "other.mp4"] });
+		).toEqual({
+			recordings: [
+				{ path: "rec.mp4", expectedVersion: "original" },
+				{ path: "other.mp4", expectedVersion: "other" },
+			],
+		});
 		expect(calls.at(-1)).toEqual([
 			"editor.roughCut",
 			{
@@ -559,10 +585,13 @@ describe("splice mcp tools", () => {
 		const client = await connect(async ({ method, params }) => {
 			if (method === "editor.listItems") return items;
 			if (method === "transcript.words") {
-				const { paths } = params as { paths: string[] };
+				const paths = field({ params, key: "recordings" }) as Array<{
+					path: string;
+				}>;
 				batches.push(paths.length);
 				return {
 					transcripts: paths
+						.map(({ path }) => path)
 						.filter((path) => path === "rec-449.mp4")
 						.map((path) => ({
 							path,
@@ -583,10 +612,53 @@ describe("splice mcp tools", () => {
 		expect(JSON.parse(textOf(result))).not.toHaveProperty("warning");
 	});
 
+	test("captions_add passes the recorded version and never attaches a mismatched transcript", async () => {
+		const calls: string[] = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push(method);
+			if (method === "editor.listItems")
+				return [
+					{
+						id: "rec",
+						type: "video",
+						path: "rec.mp4",
+						missing: false,
+						recordingVersion: "original",
+					},
+				];
+			expect(params).toEqual({
+				recordings: [{ path: "rec.mp4", expectedVersion: "original" }],
+			});
+			throw new RpcCallError({
+				code: RPC_ERRORS.INVALID_PARAMS,
+				message: "The recording changed on disk.",
+			});
+		});
+		try {
+			const result = await client.callTool({
+				name: "captions_add",
+				arguments: { expectedRevision: 1 },
+			});
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toContain("changed on disk");
+			expect(calls).toEqual(["editor.listItems", "transcript.words"]);
+		} finally {
+			await client.close();
+		}
+	});
+
 	test("captions_add fails clearly when nothing is transcribed", async () => {
 		const client = await connect(async ({ method }) => {
 			if (method === "editor.listItems")
-				return [{ id: "rec", type: "video", path: "rec.mp4", missing: false }];
+				return [
+					{
+						id: "rec",
+						type: "video",
+						path: "rec.mp4",
+						missing: false,
+						recordingVersion: "original",
+					},
+				];
 			if (method === "transcript.words")
 				return { transcripts: [], missing: ["rec.mp4"] };
 			throw new Error(`unexpected ${method}`);
@@ -694,6 +766,7 @@ const audioSources = [
 	{
 		projectItemId: "rec-1",
 		path: "quiet.wav",
+		recordingVersion: "quiet-version",
 		noiseReduction: false,
 		missing: false,
 		clipIds: ["c1", "c2"],
@@ -702,6 +775,7 @@ const audioSources = [
 	{
 		projectItemId: "rec-2",
 		path: "loud.wav",
+		recordingVersion: "loud-version",
 		noiseReduction: false,
 		missing: false,
 		clipIds: ["c3"],
@@ -754,6 +828,7 @@ describe("loudness tools", () => {
 				"loudness.measure",
 				{
 					path: "quiet.wav",
+					expectedVersion: "quiet-version",
 					ranges: [{ start: 2, end: 9 }],
 					noiseReduction: false,
 				},
@@ -762,6 +837,7 @@ describe("loudness tools", () => {
 				"loudness.measure",
 				{
 					path: "loud.wav",
+					expectedVersion: "loud-version",
 					ranges: [{ start: 0, end: 5 }],
 					noiseReduction: false,
 				},
@@ -922,7 +998,9 @@ describe("loudness tools", () => {
 	test("rough_cut measures a recording whose cut keeps more ranges than measure_loudness takes", async () => {
 		const root = await mkdtemp(join(tmpdir(), "splice-many-ranges-"));
 		await mkdir(join(root, "Footage"));
-		await writeFile(join(root, "Footage", "quiet.wav"), "audio");
+		const file = join(root, "Footage", "quiet.wav");
+		await writeFile(file, "audio");
+		const recordingVersion = await footageVersion({ absolutePath: file });
 		const measured: unknown[] = [];
 		const meter = createLoudnessMeter({
 			root,
@@ -954,7 +1032,7 @@ describe("loudness tools", () => {
 				return {
 					ok: true,
 					revision: 3,
-					audioSources: [{ ...audioSources[0], ranges }],
+					audioSources: [{ ...audioSources[0], ranges, recordingVersion }],
 					tightening,
 				};
 			return { ok: true, revision: 4, sequenceId: "cut", sections: [] };
@@ -1146,6 +1224,7 @@ describe("noise reduction tools", () => {
 		calls,
 		denoisedNow = [],
 		renderNoiseReduction,
+		recordingVersions,
 		switchesSequence = false,
 	}: {
 		calls: Array<[string, unknown]>;
@@ -1155,6 +1234,7 @@ describe("noise reduction tools", () => {
 		switchesSequence?: boolean;
 		/** Answers `noiseReduction.render` in place of a fixed result. */
 		renderNoiseReduction?: (params: unknown) => Promise<unknown>;
+		recordingVersions?: Map<string, string>;
 	}): RpcCall {
 		return async ({ method, params }) => {
 			calls.push([method, params]);
@@ -1170,6 +1250,10 @@ describe("noise reduction tools", () => {
 					revision: 7,
 					audioSources: heard.map((source) => ({
 						...source,
+						...(source.path &&
+							recordingVersions && {
+								recordingVersion: recordingVersions.get(source.path),
+							}),
 						noiseReduction:
 							source.path !== null &&
 							(requested === undefined
@@ -1231,8 +1315,11 @@ describe("noise reduction tools", () => {
 		// rec-1's clips are measured together, in playing order.
 		expect(calls[0][1]).toBeUndefined();
 		expect(calls[1][1]).toEqual({ noiseReduction: true });
+		expect(calls[2][1]).toEqual({ path: "quiet.wav", expectedVersion: "quiet-version" });
+		expect(calls[3][1]).toEqual({ path: "loud.wav", expectedVersion: "loud-version" });
 		expect(calls[4][1]).toEqual({
 			path: "quiet.wav",
+			expectedVersion: "quiet-version",
 			ranges: [
 				{ start: 2, end: 6 },
 				{ start: 8, end: 12 },
@@ -1456,8 +1543,12 @@ describe("noise reduction tools", () => {
 	test("noise_reduction skips a recording that leaves Footage while rendering and changes the rest", async () => {
 		const root = await mkdtemp(join(tmpdir(), "splice-mcp-"));
 		await mkdir(join(root, "Footage"));
-		for (const name of ["quiet.wav", "loud.wav"])
-			await writeFile(join(root, "Footage", name), name);
+		const recordingVersions = new Map<string, string>();
+		for (const name of ["quiet.wav", "loud.wav"]) {
+			const absolutePath = join(root, "Footage", name);
+			await writeFile(absolutePath, name);
+			recordingVersions.set(name, await footageVersion({ absolutePath }));
+		}
 		// loud.wav leaves Footage once identified, before FFmpeg opens it.
 		const reducer = createNoiseReducer({
 			root,
@@ -1474,6 +1565,7 @@ describe("noise reduction tools", () => {
 		const client = await connect(
 			fakeSplice({
 				calls,
+				recordingVersions,
 				// As splice answers the RPC.
 				renderNoiseReduction: (params) =>
 					reducer.render({ params }).catch((error: unknown) => {
@@ -1562,6 +1654,7 @@ describe("noise reduction tools", () => {
 		// The plan's sources are what tightening keeps, measured denoised.
 		expect(calls[4][1]).toEqual({
 			path: "quiet.wav",
+			expectedVersion: "quiet-version",
 			ranges: [{ start: 2, end: 9 }],
 			noiseReduction: true,
 		});

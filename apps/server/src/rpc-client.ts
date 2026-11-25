@@ -21,6 +21,10 @@ const MINUTE_MS = 60_000;
  */
 const LONG_METHODS: ReadonlySet<string> = new Set([
 	"editor.importItems",
+	"editor.relinkItem",
+	"transcribe.start",
+	"transcribe.status",
+	"transcript.words",
 	"editor.roughCut",
 	"pauses.detect",
 	"loudness.measure",
