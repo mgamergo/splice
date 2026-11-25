@@ -14,6 +14,7 @@ import { RenameProjectDialog } from "@/project/components/rename-project-dialog"
 import { DeleteProjectDialog } from "@/project/components/delete-project-dialog";
 import { useRouter } from "next/navigation";
 import { ExportButton } from "./export-button";
+import { StorageDialog } from "./storage-dialog";
 import { StyleUpdateDialog } from "./style-update-dialog";
 import { ThemeToggle } from "../theme-toggle";
 import { DEFAULT_LOGO_URL } from "@/site/brand";
@@ -45,7 +46,7 @@ export function EditorHeader() {
 
 function ProjectDropdown() {
 	const [openDialog, setOpenDialog] = useState<
-		"delete" | "rename" | "shortcuts" | null
+		"delete" | "rename" | "shortcuts" | "storage" | null
 	>(null);
 	const [isExiting, setIsExiting] = useState(false);
 	const router = useRouter();
@@ -136,8 +137,12 @@ function ProjectDropdown() {
 					>
 						Shortcuts
 					</DropdownMenuItem>
+					<DropdownMenuItem onClick={() => setOpenDialog("storage")}>
+						Storage
+					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{openDialog === "storage" && <StorageDialog onClose={() => setOpenDialog(null)} />}
 			<RenameProjectDialog
 				isOpen={openDialog === "rename"}
 				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "rename" : null)}

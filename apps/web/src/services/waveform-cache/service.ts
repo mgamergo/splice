@@ -18,7 +18,13 @@ interface GetSourceWaveformSummaryArgs {
 }
 
 export class WaveformCache {
-	private summaries = new Map<string, Promise<SourceWaveformSummary>>();
+	private summaries = new Map<
+		string,
+		{
+			promise: Promise<SourceWaveformSummary>;
+			bytes: number | null;
+		}
+	>();
 
 	getSourceSummary({
 		sourceKey,
@@ -28,21 +34,49 @@ export class WaveformCache {
 	}: GetSourceWaveformSummaryArgs): Promise<SourceWaveformSummary> {
 		const existing = this.summaries.get(sourceKey);
 		if (existing) {
-			return existing;
+			return existing.promise;
 		}
 
-		const promise = this.buildSummary({
-			sourceKey,
-			audioBuffer,
-			sourceFile,
-			audioUrl,
-		}).catch((error) => {
-			this.summaries.delete(sourceKey);
-			throw error;
-		});
+		const entry: {
+			bytes: number | null;
+			promise: Promise<SourceWaveformSummary>;
+		} = {
+			bytes: null,
+			promise: this.buildSummary({
+				sourceKey,
+				audioBuffer,
+				sourceFile,
+				audioUrl,
+			}),
+		};
+		entry.promise = entry.promise.then(
+			(summary) => {
+				entry.bytes = summary.amplitudes.byteLength;
+				return summary;
+			},
+			(error: unknown) => {
+				if (this.summaries.get(sourceKey) === entry)
+					this.summaries.delete(sourceKey);
+				throw error;
+			},
+		);
+		this.summaries.set(sourceKey, entry);
+		return entry.promise;
+	}
 
-		this.summaries.set(sourceKey, promise);
-		return promise;
+	/** A component already showing a waveform retains its own summary. */
+	inspect({ remove = false } = {}) {
+		let bytes = 0;
+		let busy = 0;
+		for (const [key, entry] of this.summaries) {
+			if (entry.bytes === null) {
+				busy++;
+			} else {
+				bytes += entry.bytes;
+				if (remove) this.summaries.delete(key);
+			}
+		}
+		return { bytes, busy };
 	}
 
 	clearSource({ sourceKey }: { sourceKey: string }): void {
@@ -99,14 +133,20 @@ async function buildDiskWaveformSummary({
 	sourceKey: string;
 	source: MediaData;
 }): Promise<SourceWaveformSummary> {
-	const input = new Input({ source: createMediaSource({ data: source }), formats: ALL_FORMATS });
+	const input = new Input({
+		source: createMediaSource({ data: source }),
+		formats: ALL_FORMATS,
+	});
 	try {
 		const track = await input.getPrimaryAudioTrack();
 		if (!track) {
 			throw new Error(`No audio track in ${sourceKey}`);
 		}
 		const sink = new AudioBufferSink(track);
-		return await buildStreamedWaveformSummary({ sourceKey, chunks: sink.buffers() });
+		return await buildStreamedWaveformSummary({
+			sourceKey,
+			chunks: sink.buffers(),
+		});
 	} finally {
 		input.dispose();
 	}

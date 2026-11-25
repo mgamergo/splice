@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { WaveformCache } from "@/services/waveform-cache/service";
 import { buildStreamedWaveformSummary } from "../waveform-summary";
 
 /** The slice of AudioBuffer the summary reads. */
@@ -69,4 +70,17 @@ describe("buildStreamedWaveformSummary", () => {
 		).toEqual([0.9, 0.4]);
 		expect(summary.totalSamples).toBe(5);
 	});
+});
+
+test("waveform cleanup skips a running build and later reads rebuild evicted summaries", async () => {
+	const cache = new WaveformCache();
+	const source = { sourceKey: "media:x", audioBuffer: chunk({ values: [0, 0.5, 1] }) };
+	const pending = cache.getSourceSummary(source);
+	expect(cache.inspect({ remove: true })).toEqual({ busy: 1, bytes: 0 });
+	expect(cache.getSourceSummary(source)).toBe(pending);
+	const original = await pending;
+	expect(cache.inspect({ remove: true })).toEqual({ busy: 0, bytes: original.amplitudes.byteLength });
+	const rebuilt = await cache.getSourceSummary(source);
+	expect(rebuilt).not.toBe(original);
+	expect(rebuilt).toEqual(original);
 });
