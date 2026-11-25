@@ -190,6 +190,7 @@ export function startServer({
 	const spellings = createSpellingStore({ root });
 	/** What the editor tab may ask of `splice` itself. */
 	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
+		"footage.list": () => listFootage({ root }),
 		"transcript.words": (params) => transcription.words(params),
 		"spellings.list": () => spellings.list(),
 		"spellings.save": (params) => spellings.save(params),

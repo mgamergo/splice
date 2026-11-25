@@ -17,6 +17,7 @@ import { useEditor } from "@/editor/use-editor";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { VideoCache } from "@/services/video-cache/service";
+import { checkpointSequence } from "../checkpoint";
 import { calculateTotalDuration } from "@/timeline";
 import {
 	lastFrameMediaTime,
@@ -72,16 +73,29 @@ function Playback({
 	useEffect(() => {
 		const mount = canvasMountRef.current;
 		if (!mount) return;
-		const { tracks } = checkpoint;
+		const sequence = checkpointSequence(checkpoint);
+		const { tracks } = sequence;
 		const duration = calculateTotalDuration({ tracks });
 		if (duration <= 0) return;
 		const projectItems = editor.media.getProjectItems();
 		const timeline = { getTotalDuration: () => duration, subscribe };
-		const sequences = { getActiveSequence: () => ({ tracks }), subscribe };
+		const sequences = {
+			getActiveSequence: () => sequence,
+			getActiveSequenceOrNull: () => sequence,
+			subscribe,
+		};
+		const project = editor.project.getActive();
+		const approvedProject = { ...project, captions: checkpoint.captions };
 		const playback = new PlaybackManager({
 			timeline,
 			sequences,
-			project: editor.project,
+			project: { getActive: () => approvedProject },
+			audio: {
+				prepareFinalPreview: (
+					options,
+				): ReturnType<AudioManager["prepareFinalPreview"]> =>
+					audio.prepareFinalPreview(options),
+			},
 		});
 		const controller = new AbortController();
 		const videoCache = new VideoCache({ signal: controller.signal });
@@ -103,6 +117,7 @@ function Playback({
 		}
 		const audio = new AudioManager({
 			playback,
+			project: { getActiveOrNull: () => approvedProject },
 			timeline,
 			sequences,
 			media: {

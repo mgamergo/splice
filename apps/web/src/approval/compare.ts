@@ -4,6 +4,7 @@
  * later clips shifting after a ripple delete aren't changes.
  */
 import type { ChangedPassage, CheckpointChange } from "@splice/bridge/approval";
+import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { TBackground } from "@/project/types";
 import type {
 	Marker,
@@ -24,6 +25,7 @@ export interface ComparableEdit {
 	tracks: SequenceTracks;
 	markers: Marker[];
 	background?: TBackground;
+	master?: ExportScene["master"];
 	cues: Array<{ start: number; end: number; text: string }>;
 }
 
@@ -651,6 +653,17 @@ export function compareEdits({
 			evidence: hashText(
 				stableStringify([approved.background, current.background]),
 			),
+			start: 0,
+			end: 0,
+			approvedStart: 0,
+			approvedEnd: 0,
+		});
+	if (stableStringify(approved.master) !== stableStringify(current.master))
+		changes.push({
+			kind: "changed",
+			what: "mix",
+			label: "Master gain or true-peak ceiling",
+			evidence: hashText(stableStringify([approved.master, current.master])),
 			start: 0,
 			end: 0,
 			approvedStart: 0,

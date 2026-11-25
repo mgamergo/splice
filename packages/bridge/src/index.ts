@@ -42,6 +42,11 @@ export const TAB_METHODS = [
 	"editor.checkpointCompare",
 	"editor.issuesList",
 	"editor.dismissIssue",
+	"editor.addMusic",
+	"editor.updateMusic",
+	"editor.removeMusic",
+	"editor.mixLoudness",
+	"editor.mixStatus",
 	"editor.cutTranscript",
 	"editor.transcriptSelection",
 ] as const;

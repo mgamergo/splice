@@ -14,10 +14,10 @@ export class RpcCallError extends Error {
 const MINUTE_MS = 60_000;
 
 /**
- * Methods whose work grows with the footage: imports probe every file, and
+ * Methods whose work grows with the footage: imports probe every file,
  * rough cuts, pause scans, loudness measures and noise-reduction renders run
- * FFmpeg over whole recordings. Hours of footage take minutes, so they get
- * half an hour.
+ * FFmpeg over whole recordings, and the editor decodes and measures the whole
+ * mix or music track. Hours of footage take minutes, so they get half an hour.
  */
 const LONG_METHODS: ReadonlySet<string> = new Set([
 	"editor.importItems",
@@ -25,6 +25,9 @@ const LONG_METHODS: ReadonlySet<string> = new Set([
 	"pauses.detect",
 	"loudness.measure",
 	"noiseReduction.render",
+	"editor.addMusic",
+	"editor.updateMusic",
+	"editor.mixLoudness",
 ]);
 
 /** Whether `splice mcp` gives a call the long deadline. */

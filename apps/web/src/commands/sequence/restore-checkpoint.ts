@@ -52,6 +52,7 @@ export class RestoreCheckpointCommand extends Command {
 				updates: {
 					tracks: structuredClone(checkpoint.tracks),
 					markers: structuredClone(checkpoint.markers),
+					mix: structuredClone(checkpoint.mix),
 					captions: checkpoint.sequenceCaptions
 						? structuredClone(checkpoint.sequenceCaptions)
 						: undefined,

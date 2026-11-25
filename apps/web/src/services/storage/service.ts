@@ -1,3 +1,4 @@
+import { sequenceMixSchema } from "@splice/bridge/mix";
 import { captionsRequestSchema } from "@splice/bridge/ops";
 import { parseProjectCaptions } from "@splice/bridge/delivery";
 import { parseProjectApproval } from "@/approval/checkpoint";
@@ -181,6 +182,7 @@ class StorageService {
 				tracks: this.stripAudioBuffers({ tracks: sequence.tracks }),
 				markers: sequence.markers,
 				...(sequence.captions && { captions: sequence.captions }),
+				...(sequence.mix && { mix: sequence.mix }),
 				createdAt: sequence.createdAt.toISOString(),
 				updatedAt: sequence.updatedAt.toISOString(),
 			}),
@@ -248,6 +250,7 @@ class StorageService {
 				tracks: sequence.tracks,
 				markers: normalizeMarkers({ raw: sequence.markers }),
 				captions: captionsRequestSchema.safeParse(sequence.captions).data,
+				mix: sequenceMixSchema.safeParse(sequence.mix).data,
 				createdAt: new Date(sequence.createdAt),
 				updatedAt: new Date(sequence.updatedAt),
 			})) ?? [];

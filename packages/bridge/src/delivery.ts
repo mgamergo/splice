@@ -203,6 +203,7 @@ export type ExportRecord = z.infer<typeof exportRecordSchema>;
  * files go up separately, as `PUT <api>/exports/<exportId>/<mp4|srt>`.
  */
 export const TAB_API_METHODS = [
+	"footage.list",
 	"transcript.words",
 	"spellings.list",
 	"spellings.save",

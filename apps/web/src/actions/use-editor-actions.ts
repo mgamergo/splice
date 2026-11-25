@@ -77,9 +77,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"stop-playback",
 		() => {
-			if (editor.playback.getIsPlaying()) {
-				editor.playback.toggle();
-			}
+			editor.playback.pause();
 			editor.playback.seek({ time: ZERO_MEDIA_TIME });
 		},
 		undefined,

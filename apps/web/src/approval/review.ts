@@ -3,10 +3,15 @@ import type { Replacement } from "@splice/bridge/delivery";
 import type { CaptionCue } from "@/captions/cues";
 import { sequenceCaptionCues } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
+import { deliveryScene } from "@/export/deliver";
 import type { EditorCore } from "@/core";
 import { projectFormat } from "@/project/format";
 import type { TSequence } from "@/timeline/types";
-import { approvedEdit, latestCheckpoint, projectApproval } from "./checkpoint";
+import {
+	checkpointSequence,
+	latestCheckpoint,
+	projectApproval,
+} from "./checkpoint";
 import {
 	type CheckpointComparison,
 	compareEdits,
@@ -80,13 +85,27 @@ export function reviewState({
 	const cues = horizontal
 		? (reviewedCues ?? sequenceCaptionCues({ editor, sequence, spellings }))
 		: [];
+	const projectItems = editor.media.getProjectItems();
 	const comparison = approved
 		? compareEdits({
-				approved: approvedEdit(approved),
+				approved: {
+					...deliveryScene({
+						sequence: checkpointSequence(approved),
+						projectItems,
+						projectSources: approved.captions?.sources,
+						background: approved.background,
+					}),
+					markers: approved.markers,
+					cues: approved.cues,
+				},
 				current: {
-					tracks: sequence.tracks,
+					...deliveryScene({
+						sequence,
+						projectItems,
+						projectSources: project.captions?.sources,
+						background: project.settings.background,
+					}),
 					markers: sequence.markers,
-					background: project.settings.background,
 					cues,
 				},
 			})
@@ -94,7 +113,7 @@ export function reviewState({
 	const issues = applyDismissals({
 		issues: collectIssues({
 			sequence,
-			projectItems: editor.media.getProjectItems(),
+			projectItems,
 			horizontal,
 			captions: project.captions,
 			cues,
@@ -116,19 +135,13 @@ export function reviewState({
 export function approvedIssues({
 	editor,
 	checkpoint,
-	sequence,
 }: {
 	editor: EditorCore;
 	checkpoint: ApprovedCheckpoint;
-	sequence: TSequence;
 }): ReviewIssue[] {
 	return applyDismissals({
 		issues: collectIssues({
-			sequence: {
-				...sequence,
-				tracks: checkpoint.tracks,
-				markers: checkpoint.markers,
-			},
+			sequence: checkpointSequence(checkpoint),
 			projectItems: editor.media.getProjectItems(),
 			horizontal: true,
 			captions: checkpoint.captions,

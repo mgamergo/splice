@@ -1,4 +1,5 @@
 import type { EditorState, ItemSummary, TabMethod } from "@splice/bridge";
+import { mixLoudnessRequestSchema } from "@splice/bridge/mix";
 import { z } from "zod";
 import type { EditorApi } from "@/agent/editor-api";
 import { ApprovalApi } from "@/approval/api";
@@ -35,6 +36,9 @@ export function createTabHandlers({
 	isBlocked: () => boolean;
 }): TabHandlers {
 	const approval = new ApprovalApi({ editor, api });
+	const checkAgentAllowed = () => {
+		if (isBlocked()) throw new AgentBlockedError();
+	};
 	return {
 		"editor.getState": (): EditorState => {
 			const project = editor.project.getActiveOrNull();
@@ -86,6 +90,34 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return approval.dismissIssue(params);
 		},
+		"editor.addMusic": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.addMusic({ request: params, beforeWrite: checkAgentAllowed });
+		},
+		"editor.updateMusic": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.updateMusic({
+				request: params,
+				beforeWrite: checkAgentAllowed,
+			});
+		},
+		"editor.removeMusic": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.removeMusic(params);
+		},
+		"editor.mixLoudness": (params) => {
+			// Measuring only reads; saving the gain is a write.
+			if (
+				isBlocked() &&
+				mixLoudnessRequestSchema.safeParse(params).data?.apply !== false
+			)
+				throw new AgentBlockedError();
+			return api.mixLoudness({
+				request: params,
+				beforeWrite: checkAgentAllowed,
+			});
+		},
+		"editor.mixStatus": (params) => api.mixStatus(params),
 		"editor.cutTranscript": (params) => api.cutTranscript(params),
 		"editor.transcriptSelection": (params) => api.transcriptSelection(params),
 		"editor.takesList": (params) => api.takesList(params),

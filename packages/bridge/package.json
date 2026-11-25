@@ -8,6 +8,7 @@
 		"./ops": "./src/ops.ts",
 		"./delivery": "./src/delivery.ts",
 		"./approval": "./src/approval.ts",
+		"./mix": "./src/mix.ts",
 		"./transcript": "./src/transcript.ts"
 	},
 	"dependencies": {

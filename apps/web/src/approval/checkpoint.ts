@@ -6,6 +6,7 @@ import {
 	dismissalSchema,
 } from "@splice/bridge/approval";
 import { projectCaptionsSchema } from "@splice/bridge/delivery";
+import { sequenceMixSchema } from "@splice/bridge/mix";
 import { captionsRequestSchema } from "@splice/bridge/ops";
 import { z } from "zod";
 import { type CaptionCue } from "@/captions/cues";
@@ -13,17 +14,19 @@ import { sequenceCaptionCues } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import {
+	DELIVERY_FORMAT,
 	type DeliverySnapshot,
 	deliveryFingerprint,
+	deliveryScene,
 	takeDeliverySnapshot,
 } from "@/export/deliver";
 import { projectFormat } from "@/project/format";
 import type { TProject } from "@/project/types";
-import type { Marker, SequenceTracks } from "@/timeline/types";
+import type { Marker, SequenceTracks, TSequence } from "@/timeline/types";
 import { isDiskMedia } from "@/media/media-data";
 import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
 import { generateUUID } from "@/utils/id";
-import { type ComparableEdit, stableStringify } from "./compare";
+import { stableStringify } from "./compare";
 import type {
 	ApprovedCheckpoint,
 	FootageIdentity,
@@ -85,7 +88,7 @@ export function captureApproval({
 		? (cues ?? sequenceCaptionCues({ editor, sequence }))
 		: [];
 	const snapshot = takeDeliverySnapshot({ editor, cues: reviewedCues });
-	const tracks = withoutBuffers(snapshot.scene.tracks);
+	const tracks = withoutBuffers(sequence.tracks);
 	const data = {
 		id: generateUUID(),
 		sequenceId: sequence.id,
@@ -97,6 +100,7 @@ export function captureApproval({
 		origin,
 		...(note && { note }),
 		tracks,
+		...(sequence.mix && { mix: structuredClone(sequence.mix) }),
 		markers: structuredClone(sequence.markers),
 		background: structuredClone(snapshot.scene.background),
 		...(sequence.captions && {
@@ -122,13 +126,20 @@ export function captureApproval({
 	return {
 		data,
 		mediaGeneration: editor.media.getGeneration(),
-		snapshot: { ...snapshot, scene: { ...snapshot.scene, tracks } },
+		snapshot: {
+			...snapshot,
+			scene: {
+				...snapshot.scene,
+				tracks: withoutBuffers(snapshot.scene.tracks),
+			},
+		},
 	};
 }
 
 function approvalContent({
 	sequenceName,
 	tracks,
+	mix,
 	markers,
 	background,
 	sequenceCaptions,
@@ -139,6 +150,7 @@ function approvalContent({
 	return stableStringify({
 		sequenceName,
 		tracks,
+		mix,
 		markers,
 		background,
 		sequenceCaptions,
@@ -317,20 +329,21 @@ export function undismissIssue({
 	});
 }
 
-/** The parts of a checkpoint a comparison reads. */
-export function approvedEdit(checkpoint: ApprovedCheckpoint): ComparableEdit {
+/** The saved timeline inputs shared by preview, review and delivery. */
+export function checkpointSequence(
+	checkpoint: ApprovedCheckpoint,
+): Pick<TSequence, "id" | "name" | "tracks" | "markers" | "captions" | "mix"> {
 	return {
+		id: checkpoint.sequenceId,
+		name: checkpoint.sequenceName,
 		tracks: checkpoint.tracks,
 		markers: checkpoint.markers,
-		cues: checkpoint.cues,
-		background: checkpoint.background,
+		captions: checkpoint.sequenceCaptions,
+		mix: checkpoint.mix,
 	};
 }
 
-/**
- * What an export of the checkpoint delivers: its tracks and SRT, with every
- * other render input taken as an export of the current edit would.
- */
+/** Captures a delivery of the saved cut, with its own mix and SRT. */
 export function checkpointDeliverySnapshot({
 	editor,
 	checkpoint,
@@ -338,17 +351,21 @@ export function checkpointDeliverySnapshot({
 	editor: EditorCore;
 	checkpoint: ApprovedCheckpoint;
 }): DeliverySnapshot {
-	const current = takeDeliverySnapshot({ editor });
+	const project = editor.project.getActive();
 	return {
-		...current,
-		scene: {
-			...current.scene,
-			tracks: checkpoint.tracks,
+		deliveryId: generateUUID(),
+		requestedRevision: editor.command.getRevision(),
+		scene: deliveryScene({
+			sequence: checkpointSequence(checkpoint),
+			projectItems: editor.media.getProjectItems(),
+			projectSources: checkpoint.captions?.sources,
 			background: checkpoint.background,
-		},
+		}),
+		fps: DELIVERY_FORMAT.fps,
 		srt: checkpoint.srt,
 		source: {
-			...current.source,
+			projectId: project.metadata.id,
+			projectName: project.metadata.name,
 			checkpointId: checkpoint.id,
 			sequenceId: checkpoint.sequenceId,
 			sequenceName: checkpoint.sequenceName,
@@ -387,6 +404,7 @@ const isTracks = (value: unknown): value is SequenceTracks =>
 
 const storedCheckpointSchema = checkpointSummarySchema.extend({
 	tracks: z.custom<SequenceTracks>(isTracks),
+	mix: sequenceMixSchema.optional(),
 	markers: z.array(z.unknown()),
 	background: z.discriminatedUnion("type", [
 		z.object({ type: z.literal("color"), color: z.string() }),

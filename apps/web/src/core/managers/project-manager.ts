@@ -70,8 +70,7 @@ export class ProjectManager {
 	 * finished snapshot and render.
 	 */
 	private delivery: {
-		input: DeliveryInput;
-		snapshot: DeliverySnapshot | null;
+		input: DeliveryInput | DeliverySnapshot;
 		quality: ExportQuality;
 		video: ArrayBuffer | null;
 	} | null = null;
@@ -419,17 +418,31 @@ export class ProjectManager {
 	 * Captures the approved Horizontal edit, then loads the saved spellings,
 	 * renders the MP4 at 1080p30 and publishes it with the SRT under Exports.
 	 */
-	deliver({
+	async deliver({
 		quality,
+		acceptStaleGain = false,
 		snapshot,
 	}: {
 		quality: ExportQuality;
-		/** An approved checkpoint's edit, in place of the edit as it is now. */
 		snapshot?: DeliverySnapshot;
+		acceptStaleGain?: boolean;
 	}): Promise<ExportResult> {
+		let input: DeliveryInput | DeliverySnapshot;
+		try {
+			input =
+				snapshot ??
+				captureDelivery({
+					editor: this.editor,
+					approval: { acceptStaleGain },
+				});
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
 		this.delivery = {
-			input: captureDelivery({ editor: this.editor }),
-			snapshot: snapshot ?? null,
+			input,
 			quality,
 			video: null,
 		};
@@ -452,7 +465,7 @@ export class ProjectManager {
 			result: null,
 			step: delivery.video
 				? "upload-video"
-				: delivery.snapshot
+				: "srt" in delivery.input
 					? "render"
 					: "spellings",
 		};
@@ -465,9 +478,9 @@ export class ProjectManager {
 					this.exportState = { ...this.exportState, ...patch };
 					this.notify();
 				};
-				if (!delivery.snapshot) {
+				if (!("srt" in delivery.input)) {
 					try {
-						delivery.snapshot = await prepareDelivery({ input: delivery.input });
+						delivery.input = await prepareDelivery({ input: delivery.input });
 					} catch (error) {
 						if (signal.aborted) return { success: false, cancelled: true };
 						return {
@@ -479,7 +492,7 @@ export class ProjectManager {
 					if (signal.aborted) return { success: false, cancelled: true };
 					update({ step: "render" });
 				}
-				const { snapshot } = delivery;
+				const snapshot = delivery.input;
 				if (!delivery.video) {
 					try {
 						await verifySequenceMedia({ ...snapshot.scene, signal });
@@ -536,10 +549,16 @@ export class ProjectManager {
 		if (!isCurrent()) return { success: false, cancelled: true };
 		// The render is kept only to retry a failure.
 		if (result.success || result.cancelled) this.delivery = null;
-		const requestedRevision = delivery.snapshot?.requestedRevision ?? delivery.input.source.revision;
-		if (result.success && this.editor.command.getRevision() !== requestedRevision) {
+		const requestedRevision =
+			delivery.input.requestedRevision ?? delivery.input.source.revision;
+		if (
+			result.success &&
+			this.editor.command.getRevision() !== requestedRevision
+		) {
 			result.newerEdit = true;
-			toast.success("Exported the approved revision. A newer edit is available.");
+			toast.success(
+				"Exported the approved revision. A newer edit is available.",
+			);
 		}
 		this.exportState = result.cancelled
 			? IDLE_EXPORT_STATE

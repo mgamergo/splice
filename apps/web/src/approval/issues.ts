@@ -19,6 +19,8 @@ import {
 	hashText,
 	stableStringify,
 } from "./compare";
+import { staleMixFingerprint } from "@/mix/final-mix";
+import { isMusicTrack } from "@/mix/music";
 import type { CaptionCue } from "@/captions/cues";
 import type { ApprovedCheckpoint } from "./types";
 
@@ -102,7 +104,7 @@ function footageIssues({
 	projectItems,
 	checkpoint,
 }: {
-	sequence: TSequence;
+	sequence: Pick<TSequence, "id" | "tracks" | "markers" | "captions" | "mix">;
 	projectItems: ProjectItem[];
 	checkpoint?: ApprovedCheckpoint;
 }): ReviewIssue[] {
@@ -173,7 +175,7 @@ function captionIssues({
 	captions,
 	cues,
 }: {
-	sequence: TSequence;
+	sequence: Pick<TSequence, "id" | "tracks" | "markers" | "captions" | "mix">;
 	projectItems: ProjectItem[];
 	captions?: ProjectCaptions;
 	cues: Array<
@@ -190,10 +192,12 @@ function captionIssues({
 			ranges: Array<[number, number]>;
 		}
 	>();
-	for (const { clip } of audibleClips({
+	for (const { clip, trackId } of audibleClips({
 		tracks: sequence.tracks,
 		projectItems,
 	})) {
+		if (isMusicTrack({ track: { id: trackId }, music: sequence.mix?.music }))
+			continue;
 		const item = items.get(clip.mediaId);
 		if (!item || item.missing) continue;
 		const from = clip.trimStart;
@@ -298,7 +302,9 @@ function captionIssues({
 }
 
 /** Removal markers whose kept take left the cut, or whose stored take plays in it. */
-function markerIssues(sequence: TSequence): ReviewIssue[] {
+function markerIssues(
+	sequence: Pick<TSequence, "markers" | "tracks">,
+): ReviewIssue[] {
 	const clips = allClips(sequence.tracks);
 	const issues: ReviewIssue[] = [];
 	for (const marker of sequence.markers) {
@@ -348,7 +354,7 @@ function markerIssues(sequence: TSequence): ReviewIssue[] {
 	return issues;
 }
 
-function flaggedIssues(sequence: TSequence): ReviewIssue[] {
+function flaggedIssues(sequence: Pick<TSequence, "markers">): ReviewIssue[] {
 	return sequence.markers.flatMap((marker) => {
 		if (marker.data || !marker.note || !FLAG_NOTE.test(marker.note)) return [];
 		const start = mediaTimeToSeconds({ time: marker.time });
@@ -368,6 +374,26 @@ function flaggedIssues(sequence: TSequence): ReviewIssue[] {
 	});
 }
 
+function staleMixIssues(
+	input: Parameters<typeof staleMixFingerprint>[0],
+): ReviewIssue[] {
+	const fingerprint = staleMixFingerprint(input);
+	if (fingerprint === undefined) return [];
+	return [
+		{
+			id: "stale-mix",
+			kind: "stale-mix",
+			title: "Mix measurement is stale",
+			detail: "The audio changed since the mix was measured.",
+			start: 0,
+			end: 0,
+			evidence: hashText(
+				stableStringify([input.sequence.mix?.loudness, fingerprint]),
+			),
+		},
+	];
+}
+
 /** Every review issue on the sequence, in sequence order. */
 export function collectIssues({
 	sequence,
@@ -378,7 +404,7 @@ export function collectIssues({
 	checkpoint,
 	comparison,
 }: {
-	sequence: TSequence;
+	sequence: Pick<TSequence, "id" | "tracks" | "markers" | "captions" | "mix">;
 	projectItems: ProjectItem[];
 	horizontal: boolean;
 	captions?: ProjectCaptions;
@@ -396,6 +422,11 @@ export function collectIssues({
 		...(horizontal
 			? captionIssues({ sequence, projectItems, captions, cues })
 			: []),
+		...staleMixIssues({
+			sequence,
+			projectItems,
+			projectSources: captions?.sources,
+		}),
 		...markerIssues(sequence),
 		...flaggedIssues(sequence),
 	]

@@ -10,6 +10,12 @@ import {
 import { MEDIA_VERSION_HEADER } from "@splice/bridge";
 import { type ExportRecord, exportRecordSchema } from "@splice/bridge/delivery";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
+import {
+	checkpointDeliverySnapshot,
+	finalizeCut,
+	parseProjectApproval,
+} from "@/approval/checkpoint";
+import { approvedIssues, reviewState } from "@/approval/review";
 import { setCaptionSources } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
@@ -17,6 +23,14 @@ import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { ExportOptions, ExportResult } from "@/export";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
 import { recording } from "@/media/__tests__/stub-fetch";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
+import {
+	addMusic,
+	mixFingerprint,
+	saveMixLoudness,
+	updateMusic,
+} from "@/mix/final-mix";
+import { normalizeMarkers, storageService } from "@/services/storage/service";
 import { buildDefaultSequence } from "@/timeline/sequences";
 
 const initialCaptionsState = useCaptionsStore.getState();
@@ -77,7 +91,9 @@ function fakeSplice() {
 		loseNextPublishAnswer: () => {
 			loseNextPublishAnswer = true;
 		},
-		fetch: Object.assign(fakeFetch, { preconnect: globalThis.fetch.preconnect }),
+		fetch: Object.assign(fakeFetch, {
+			preconnect: globalThis.fetch.preconnect,
+		}),
 	};
 }
 
@@ -184,10 +200,15 @@ describe("Horizontal delivery", () => {
 		editor.sequences.updateSequenceTracks({
 			tracks: { ...tracks, main: { ...tracks.main, clips: [] } },
 		});
-		expect(editor.command.getRevision()).toBeGreaterThan(approved.source.revision);
+		expect(editor.command.getRevision()).toBeGreaterThan(
+			approved.source.revision,
+		);
 		release();
 		const result = await exported;
-		expect(result).toMatchObject({ success: true, record: { ...approved.source } });
+		expect(result).toMatchObject({
+			success: true,
+			record: { ...approved.source },
+		});
 		expect(renders[0].scene).toEqual(approved.scene);
 		expect(loadSpellings).toHaveBeenCalled();
 		const begin = splice.calls.find(({ method }) => method === "exports.begin");
@@ -220,7 +241,10 @@ describe("Horizontal delivery", () => {
 		setCaptionSources({ editor, sources: [] });
 		expect(await editor.project.retryDelivery()).toMatchObject({
 			success: true,
-			record: { ...approved.source, fingerprint: await deliveryFingerprint(approved) },
+			record: {
+				...approved.source,
+				fingerprint: await deliveryFingerprint(approved),
+			},
 		});
 		expect(attempts).toBe(2);
 		expect(renders).toHaveLength(1);
@@ -229,6 +253,83 @@ describe("Horizontal delivery", () => {
 	test("renders 1920×1080 at 30 fps, and Retry renders the approved edit, not a later one", async () => {
 		const editor = horizontalEditor();
 		useCaptionsStore.setState({ spellingsLoaded: true });
+		const sequenceId = editor.sequences.getActiveSequence().id;
+		const setGain = (gainDb: number) => {
+			editor.command.execute({
+				command: new UpdateSequenceCommand({
+					editor,
+					sequenceId,
+					label: "Adjust mix",
+					updates: {
+						mix: {
+							loudness: {
+								gainDb,
+								targetLufs: -14,
+								ceilingDbtp: -1,
+								measuredLufs: -17,
+								measuredTruePeakDbtp: -5,
+								expectedLufs: -14,
+								expectedTruePeakDbtp: -2,
+								fingerprint: "mix",
+							},
+						},
+					},
+				}),
+			});
+		};
+		setGain(3);
+		const approved = takeDeliverySnapshot({ editor });
+		setGain(2);
+		expect(
+			await deliveryFingerprint(takeDeliverySnapshot({ editor })),
+		).not.toBe(await deliveryFingerprint(approved));
+		setGain(3);
+		const projectItems = [
+			{
+				id: "rec",
+				type: "video" as const,
+				hasAudio: true,
+				name: "rec",
+				file: new File([], "rec.mp4"),
+				url: "blob:recording",
+			},
+		];
+		editor.media.setProjectItems({ projectItems });
+		const sequence = editor.sequences.getActiveSequence();
+		const loudness = sequence.mix?.loudness;
+		if (!loudness) throw new Error("Expected a saved gain");
+		editor.command.execute({
+			command: new UpdateSequenceCommand({
+				editor,
+				sequenceId: sequence.id,
+				label: "Measure",
+				updates: {
+					mix: {
+						loudness: {
+							...loudness,
+							fingerprint: mixFingerprint({
+								tracks: sequence.tracks,
+								projectItems,
+							}),
+						},
+					},
+				},
+			}),
+		});
+		const { tracks: measuredTracks } = sequence;
+		editor.sequences.updateSequenceTracks({
+			tracks: {
+				...measuredTracks,
+				main: {
+					...measuredTracks.main,
+					clips: measuredTracks.main.clips.map((clip) => ({
+						...clip,
+						params: { ...clip.params, volume: -6 },
+					})),
+				},
+			},
+		});
+
 		const renders = recordRenders(editor);
 		// The first render fails, so Retry renders again.
 		let failRender = true;
@@ -244,9 +345,17 @@ describe("Horizontal delivery", () => {
 
 		expect(await editor.project.deliver({ quality: "high" })).toMatchObject({
 			success: false,
+			error: expect.stringContaining("changed since it was measured"),
+		});
+		expect(renders).toHaveLength(0);
+		expect(
+			await editor.project.deliver({ quality: "high", acceptStaleGain: true }),
+		).toMatchObject({
+			success: false,
 			failedStep: "render",
 		});
 		// The creator keeps editing before retrying.
+		setGain(6);
 		const project = editor.project.getActive();
 		editor.project.setActiveProject({
 			project: {
@@ -268,11 +377,113 @@ describe("Horizontal delivery", () => {
 		expect(renders).toHaveLength(2);
 		for (const { options, scene } of renders) {
 			expect(options.fps).toEqual({ numerator: 30, denominator: 1 });
+			expect(scene?.master).toEqual({ gainDb: 3, ceilingDbtp: -1 });
 			expect(scene?.canvasSize).toEqual({ width: 1920, height: 1080 });
 			expect(scene?.background).toEqual({ type: "color", color: "#000000" });
 			expect(scene?.tracks.main.clips.map(({ id }) => id)).toEqual(["a"]);
 		}
 		expect(renders[1].scene).toBe(renders[0].scene);
+	});
+
+	test("exports the approved mix after the live music and master settings change", async () => {
+		const editor = horizontalEditor();
+		spyOn(storageService, "saveProject").mockResolvedValue(undefined);
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const projectItems = [
+			...editor.media
+				.getProjectItems()
+				.map((item) => ({ ...item, hasAudio: true })),
+			{
+				id: "music",
+				type: "audio" as const,
+				name: "Music",
+				duration: 10,
+				file: new File(["music"], "bed.mp3", { type: "audio/mpeg" }),
+			},
+		];
+		editor.media.setProjectItems({ projectItems });
+		const sequenceId = editor.sequences.getActiveSequence().id;
+		await addMusic({
+			editor,
+			sequenceId,
+			projectItemId: "music",
+			options: { levelDb: -20, overrides: [{ start: 5, end: 7 }] },
+		});
+		const measured = takeDeliverySnapshot({ editor });
+		const loudness = {
+			gainDb: 3,
+			ceilingDbtp: -1,
+			targetLufs: -14,
+			measuredLufs: -17,
+			measuredTruePeakDbtp: -5,
+			expectedLufs: -14,
+			expectedTruePeakDbtp: -2,
+			fingerprint: mixFingerprint({
+				tracks: measured.scene.tracks,
+				projectItems,
+			}),
+		};
+		saveMixLoudness({ editor, sequenceId, loudness });
+		const approval = await finalizeCut({ editor, origin: "editor" });
+
+		// Reload the saved checkpoint before using it again.
+		const restored = parseProjectApproval({
+			raw: JSON.parse(JSON.stringify(editor.project.getActive().approval)),
+			parseMarkers: (raw) => normalizeMarkers({ raw }),
+		});
+		const checkpoint = restored?.checkpoints[0];
+		if (!checkpoint) throw new Error("Expected a saved checkpoint");
+		expect(checkpoint.mix?.music?.overrides).toMatchObject([
+			{ start: 5, end: 7 },
+		]);
+		expect(checkpoint.mix?.loudness).toEqual(loudness);
+
+		await updateMusic({
+			editor,
+			sequenceId,
+			options: { overrides: [], levelDb: -30 },
+		});
+		expect(reviewState({ editor }).unresolved).toContainEqual(
+			expect.objectContaining({ kind: "stale-mix" }),
+		);
+		const current = takeDeliverySnapshot({ editor });
+		saveMixLoudness({
+			editor,
+			sequenceId,
+			loudness: {
+				...loudness,
+				gainDb: 6,
+				ceilingDbtp: -2,
+				fingerprint: mixFingerprint({
+					tracks: current.scene.tracks,
+					projectItems,
+				}),
+			},
+		});
+		expect(
+			reviewState({ editor }).issues.some(({ kind }) => kind === "stale-mix"),
+		).toBe(false);
+		expect(approvedIssues({ editor, checkpoint })).toEqual([]);
+
+		const renders = recordRenders(editor);
+		const snapshot = checkpointDeliverySnapshot({ editor, checkpoint });
+		expect(
+			await editor.project.deliver({ quality: "high", snapshot }),
+		).toMatchObject({
+			success: true,
+			record: {
+				checkpointId: checkpoint.id,
+				fingerprint: approval.checkpoint.fingerprint,
+			},
+		});
+		expect(renders).toHaveLength(1);
+		expect(renders[0].scene?.master).toEqual({ gainDb: 3, ceilingDbtp: -1 });
+		expect(renders[0].scene?.tracks.audio).toEqual(
+			approval.snapshot.scene.tracks.audio,
+		);
+		expect(renders[0].scene?.tracks.audio).not.toEqual(
+			current.scene.tracks.audio,
+		);
 	});
 
 	test("refuses a render retry when the recording at the same path was replaced", async () => {
@@ -353,10 +564,14 @@ describe("Horizontal delivery", () => {
 			record: { stem: splice.published[0].stem },
 		});
 		expect(splice.published).toHaveLength(1);
-		const begins = splice.calls.filter(({ method }) => method === "exports.begin");
+		const begins = splice.calls.filter(
+			({ method }) => method === "exports.begin",
+		);
 		expect(begins).toHaveLength(2);
 		expect(begins[1].params.deliveryId).toBe(begins[0].params.deliveryId);
 		// The pair was published, so nothing more went up.
-		expect(splice.calls.filter(({ method }) => method === "exports.publish")).toHaveLength(1);
+		expect(
+			splice.calls.filter(({ method }) => method === "exports.publish"),
+		).toHaveLength(1);
 	});
 });

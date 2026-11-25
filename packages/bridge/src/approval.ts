@@ -37,6 +37,7 @@ export const ISSUE_KINDS = [
 	"caption-fast",
 	"marker-conflict",
 	"flagged",
+	"stale-mix",
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
 
@@ -112,7 +113,7 @@ export const dismissIssueRequestSchema = z.strictObject({
 /** One change between the approved checkpoint and the current edit. */
 export interface CheckpointChange {
 	kind: "added" | "removed" | "changed" | "gap";
-	what: "clip" | "marker" | "caption" | "background";
+	what: "clip" | "marker" | "caption" | "background" | "mix";
 	evidence: string;
 	/** The track, marker or caption it concerns, for people to read. */
 	label: string;

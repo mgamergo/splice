@@ -566,7 +566,6 @@ describe("review issues", () => {
 			approvedIssues({
 				editor,
 				checkpoint,
-				sequence: editor.sequences.getActiveSequence(),
 			}),
 		).toContainEqual(expect.objectContaining({ kind: "missing-footage" }));
 	});
@@ -591,7 +590,6 @@ describe("review issues", () => {
 		const approved = approvedIssues({
 			editor,
 			checkpoint,
-			sequence: current.sequence,
 		});
 		expect(current.unresolved).toEqual([]);
 		expect(approved).toContainEqual(

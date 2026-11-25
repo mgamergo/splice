@@ -14,12 +14,14 @@ import { sequenceEndSeconds } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
-import type { TCanvasSize } from "@/project/types";
+import type { TBackground, TCanvasSize } from "@/project/types";
 import {
 	pinRenderMedia,
 	recordingIdentity,
 	referencedMedia,
 } from "@/media/sequence-media";
+import { isMixLoudnessStale } from "@/mix/final-mix";
+import { tracksWithMusicDucking } from "@/mix/music";
 import { generateUUID } from "@/utils/id";
 import type { DeliveryStep } from "./index";
 
@@ -48,29 +50,64 @@ export interface DeliverySnapshot {
 	source: Omit<ExportSource, "fingerprint">;
 }
 
-export interface DeliveryInput extends Omit<DeliverySnapshot, "srt" | "source"> {
+export interface DeliveryInput extends Omit<
+	DeliverySnapshot,
+	"srt" | "source"
+> {
 	captions: ProjectCaptions | undefined;
 	source: Omit<DeliverySnapshot["source"], "cueCount">;
+}
+
+/** Builds the render inputs from the selected edit and pins its media. */
+export function deliveryScene({
+	sequence,
+	projectItems,
+	projectSources,
+	background,
+}: Parameters<typeof tracksWithMusicDucking>[0] & {
+	background: TBackground;
+}): ExportScene {
+	const loudness = sequence.mix?.loudness;
+	return {
+		tracks: tracksWithMusicDucking({ sequence, projectItems, projectSources }),
+		projectItems: pinRenderMedia({ projectItems }),
+		canvasSize: DELIVERY_FORMAT.canvasSize,
+		background,
+		master: loudness && {
+			gainDb: loudness.gainDb,
+			ceilingDbtp: loudness.ceilingDbtp,
+		},
+	};
 }
 
 /** Captures the approved edit before an export waits for anything. */
 export function captureDelivery({
 	editor,
+	approval,
 }: {
 	editor: EditorCore;
+	approval?: { acceptStaleGain: boolean };
 }): DeliveryInput {
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
+	const projectItems = editor.media.getProjectItems();
+	const projectSources = project.captions?.sources;
+	if (
+		approval &&
+		!approval.acceptStaleGain &&
+		isMixLoudnessStale({ sequence, projectItems, projectSources })
+	)
+		throw new Error(
+			"The mix changed since it was measured. Remeasure it or export with the saved gain.",
+		);
 	return {
 		deliveryId: generateUUID(),
-		scene: {
-			tracks: sequence.tracks,
-			projectItems: pinRenderMedia({
-				projectItems: editor.media.getProjectItems(),
-			}),
-			canvasSize: DELIVERY_FORMAT.canvasSize,
+		scene: deliveryScene({
+			sequence,
+			projectItems,
+			projectSources,
 			background: project.settings.background,
-		},
+		}),
 		fps: DELIVERY_FORMAT.fps,
 		captions: project.captions,
 		source: {
@@ -183,6 +220,7 @@ export async function deliveryFingerprint({
 		background: scene.background,
 		fps,
 		media: usedMedia({ scene, legacyMedia }),
+		master: scene.master,
 	};
 	const text = `${JSON.stringify(scene.tracks, withoutBuffers)}\n${JSON.stringify(render)}\n${srt}`;
 	const digest = await crypto.subtle.digest(

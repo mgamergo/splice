@@ -55,6 +55,8 @@ function errorMessage(error: unknown): string {
 export function DeliveryPopover() {
 	const editor = useEditor();
 	const project = useEditor((e) => e.project.getActive());
+	const sequence = useEditor((e) => e.sequences.getActiveSequence());
+	const projectItems = useEditor((e) => e.media.getProjectItems());
 	const exportState = useEditor((e) => e.project.getExportState());
 	const revision = useEditor((e) => e.command.getRevision());
 	// Saved spellings change the SRT without a new revision.
@@ -99,12 +101,14 @@ export function DeliveryPopover() {
 		return () => {
 			cancelled = true;
 		};
-	}, [editor, revision, spellings]);
+	}, [editor, revision, spellings, sequence, projectItems, project.captions]);
 
 	const handleExport = async (snapshot: DeliverySnapshot) => {
 		setFolderMessage(null);
 		const exported = await editor.project.deliver({ quality, snapshot });
 		if (exported.success) void refreshHistory();
+		else if (!exported.failedStep && !exported.cancelled)
+			throw new Error(exported.error ?? "Couldn't export the edit.");
 	};
 
 	const handleRetry = async () => {

@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { useEditor } from "@/editor/use-editor";
 import type { DeliverySnapshot } from "@/export/deliver";
+import { measureMixLoudness, saveMixLoudness } from "@/mix/final-mix";
 import {
 	captureApproval,
 	checkpointDeliverySnapshot,
@@ -37,6 +38,7 @@ export function ExportGate({
 	const dragging = useEditor((e) => e.timeline.isPreviewActive());
 	const [version, setVersion] = useState<Version>("current");
 	const [starting, setStarting] = useState(false);
+	const [measuring, setMeasuring] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const id = useId();
 
@@ -44,9 +46,17 @@ export function ExportGate({
 	const { checkpoint, sequence } = review;
 	const approved = version === "approved" ? checkpoint : undefined;
 	const issues = approved
-		? approvedIssues({ editor, checkpoint: approved, sequence })
+		? approvedIssues({ editor, checkpoint: approved })
 		: review.issues;
-	const blocking = issues.filter(({ dismissed }) => !dismissed);
+	const stale = issues.find(({ kind }) => kind === "stale-mix");
+	const blocking = issues.filter(
+		({ dismissed, kind }) => !dismissed && kind !== "stale-mix",
+	);
+	const assertReviewedMix = (latestIssues: typeof issues) => {
+		const latest = latestIssues.find(({ kind }) => kind === "stale-mix");
+		if (latest?.evidence !== stale?.evidence)
+			throw new Error("The mix changed. Review it before exporting.");
+	};
 	const unavailable = hasUnavailableExportMedia({
 		issues,
 		approved: !!approved,
@@ -65,10 +75,12 @@ export function ExportGate({
 				const issues = approvedIssues({
 					editor,
 					checkpoint: approved,
-					sequence,
 				});
+				assertReviewedMix(issues);
 				if (
-					issues.some(({ dismissed }) => !dismissed) ||
+					issues.some(
+						({ dismissed, kind }) => !dismissed && kind !== "stale-mix",
+					) ||
 					hasUnavailableExportMedia({ issues, approved: true })
 				)
 					throw new Error(
@@ -85,7 +97,8 @@ export function ExportGate({
 				hasUnavailableExportMedia({ issues: current.issues, approved: false })
 			)
 				throw new Error("Restore the missing recordings before exporting.");
-			if (current.unresolved.length)
+			assertReviewedMix(current.issues);
+			if (current.unresolved.some(({ kind }) => kind !== "stale-mix"))
 				throw new Error("Review the unresolved issues before exporting.");
 			const capture = captureApproval({ editor, origin: "export", cues });
 			const { snapshot } = await commitApproval({ editor, capture });
@@ -94,6 +107,29 @@ export function ExportGate({
 			setError(failure instanceof Error ? failure.message : String(failure));
 		} finally {
 			setStarting(false);
+		}
+	};
+
+	const handleRemeasure = async () => {
+		const loudness = sequence.mix?.loudness;
+		if (!loudness) return;
+		const revision = editor.command.getRevision();
+		setMeasuring(true);
+		setError(null);
+		try {
+			const measured = await measureMixLoudness({
+				editor,
+				sequenceId: sequence.id,
+				targetLufs: loudness.targetLufs,
+				ceilingDbtp: loudness.ceilingDbtp,
+			});
+			if (editor.command.getRevision() !== revision)
+				throw new Error("The edit changed while measuring. Measure it again.");
+			saveMixLoudness({ editor, sequenceId: sequence.id, loudness: measured });
+		} catch (failure) {
+			setError(failure instanceof Error ? failure.message : String(failure));
+		} finally {
+			setMeasuring(false);
 		}
 	};
 
@@ -107,7 +143,7 @@ export function ExportGate({
 					}}
 					aria-label="Which edit to export"
 					className="gap-1.5"
-					disabled={starting}
+					disabled={starting || measuring}
 				>
 					<div className="flex items-center gap-2">
 						<RadioGroupItem value="current" id={id + "-current"} />
@@ -152,6 +188,22 @@ export function ExportGate({
 					</ul>
 				</section>
 			)}
+			{stale && (
+				<div className="flex flex-col gap-1.5">
+					<p className="text-muted-foreground text-xs" role="status">
+						{stale.detail}
+					</p>
+					{!approved && (
+						<Button
+							variant="outline"
+							disabled={starting || measuring || dragging}
+							onClick={handleRemeasure}
+						>
+							{measuring ? "Measuring…" : "Remeasure mix"}
+						</Button>
+					)}
+				</div>
+			)}
 			{unavailable && (
 				<p className="text-destructive text-xs" role="status">
 					{approved
@@ -177,6 +229,7 @@ export function ExportGate({
 				className="w-full gap-2"
 				disabled={
 					starting ||
+					measuring ||
 					dragging ||
 					unavailable ||
 					(!approved && !spellings.ready) ||
@@ -188,7 +241,13 @@ export function ExportGate({
 				) : (
 					<Download className="size-4" />
 				)}
-				{approved ? "Export approved cut" : "Approve and export"}
+				{approved
+					? stale
+						? "Export approved cut with saved gain"
+						: "Export approved cut"
+					: stale
+						? "Approve and export with saved gain"
+						: "Approve and export"}
 			</Button>
 		</div>
 	);
