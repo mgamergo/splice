@@ -73,6 +73,12 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.correctCaption(params);
 		},
+		"editor.graphicsPlan": (params) => api.graphicsPlan(params),
+		"editor.graphicsApply": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.graphicsApply(params);
+		},
+		"editor.graphicsList": (params) => api.graphicsList(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>

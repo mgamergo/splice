@@ -10,6 +10,8 @@ import type { SequenceTracks } from "@/timeline/types";
 
 interface CommandHistoryEntry {
 	command: Command;
+	/** Commands that brought derived state up to date after it, undone with it. */
+	followUps: Command[];
 	sequenceId: string | undefined;
 	previousSelection: EditorSelectionSnapshot;
 	selectionOverride?: EditorSelectionSnapshot;
@@ -20,6 +22,7 @@ export class CommandManager {
 	private history: CommandHistoryEntry[] = [];
 	private redoStack: CommandHistoryEntry[] = [];
 	private reactors: Array<() => void> = [];
+	private followUpProducers: Array<() => Command | null> = [];
 	/** Increments on every execute, undo and redo, so readers can detect change. */
 	private revision = 0;
 	private revisionListeners = new Set<(revision: number) => void>();
@@ -34,10 +37,12 @@ export class CommandManager {
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
 		this.applyRippleIfEnabled({ beforeTracks });
+		const followUps = this.runFollowUps();
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
 		this.history.push({
 			command,
+			followUps,
 			sequenceId,
 			previousSelection,
 			selectionOverride,
@@ -48,10 +53,13 @@ export class CommandManager {
 	}
 
 	push({ command }: { command: Command }): void {
+		const sequenceId = this.editor.sequences.getActiveSequenceOrNull()?.id;
+		const previousSelection = this.getSelectionSnapshot();
 		this.history.push({
 			command,
-			sequenceId: this.editor.sequences.getActiveSequenceOrNull()?.id,
-			previousSelection: this.getSelectionSnapshot(),
+			followUps: this.runFollowUps(),
+			sequenceId,
+			previousSelection,
 		});
 		this.redoStack = [];
 		// The change was already applied (e.g. a committed drag preview), but it's still an edit.
@@ -62,11 +70,22 @@ export class CommandManager {
 		this.reactors.push(reactor);
 	}
 
+	/**
+	 * Registers a producer that runs after every command, redo and committed
+	 * preview. The command it returns, if any, executes at once and joins that
+	 * edit's undo step, so derived state such as placed graphics never needs
+	 * an undo of its own.
+	 */
+	registerFollowUp(produce: () => Command | null): void {
+		this.followUpProducers.push(produce);
+	}
+
 	undo(): void {
 		if (this.history.length === 0) return;
 		const entry = this.history.pop();
 		if (entry) {
 			this.activateHistorySequence({ sequenceId: entry.sequenceId });
+			for (const followUp of entry.followUps.toReversed()) followUp.undo();
 			entry.command.undo();
 			// Only restore selection for commands that explicitly changed it.
 			// Commands without selection intent leave selection untouched,
@@ -97,11 +116,13 @@ export class CommandManager {
 		const previousSelection = this.getSelectionSnapshot();
 		const result = entry.command.redo();
 		this.applyRippleIfEnabled({ beforeTracks });
+		const followUps = this.runFollowUps();
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
 
 		this.history.push({
 			command: entry.command,
+			followUps,
 			sequenceId: entry.sequenceId,
 			previousSelection,
 			selectionOverride,
@@ -182,6 +203,17 @@ export class CommandManager {
 		return this.editor.selection.applySelectionPatch({
 			patch: result.selection,
 		});
+	}
+
+	private runFollowUps(): Command[] {
+		const executed: Command[] = [];
+		for (const produce of this.followUpProducers) {
+			const command = produce();
+			if (!command) continue;
+			command.execute();
+			executed.push(command);
+		}
+		return executed;
 	}
 
 	private runReactors(): void {

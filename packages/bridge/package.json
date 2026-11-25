@@ -6,7 +6,8 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./ops": "./src/ops.ts",
-		"./delivery": "./src/delivery.ts"
+		"./delivery": "./src/delivery.ts",
+		"./graphics": "./src/graphics.ts"
 	},
 	"dependencies": {
 		"zod": "4.3.6"

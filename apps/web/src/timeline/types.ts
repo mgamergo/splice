@@ -2,6 +2,7 @@ import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
+import type { SequenceGraphics } from "@splice/bridge/graphics";
 import type { CaptionsRequest, RemovalMarkerData } from "@splice/bridge/ops";
 import type { MediaTime } from "@/wasm";
 
@@ -34,6 +35,8 @@ export interface TSequence {
 	markers: Marker[];
 	/** Transcript words and style the Captions track is rebuilt from. */
 	captions?: CaptionsRequest;
+	/** The graphics pass: each graphic's evidence, plan and the creator's changes. */
+	graphics?: SequenceGraphics;
 	createdAt: Date;
 	updatedAt: Date;
 }
@@ -126,6 +129,13 @@ interface BaseTimelineClip {
 	bestTakeMarkerIds?: string[];
 	/** Shared by a video clip and the audio extracted from it. */
 	sourceAudioGroupId?: string;
+	/** The graphics-pass graphic this clip shows: a highlight, a card or a zoom's handle. */
+	graphicId?: string;
+	/**
+	 * Zooms whose keyframes this picture clip carries. While set, the graphics
+	 * pass owns the clip's position and scale keyframes.
+	 */
+	zoomGraphicIds?: string[];
 	animations?: ClipAnimations;
 	params: ParamValues;
 }
