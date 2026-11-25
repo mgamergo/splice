@@ -140,9 +140,7 @@ test("the export decodes a noise-reduced clip's range from splice's WAV render",
 
 test("a late seek and sequential export render the same samples with one-second PCM allocations", async () => {
 	const makeBuffer: BaseAudioContext["createBuffer"] = (
-		count,
-		length,
-		sampleRate,
+		...[count, length, sampleRate]
 	) => {
 		const channels = Array.from(
 			{ length: count },
@@ -154,12 +152,12 @@ test("a late seek and sequential export render the same samples with one-second 
 			numberOfChannels: count,
 			sampleRate,
 			getChannelData: (index) => channels[index],
-			copyFromChannel: (destination, channel, start = 0) => {
+			copyFromChannel: (...[destination, channel, start = 0]) => {
 				destination.set(
 					channels[channel].subarray(start, start + destination.length),
 				);
 			},
-			copyToChannel: (source, channel, start = 0) => {
+			copyToChannel: (...[source, channel, start = 0]) => {
 				channels[channel].set(source, start);
 			},
 		};
