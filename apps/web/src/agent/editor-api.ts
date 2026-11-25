@@ -32,6 +32,7 @@ import {
 	graphicsPlanRequestSchema,
 } from "@splice/bridge/graphics";
 import {
+	GraphicPlanConflictError,
 	type GraphicPlanEntry,
 	planGraphicsPass,
 	summarizeGraphics,
@@ -42,6 +43,20 @@ import { projectFormat, projectShortStyle } from "@/project/format";
 import { layoutShort } from "@/agent/short-layout";
 import { planShortHook } from "@/agent/short-hook";
 import { shortSrt } from "@/export/short-srt";
+import {
+	hasTranscriptWords,
+	sequenceTranscript,
+} from "@/cut-transcript/sequence-transcript";
+import { useTranscriptStore } from "@/cut-transcript/store";
+import {
+	selectedSentences,
+	summarizeSelection,
+	summarizeSentence,
+} from "@/cut-transcript/transcript";
+import {
+	cutTranscriptRequestSchema,
+	transcriptSelectionRequestSchema,
+} from "@splice/bridge/transcript";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	applySourceGains,
@@ -726,18 +741,24 @@ export class EditorApi {
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const found = this.graphicsSequence(parsed.data);
 		if (found.error) return found.error;
-		const { entries, removed } = this.passResult({
-			sequence: found.sequence,
-			graphics: parsed.data.graphics,
-			prune: parsed.data.prune,
-		});
-		return {
-			ok: true as const,
-			sequenceId: found.sequence.id,
-			revision: this.getRevision(),
-			graphics: entries,
-			...(removed > 0 && { wouldRemove: removed }),
-		};
+		try {
+			const { entries, removed } = this.passResult({
+				sequence: found.sequence,
+				graphics: parsed.data.graphics,
+				prune: parsed.data.prune,
+			});
+			return {
+				ok: true as const,
+				sequenceId: found.sequence.id,
+				revision: this.getRevision(),
+				graphics: entries,
+				...(removed > 0 && { wouldRemove: removed }),
+			};
+		} catch (error) {
+			if (error instanceof GraphicPlanConflictError)
+				return this.invalidOp(error.message);
+			throw error;
+		}
 	}
 
 	/** Applies a graphics pass as one undo step. */
@@ -781,6 +802,82 @@ export class EditorApi {
 			revision: this.getRevision(),
 			graphics: summarizeGraphics({ sequence: found.sequence }),
 			deletedByCreator: found.sequence.graphics?.tombstones.length ?? 0,
+		};
+	}
+
+	/** The narration heard in a sequence, as the transcript panel shows it. */
+	async cutTranscript(request: unknown) {
+		const parsed = cutTranscriptRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const spellings = await useCaptionsStore.getState().loadSpellings();
+		const project = this.editor.project.getActiveOrNull();
+		if (!project) return this.noProject();
+		const { sequenceId } = parsed.data;
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			);
+		const revision = this.getRevision();
+		const { paragraphs } = sequenceTranscript({ project, sequence, spellings });
+		return {
+			ok: true as const,
+			sequenceId: sequence.id,
+			revision,
+			paragraphs: paragraphs.map(({ section, sentences }) => ({
+				...(section && { section }),
+				sentences: sentences.map(summarizeSentence),
+			})),
+			...(!hasTranscriptWords({ project, sequence }) && {
+				hint:
+					projectFormat({ project }) === "horizontal"
+						? "No transcript words yet. Transcribe the recordings, then run captions_add."
+						: "No transcript words yet. Transcribe the recordings, then run captions_add on this sequence.",
+			}),
+		};
+	}
+
+	/** The passage the creator selected in the transcript panel, read now. */
+	async transcriptSelection(request: unknown) {
+		const parsed = transcriptSelectionRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const spellings = await useCaptionsStore.getState().loadSpellings();
+		const project = this.editor.project.getActiveOrNull();
+		if (!project) return this.noProject();
+		const revision = this.getRevision();
+		const selection = useTranscriptStore.getState().selection;
+		const sequence =
+			selection &&
+			this.editor.sequences
+				.getSequences()
+				.find(({ id }) => id === selection.sequenceId);
+		if (!selection || !sequence)
+			return {
+				ok: true as const,
+				revision,
+				selection: null,
+				hint: "Nothing is selected. Ask the creator to select sentences in Splice's Transcript panel, or read cut_transcript.",
+			};
+		const sentences = selectedSentences({
+			sentences: sequenceTranscript({ project, sequence, spellings }).sentences,
+			...selection,
+		});
+		if (!sentences)
+			return {
+				ok: true as const,
+				revision,
+				selection: null,
+				hint: "An edit changed the passage the creator selected. Ask them to select it again.",
+			};
+		return {
+			ok: true as const,
+			revision,
+			selection: summarizeSelection({ sequence, sentences }),
+			...(sequence.id !== this.editor.sequences.getActiveSequenceOrNull()?.id && {
+				hint: "The selection is on a sequence the creator is not viewing now.",
+			}),
 		};
 	}
 
@@ -883,6 +980,15 @@ export class EditorApi {
 		};
 	}
 
+	private noProject(): EditorError {
+		return {
+			ok: false,
+			code: "NO_PROJECT",
+			message: "No project is open",
+			revision: this.getRevision(),
+		};
+	}
+
 	private invalidOp(message: string): EditorError {
 		return {
 			ok: false,
@@ -956,6 +1062,7 @@ export class EditorApi {
 			if (
 				error instanceof InvalidOpError ||
 				error instanceof TimeSpecError ||
+				error instanceof GraphicPlanConflictError ||
 				error instanceof RemovalTakeError
 			) {
 				return {

@@ -52,6 +52,7 @@ describe("splice mcp tools", () => {
 			"captions_add",
 			"captions_correct",
 			"captions_list",
+			"cut_transcript",
 			"detect_pauses",
 			"editor_status",
 			"exports_list",
@@ -75,6 +76,7 @@ describe("splice mcp tools", () => {
 			"takes_list",
 			"transcribe",
 			"transcribe_status",
+			"transcript_selection",
 		]);
 	});
 

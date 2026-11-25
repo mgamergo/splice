@@ -13,6 +13,8 @@ import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import { DeleteClipsCommand } from "@/commands/timeline/clip/delete-clips";
 import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
+import { PasteCommand } from "@/commands/timeline/clipboard/paste";
+import { ClipsClipboardHandler } from "@/clipboard/handlers/clips";
 import { isLeafChannelData } from "@/animation/channel-data";
 import { isScalarChannel } from "@/animation/interpolation";
 import type { EditorCore } from "@/core";
@@ -21,6 +23,7 @@ import { GraphicNode } from "@/services/renderer/nodes/graphic-node";
 import { TextNode } from "@/services/renderer/nodes/text-node";
 import { VideoNode } from "@/services/renderer/nodes/video-node";
 import type { TimelineClip } from "@/timeline";
+import { buildEmptyTrack } from "@/timeline/placement";
 import { mediaTimeToSeconds } from "@/wasm";
 
 let editor: EditorCore;
@@ -174,6 +177,32 @@ describe("graphics pass", () => {
 		expect(explanation?.params.params.content).toContain("Why save first");
 	});
 
+	test("a highlight uses the zoomed picture's position and scale", () => {
+		const centeredZoom = {
+			...zoom,
+			target: { x: 0.55, y: 0.45, width: 0.1, height: 0.1 },
+		};
+		expect(
+			apply({
+				planned: [
+					centeredZoom,
+					{
+						...highlight,
+						passage: { start: 11, end: 13 },
+						action: 12,
+						target: { x: 0.6, y: 0.45, width: 0.1, height: 0.1 },
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		const { params } = clipOf(highlight.key).clip;
+		expect(Number(params["transform.positionX"])).toBeCloseTo(240);
+		expect(Number(params["transform.positionY"])).toBeCloseTo(0);
+		expect(Number(params["transform.scaleX"])).toBeCloseTo(
+			((270 + 24) * (1920 / 1080)) / 1080,
+		);
+	});
+
 	test("a graphics_pass participates in atomic sequence_apply", () => {
 		const revision = api.getRevision();
 		const applyOps = (ops: unknown[]) =>
@@ -257,6 +286,73 @@ describe("graphics pass", () => {
 		editor.command.undo();
 		editor.command.redo();
 		expect(byKey(highlight.key).clipId).toBe(restoredClip);
+	});
+
+	test("a picture-only replacement covers the original action while its narration still plays", () => {
+		const planned = [
+			zoom,
+			{ ...highlight, passage: zoom.passage, action: zoom.action },
+		];
+		expect(apply({ planned })).toMatchObject({ ok: true });
+		const replacement = {
+			...buildEmptyTrack({ id: "upper", type: "video", name: "Picture" }),
+			muted: true,
+			clips: [
+				videoClip({ id: "replacement", start: 10, duration: 4, trimStart: 24 }),
+			],
+		};
+		editor.command.execute({
+			command: new UpdateSequenceCommand({
+				editor,
+				sequenceId: sequence().id,
+				label: "Replace picture",
+				updates: {
+					tracks: {
+						...sequence().tracks,
+						overlay: [replacement, ...sequence().tracks.overlay],
+					},
+				},
+			}),
+		});
+		expect(sequence().tracks.main.clips[0]).toMatchObject({
+			id: "screen",
+			duration: s(30),
+		});
+		expect(sequence().tracks.main.clips[0].zoomGraphicIds).toBeUndefined();
+		for (const { key } of planned) {
+			expect(byKey(key)).toMatchObject({
+				status: "off",
+				flags: [{ code: "action_covered" }],
+			});
+		}
+		expect(api.graphicsPlan({ graphics: planned })).toMatchObject({
+			ok: true,
+			graphics: [
+				{
+					status: "skip_not_in_cut",
+					reason: expect.stringContaining("covers"),
+				},
+				{
+					status: "skip_not_in_cut",
+					reason: expect.stringContaining("covers"),
+				},
+			],
+		});
+
+		// A translucent replacement leaves the original picture visible.
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [
+					{
+						trackId: replacement.id,
+						clipId: "replacement",
+						patch: { params: { opacity: 0.5 } },
+					},
+				],
+			}),
+		});
+		for (const { key } of planned)
+			expect(byKey(key)).toMatchObject({ status: "shown", flags: [] });
 	});
 
 	test("explicit deletion in a batch with a picture edit tombstones the graphic", () => {
@@ -396,6 +492,55 @@ describe("graphics pass", () => {
 		});
 	});
 
+	test("a rerun rejects a key that belongs to a different action", () => {
+		const other = { ...highlight, key: "highlight:export", action: 22 };
+		expect(apply({ planned: [highlight, other] })).toMatchObject({ ok: true });
+		const before = graphics();
+		const revision = api.getRevision();
+		const conflicting = { ...other, key: highlight.key };
+		const error = {
+			ok: false,
+			code: "INVALID_OP",
+			message: expect.stringContaining('Use "highlight:export"'),
+			revision,
+		};
+		expect(api.graphicsPlan({ graphics: [conflicting] })).toMatchObject(error);
+		expect(apply({ planned: [conflicting] })).toMatchObject(error);
+		expect(graphics()).toEqual(before);
+	});
+
+	test("duplicate and paste select standalone clips that survive a graphics rerun", () => {
+		expect(apply({ planned: [highlight, card] })).toMatchObject({ ok: true });
+		const selectedClips = [highlight, card].map(({ key }) => {
+			const { trackId, clip } = clipOf(key);
+			return { trackId, clipId: clip.id };
+		});
+		const clipboard = ClipsClipboardHandler.copy({ editor, selectedClips });
+		if (!clipboard) throw new Error("Expected copied clips");
+
+		const duplicates = editor.timeline.duplicateClips({ clips: selectedClips });
+		expect(duplicates).toHaveLength(2);
+		expect(editor.selection.getSelectedClips()).toEqual(duplicates);
+		const paste = new PasteCommand({
+			time: s(2),
+			clipboardItems: clipboard.items,
+		});
+		editor.command.execute({ command: paste });
+		const pasted = paste.getPastedClips();
+		expect(pasted).toHaveLength(2);
+		expect(editor.selection.getSelectedClips()).toEqual(pasted);
+
+		expect(apply({ planned: [], extra: { prune: true } })).toMatchObject({
+			ok: true,
+		});
+		expect(graphics()).toEqual([]);
+		const copies = editor.timeline.getClipsWithTracks({
+			clips: [...duplicates, ...pasted],
+		});
+		expect(copies).toHaveLength(4);
+		for (const { clip } of copies) expect(clip.graphicId).toBeUndefined();
+	});
+
 	test("a deleted graphic stays deleted on later passes", () => {
 		apply({ planned: [highlight, card] });
 		const { trackId, clip } = clipOf("highlight:save");
@@ -463,6 +608,30 @@ describe("graphics pass", () => {
 			candidate.zoomGraphicIds?.includes(byKey("zoom:settings").id),
 		);
 		expect(shows).toBeDefined();
+	});
+
+	test("a ripple cut maps only the surviving planned source range", () => {
+		const timing = { ...highlight, start: 10, end: 14, action: 13 };
+		expect(apply({ planned: [timing] })).toMatchObject({ ok: true });
+		expect(byKey(highlight.key)).toMatchObject({ start: 10, end: 14 });
+		expect(
+			api.apply({
+				sequenceId: sequence().id,
+				expectedRevision: api.getRevision(),
+				label: "Cut the start of the graphic",
+				ops: [
+					{
+						op: "ripple_delete",
+						ranges: [{ start: { seconds: 10 }, end: { seconds: 12 } }],
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		expect(byKey(highlight.key)).toMatchObject({
+			start: 10,
+			end: 12,
+			adjusted: [],
+		});
 	});
 
 	test("flags a graphic whose action a cut removes, and brings it back on undo", () => {

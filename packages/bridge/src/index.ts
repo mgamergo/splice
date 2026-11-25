@@ -44,6 +44,8 @@ export const TAB_METHODS = [
 	"editor.shortHook",
 	"editor.shortCaptionPlacement",
 	"editor.shortSrt",
+	"editor.cutTranscript",
+	"editor.transcriptSelection",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 

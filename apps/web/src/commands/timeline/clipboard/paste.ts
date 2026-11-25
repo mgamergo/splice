@@ -205,6 +205,8 @@ function buildPastedClips({
 			...item.clip,
 			bestTakeMarkerIds: undefined,
 			sourceAudioGroupId: undefined,
+			// A pasted clip is standalone, including when pasted into another sequence.
+			graphicId: undefined,
 			id: newClipId,
 			startTime,
 			animations: cloneAnimations({

@@ -13,7 +13,7 @@ import {
 	type ProjectCaptions,
 	type Replacement,
 } from "@splice/bridge/delivery";
-import { mapWordsToTimeline } from "@/agent/captions";
+import { type ClipWordCache, mapWordsToTimeline } from "@/agent/captions";
 import type { SequenceTracks } from "@/timeline/types";
 
 /** YouTube and broadcast guidance: two lines of at most 42 characters. */
@@ -33,7 +33,7 @@ const MIN_SPLIT_CHARS = 24;
 /** Cues starting this close together are shown as one (stacked word times). */
 const SAME_START_SECONDS = 0.05;
 
-const SENTENCE_END = /[.!?…]["'’”)\]]*$/u;
+export const SENTENCE_END = /[.!?…]["'’”)\]]*$/u;
 const CLAUSE_END = /[,;:—–]["'’”)\]]*$/u;
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu;
 /** Words a phrase can start with, so a long cue may break before them. */
@@ -74,7 +74,7 @@ export interface CuePart {
  * with the clip it is heard through, and the parts its text is made of.
  */
 export interface CaptionCue extends CaptionCueSummary {
-	words: CaptionWordRef[];
+	words: Required<CaptionWordRef>[];
 	parts: CuePart[];
 }
 
@@ -82,7 +82,7 @@ export interface CaptionCue extends CaptionCueSummary {
 interface Token extends CuePart {
 	start: number;
 	end: number;
-	words: CaptionWordRef[];
+	words: CaptionCue["words"];
 	/** A cue the creator corrected stays a cue of its own. */
 	wholeCue?: boolean;
 }
@@ -421,6 +421,7 @@ export function buildCaptionCues({
 	spellings = [],
 	sequenceEnd,
 	sequenceId,
+	wordCache,
 }: {
 	tracks: SequenceTracks;
 	captions: ProjectCaptions | undefined;
@@ -429,11 +430,16 @@ export function buildCaptionCues({
 	sequenceEnd: number;
 	/** The sequence the tracks belong to; cue edits made on others don't apply. */
 	sequenceId?: string;
+	wordCache?: ClipWordCache;
 }): CaptionCue[] {
-	if (!captions?.sources.length) return [];
+	if (!captions?.sources.length) {
+		wordCache?.clear();
+		return [];
+	}
 	let tokens: Token[] = mapWordsToTimeline({
 		tracks,
 		sources: captions.sources,
+		wordCache,
 	})
 		.filter(({ start }) => start < sequenceEnd)
 		.map(({ start, end, text, ref, clipId }) => ({

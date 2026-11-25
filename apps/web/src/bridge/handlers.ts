@@ -93,6 +93,8 @@ export function createTabHandlers({
 			return api.setShortCaptionPlacement(params);
 		},
 		"editor.shortSrt": () => api.shortCaptionSrt(),
+		"editor.cutTranscript": (params) => api.cutTranscript(params),
+		"editor.transcriptSelection": (params) => api.transcriptSelection(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>

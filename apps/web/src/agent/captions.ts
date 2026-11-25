@@ -63,6 +63,19 @@ export interface TimelineWord {
 }
 
 type SourceClip = VideoClip | AudioClip;
+type SourceWords = CaptionsRequest["sources"][number]["words"];
+type ClipWord = Pick<TimelineWord, "start" | "end" | "text"> & { index: number };
+
+interface CachedClipWords {
+	sourceWords: SourceWords;
+	trimStart: SourceClip["trimStart"];
+	duration: SourceClip["duration"];
+	rate: number | undefined;
+	words: ClipWord[];
+}
+
+/** One mapping per clip, in clip-relative time so it survives a move. */
+export type ClipWordCache = Map<string, CachedClipWords>;
 
 /**
  * The clips whose sound carries each recording's words: video with its own
@@ -82,82 +95,127 @@ function sourceClips({ tracks }: { tracks: SequenceTracks }) {
 				(clip.type === "video" && clip.isSourceAudioEnabled === false)
 			)
 				continue;
-			byItem.set(clip.mediaId, [...(byItem.get(clip.mediaId) ?? []), clip]);
+			const clips = byItem.get(clip.mediaId);
+			if (clips) clips.push(clip);
+			else byItem.set(clip.mediaId, [clip]);
 		}
 	}
 	return byItem;
 }
 
+/** Keeps the words whose midpoints fall in the clip's source range. */
+function wordsInClip({
+	clip,
+	sourceWords,
+}: {
+	clip: SourceClip;
+	sourceWords: SourceWords;
+}): ClipWord[] {
+	const trimStart = mediaTimeToSeconds({ time: clip.trimStart });
+	const duration = mediaTimeToSeconds({ time: clip.duration });
+	const sourceOut =
+		trimStart +
+		mediaTimeToSeconds({
+			time: roundMediaTime({
+				time: getSourceSpanAtClipTime({
+					clipTime: clip.duration,
+					retime: clip.retime,
+				}),
+			}),
+		});
+	const toClipTime = (sourceSeconds: number) =>
+		mediaTimeToSeconds({
+			time: roundMediaTime({
+				time: getClipTimeAtSourceTime({
+					sourceTime: mediaTimeFromSeconds({
+						seconds: sourceSeconds - trimStart,
+					}),
+					retime: clip.retime,
+				}),
+			}),
+		});
+	const words: ClipWord[] = [];
+	for (let index = 0; index < sourceWords.length; index++) {
+		const word = sourceWords[index];
+		const wordEnd =
+			word.end > word.start ? word.end : word.start + MIN_WORD_SECONDS;
+		const middle = (word.start + wordEnd) / 2;
+		if (middle < trimStart || middle >= sourceOut) continue;
+		const text = word.text.trim();
+		if (!text) continue;
+		const start = Math.max(0, toClipTime(Math.max(word.start, trimStart)));
+		const end = Math.min(duration, toClipTime(Math.min(wordEnd, sourceOut)));
+		if (end > start) words.push({ start, end, text, index });
+	}
+	return words;
+}
+
 /**
  * Places each transcript word on the timeline through the clips that show its
- * source time. A word appears once per clip that keeps its midpoint, so words
- * in cut ranges drop out and repeated source ranges caption every repeat.
+ * source time. Repeated source ranges caption every repeat.
  */
 export function mapWordsToTimeline({
 	tracks,
 	sources,
+	wordCache,
 }: {
 	tracks: SequenceTracks;
 	sources: CaptionsRequest["sources"];
+	wordCache?: ClipWordCache;
 }): TimelineWord[] {
 	const clipsByItem = sourceClips({ tracks });
 	const words: TimelineWord[] = [];
+	const usedClips = new Set<string>();
 	// The same word heard from two clips at one time (e.g. a copy on another
 	// track) is captioned once.
 	const seen = new Set<string>();
 	for (const { projectItemId, words: sourceWords } of sources) {
 		for (const clip of clipsByItem.get(projectItemId) ?? []) {
-			const trimStart = mediaTimeToSeconds({ time: clip.trimStart });
-			const clipStart = mediaTimeToSeconds({ time: clip.startTime });
-			const clipEnd = clipStart + mediaTimeToSeconds({ time: clip.duration });
-			const sourceOut =
-				trimStart +
-				mediaTimeToSeconds({
-					time: roundMediaTime({
-						time: getSourceSpanAtClipTime({
-							clipTime: clip.duration,
-							retime: clip.retime,
-						}),
-					}),
-				});
-			const toTimeline = (sourceSeconds: number) =>
-				clipStart +
-				mediaTimeToSeconds({
-					time: roundMediaTime({
-						time: getClipTimeAtSourceTime({
-							sourceTime: mediaTimeFromSeconds({
-								seconds: sourceSeconds - trimStart,
-							}),
-							retime: clip.retime,
-						}),
-					}),
-				});
-			for (const [index, word] of sourceWords.entries()) {
-				const text = word.text.trim();
-				const wordEnd =
-					word.end > word.start ? word.end : word.start + MIN_WORD_SECONDS;
-				const middle = (word.start + wordEnd) / 2;
-				if (!text || middle < trimStart || middle >= sourceOut) continue;
-				const start = Math.max(
-					clipStart,
-					toTimeline(Math.max(word.start, trimStart)),
-				);
-				const end = Math.min(clipEnd, toTimeline(Math.min(wordEnd, sourceOut)));
-				const key = `${projectItemId}:${index}:${Math.round(start * 1000)}`;
-				if (end > start && !seen.has(key)) {
-					seen.add(key);
-					words.push({
-						start,
-						end,
-						text,
-						ref: { projectItemId, index },
-						sourceRange: { start: word.start, end: word.end },
-						clipId: clip.id,
+			const { id, trimStart, duration, retime } = clip;
+			const rate = retime?.rate;
+			const cached = wordCache?.get(id);
+			const clipWords =
+				cached?.sourceWords === sourceWords &&
+				cached.trimStart === trimStart &&
+				cached.duration === duration &&
+				cached.rate === rate
+					? cached.words
+					: wordsInClip({ clip, sourceWords });
+			if (wordCache) {
+				usedClips.add(id);
+				if (cached?.words !== clipWords)
+					wordCache.set(id, {
+						sourceWords,
+						trimStart,
+						duration,
+						rate,
+						words: clipWords,
 					});
-				}
+			}
+			const clipStart = mediaTimeToSeconds({ time: clip.startTime });
+			for (const word of clipWords) {
+				const start = clipStart + word.start;
+				const end = clipStart + word.end;
+				const key = `${projectItemId}:${word.index}:${Math.round(start * 1000)}`;
+				if (end <= start || seen.has(key)) continue;
+				seen.add(key);
+				words.push({
+					start,
+					end,
+					text: word.text,
+					ref: { projectItemId, index: word.index },
+					sourceRange: {
+						start: sourceWords[word.index].start,
+						end: sourceWords[word.index].end,
+					},
+					clipId: clip.id,
+				});
 			}
 		}
 	}
+	if (wordCache)
+		for (const id of wordCache.keys())
+			if (!usedClips.has(id)) wordCache.delete(id);
 	return words.sort((a, b) => a.start - b.start);
 }
 

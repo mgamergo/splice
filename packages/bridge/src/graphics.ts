@@ -232,6 +232,7 @@ const graphicOverridesSchema = graphicValuesSchema.partial().extend({
 
 export const GRAPHIC_FLAG_CODES = [
 	"action_missing",
+	"action_covered",
 	"passage_changed",
 	"zoom_conflict",
 	"timing_outside_picture",
@@ -262,6 +263,10 @@ export const graphicRecordSchema = z.strictObject({
 		time: sourceSeconds,
 	}),
 	target: targetRectSchema.optional(),
+	/** Planned display interval in source seconds, before any creator timing edits. */
+	sourceInterval: z
+		.strictObject({ start: sourceSeconds, end: z.number().finite() })
+		.optional(),
 	/** What the agent planned. */
 	planned: graphicValuesSchema,
 	overrides: graphicOverridesSchema,
