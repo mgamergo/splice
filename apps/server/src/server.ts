@@ -50,6 +50,8 @@ import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
 import { createExportStore, type OpenFolder } from "./exports";
+import { createProfileAgent } from "./profile-agent";
+import { createProfileProviders } from "./profile-provider";
 import { createProfileStore } from "./profile";
 import { createStyleProfile } from "./style-profile";
 import { createSpellingStore } from "./spellings";
@@ -182,7 +184,7 @@ export function startServer({
 	idleTimeoutSeconds = 120,
 	openFolder,
 }: StartServerOptions): RunningServer {
-	const bridge = new TabBridge();
+	const bridge: TabBridge = new TabBridge(() => profileAgent.activity());
 	const cacheUse = createCacheUse();
 	const transcription = createTranscriptionJobs({ root, cacheUse });
 	const pauses = createPauseDetector({
@@ -196,14 +198,39 @@ export function startServer({
 	const storage = createStorage({ root, cacheUse, exportStore });
 	const spellings = createSpellingStore({ root });
 	const profile = createProfileStore({ root });
+	const providers = createProfileProviders({ root });
+	const profileAgent = createProfileAgent({
+		store: profile,
+		getProvider: providers.get,
+		isConnected: () => bridge.isConnected(),
+	});
 	const style = createStyleProfile({ root });
 	/** What the editor tab may ask of `splice` itself. */
 	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
 		"footage.list": () => listFootage({ root }),
 		"transcript.words": (params) => transcription.words(params),
-		"profile.capture": (params) => profile.capture(params),
+		"profile.capture": async (params) => {
+			const result = await profile.capture(params);
+			profileAgent.workAvailable();
+			return result;
+		},
+		"profile.panel": profile.panel,
+		"profile.revert": profile.revert,
+		"profile.question": profile.question,
+		"profile.respond": async (params) => {
+			await profile.respond(params);
+			profileAgent.workAvailable();
+			return null;
+		},
+		"profile.settings": providers.settings,
+		"profile.saveSettings": async (params) => {
+			const settings = await providers.save(params);
+			profileAgent.settingsChanged();
+			return settings;
+		},
 		"style.defaults": style.defaults,
 		"framing.list": style.listFraming,
+		"framing.revert": style.revertFraming,
 		"framing.reconcile": style.reconcileFraming,
 		"spellings.list": () => spellings.list(),
 		"spellings.save": (params) => spellings.save(params),
@@ -876,6 +903,7 @@ export function startServer({
 		},
 	});
 
+	const profileTimer = setInterval(() => void profileAgent.tick(), 2_000);
 	void profile.initialize().catch((error) => {
 		console.error("Couldn't initialize the editing profile:", error);
 	});
@@ -887,6 +915,8 @@ export function startServer({
 		async stop() {
 			// Not awaited: in Bun 1.2 the promise never settles once a WebSocket has connected.
 			void server.stop(true);
+			clearInterval(profileTimer);
+			await profileAgent.stop();
 			await Promise.all([
 				pauses.stop(),
 				transcription.stop(),

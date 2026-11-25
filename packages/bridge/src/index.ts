@@ -93,6 +93,8 @@ export function isServerMethod(method: string): method is ServerMethod {
 export const TAB_HELLO = "tab.hello";
 /** Notification from the tab whenever its command revision changes. */
 export const STATE_CHANGED = "state.changed";
+/** Notification when the creator interacts with the editor. */
+export const EDITOR_ACTIVITY = "editor.activity";
 
 /** A project's format, chosen when it's created. */
 export const SHORT_STYLES = ["explainer", "raw"] as const;

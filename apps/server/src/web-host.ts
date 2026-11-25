@@ -62,11 +62,13 @@ export function startWebHost({
 		"--port",
 		String(port),
 	];
+	const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(port) };
+	delete env.SPLICE_PROFILE_API_KEY;
 	const child: Subprocess = Bun.spawn(args, {
 		cwd: webDir,
 		stdout: "inherit",
 		stderr: "inherit",
-		env: { ...process.env, PORT: String(port) },
+		env,
 	});
 
 	let ready = false;

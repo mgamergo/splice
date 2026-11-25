@@ -119,3 +119,52 @@ export const profileApplySchema = z.strictObject({
 			"A new UUID for this update. Reuse it with identical arguments when retrying.",
 		),
 });
+
+export const profileQuestionSchema = z.strictObject({
+	id: z.uuid(),
+	text: z.string().trim().min(1).max(500),
+});
+
+export const profileQuestionResponseSchema = z.discriminatedUnion("kind", [
+	z.strictObject({ kind: z.literal("dismiss"), id: z.uuid() }),
+	z.strictObject({
+		kind: z.literal("answer"),
+		id: z.uuid(),
+		answer: z.string().trim().min(1).max(2_000),
+	}),
+]);
+
+export const profileUpdateSummarySchema = z.strictObject({
+	id: z.uuid(),
+	timestamp: z.iso.datetime(),
+	correctionCount: z.number().int().nonnegative(),
+	answerCount: z.number().int().nonnegative(),
+	reverts: z.uuid().optional(),
+	canRevert: z.boolean(),
+	conflicts: z.array(z.uuid()).default([]),
+});
+
+export const profilePanelSchema = z.strictObject({
+	text: z.string(),
+	updates: z.array(profileUpdateSummarySchema),
+});
+
+export const profileProviderSchema = z.discriminatedUnion("kind", [
+	z.strictObject({ kind: z.literal("off") }),
+	z.strictObject({
+		kind: z.literal("api"),
+		model: z.string().trim().min(1).max(200),
+	}),
+	z.strictObject({
+		kind: z.literal("cli"),
+		command: z.enum(["codex", "claude"]),
+		allowNonInteractive: z.literal(true),
+	}),
+]);
+export type ProfileProviderSettings = z.infer<typeof profileProviderSchema>;
+
+export const profileSettingsSchema = z.strictObject({
+	provider: profileProviderSchema,
+	hasApiKey: z.boolean(),
+	apiAvailable: z.boolean(),
+});
