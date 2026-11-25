@@ -10,7 +10,8 @@
 		"./graphics": "./src/graphics.ts",
 		"./approval": "./src/approval.ts",
 		"./mix": "./src/mix.ts",
-		"./transcript": "./src/transcript.ts"
+		"./transcript": "./src/transcript.ts",
+		"./style": "./src/style.ts"
 	},
 	"dependencies": {
 		"zod": "4.3.6"

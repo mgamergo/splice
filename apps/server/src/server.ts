@@ -50,6 +50,7 @@ import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
 import { createExportStore, type OpenFolder } from "./exports";
+import { createStyleProfile } from "./style-profile";
 import { createSpellingStore } from "./spellings";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
@@ -188,10 +189,14 @@ export function startServer({
 	const loudness = createLoudnessMeter({ root, noiseReduction });
 	const exportStore = createExportStore({ root, openFolder });
 	const spellings = createSpellingStore({ root });
+	const style = createStyleProfile({ root });
 	/** What the editor tab may ask of `splice` itself. */
 	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
 		"footage.list": () => listFootage({ root }),
 		"transcript.words": (params) => transcription.words(params),
+		"style.defaults": style.defaults,
+		"framing.list": style.listFraming,
+		"framing.record": style.recordFraming,
 		"spellings.list": () => spellings.list(),
 		"spellings.save": (params) => spellings.save(params),
 		"spellings.remove": (params) => spellings.remove(params),
@@ -213,6 +218,10 @@ export function startServer({
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
 		["noiseReduction.render", (request) => noiseReduction.render(request)],
+		["style.defaults", style.defaults],
+		["style.setDefaults", ({ params }) => style.setDefaults(params)],
+		["framing.list", style.listFraming],
+		["framing.revert", ({ params }) => style.revertFraming(params)],
 		["exports.list", ({ params }) => exportStore.list(params)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
