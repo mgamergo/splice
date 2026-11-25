@@ -700,9 +700,14 @@ export class ProjectManager {
 				} catch (error) {
 					const failedStep =
 						error instanceof DeliveryError ? error.step : "publish";
-					// Publishing consumes the staging whatever happens, and may have
-					// published with its answer lost. Retry asks begin, which knows.
-					if (failedStep === "publish") delivery.staged = null;
+					// A cancel drops the delivery, so its staging goes too. A publish
+					// may have gone through with its answer lost: drop the staging
+					// (splice ignores the abort once publishing owns it) and let Retry
+					// ask begin, which knows. A failed SRT write keeps it for Retry.
+					if (signal.aborted || failedStep === "publish") {
+						abortDelivery({ exportId: delivery.staged });
+						delivery.staged = null;
+					}
 					if (signal.aborted) return { success: false, cancelled: true };
 					return {
 						success: false,

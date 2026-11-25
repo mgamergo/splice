@@ -216,7 +216,8 @@ pub fn render_frame(options: JsValue) -> Result<(), JsValue> {
                 result
             } else {
                 // WebGL still needs a separate composition pass, but the output
-                // surface is now persistent just like the WebGPU path.
+                // surface is now persistent just like the WebGPU path. The pooled
+                // texture is presented before the next render can reuse it.
                 let t_composite = perf::now_ms();
                 let texture = runtime
                     .compositor

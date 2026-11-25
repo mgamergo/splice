@@ -24,9 +24,8 @@ export interface DecodedFrame {
 }
 
 /**
- * Decoded frames kept open per video. A render reads a frame some time after
- * the cache handed it out, and the decoder stalls if too many stay open, so
- * the oldest closes once this many newer ones exist.
+ * Decoded frames the cache keeps open per video; the decoder stalls if too
+ * many stay open. A frame a render still holds closes when it lets go.
  */
 const OPEN_FRAMES = 4;
 
@@ -36,7 +35,7 @@ interface VideoSinkData {
 	iterator: AsyncGenerator<DecodedFrame, void, unknown> | null;
 	currentFrame: DecodedFrame | null;
 	nextFrame: DecodedFrame | null;
-	/** Frames handed out, oldest first; closed as newer ones arrive. */
+	/** Frames decoded, oldest first; retired as newer ones arrive. */
 	open: VideoFrame[];
 	/** Finds the key frame a seek can show at once. */
 	packets: EncodedPacketSink;
@@ -56,10 +55,11 @@ interface VideoSinkData {
  */
 function frameSource({
 	track,
-	open,
+	admit,
 }: {
 	track: InputVideoTrack;
-	open: VideoFrame[];
+	/** Takes ownership of each decoded frame. */
+	admit: (frame: VideoFrame) => void;
 }): VideoSinkData["frames"] {
 	if (track.rotation !== 0 || typeof VideoFrame === "undefined") {
 		const sink = new CanvasSink(track, { poolSize: OPEN_FRAMES, fit: "contain" });
@@ -80,8 +80,7 @@ function frameSource({
 			} finally {
 				sample.close();
 			}
-			open.push(frame);
-			while (open.length > OPEN_FRAMES) open.shift()?.close();
+			admit(frame);
 			yield {
 				source: frame,
 				width: frame.displayWidth,
@@ -100,9 +99,55 @@ export class VideoCache {
 	private initPromises = new Map<string, Promise<void>>();
 	private frameChain = new Map<string, Promise<unknown>>();
 	private seekGenerations = new Map<string, number>();
+	/** How many renders hold each frame handed out. */
+	private leases = new Map<VideoFrame, number>();
+	/** Frames the cache let go of while a render still held them. */
+	private retired = new Set<VideoFrame>();
 
 	constructor({ signal }: { signal?: AbortSignal } = {}) {
 		this.signal = signal;
+	}
+
+	/**
+	 * Lets go of a frame `getFrameAt` returned, once the render has uploaded or
+	 * drawn it. Every frame it returns must be released exactly once.
+	 */
+	release(frame: DecodedFrame | null): void {
+		if (!frame || !(frame.source instanceof VideoFrame)) return;
+		const source = frame.source;
+		const held = (this.leases.get(source) ?? 0) - 1;
+		if (held > 0) {
+			this.leases.set(source, held);
+			return;
+		}
+		this.leases.delete(source);
+		if (this.retired.delete(source)) source.close();
+	}
+
+	private lease(frame: DecodedFrame | null): DecodedFrame | null {
+		if (frame?.source instanceof VideoFrame)
+			this.leases.set(frame.source, (this.leases.get(frame.source) ?? 0) + 1);
+		return frame;
+	}
+
+	/** Closes a frame the cache no longer keeps, or once its last render lets go. */
+	private retire(frame: VideoFrame): void {
+		if (this.leases.has(frame)) this.retired.add(frame);
+		else frame.close();
+	}
+
+	private admit({
+		sinkData,
+		frame,
+	}: {
+		sinkData: VideoSinkData;
+		frame: VideoFrame;
+	}): void {
+		sinkData.open.push(frame);
+		while (sinkData.open.length > OPEN_FRAMES) {
+			const oldest = sinkData.open.shift();
+			if (oldest) this.retire(oldest);
+		}
 	}
 
 	/**
@@ -133,6 +178,7 @@ export class VideoCache {
 		 */
 		keyFrameFirst?: boolean;
 	}): Promise<DecodedFrame | null> {
+		// Release the frame after rendering it: see `release`.
 		await this.ensureSink({ mediaId, file });
 
 		const sinkData = this.sinks.get(mediaId);
@@ -144,12 +190,14 @@ export class VideoCache {
 		const isCurrent = () => this.seekGenerations.get(mediaId) === generation;
 
 		const previous = this.frameChain.get(mediaId) ?? Promise.resolve();
-		const current = previous.then(() => {
-			if (!isCurrent()) {
-				return sinkData.currentFrame ?? null;
-			}
-			return this.resolveFrame({ sinkData, time, isCurrent, keyFrameFirst });
-		});
+		// The lease is taken before the next request for this video can retire it.
+		const current = previous.then(async () =>
+			this.lease(
+				isCurrent()
+					? await this.resolveFrame({ sinkData, time, isCurrent, keyFrameFirst })
+					: (sinkData.currentFrame ?? null),
+			),
+		);
 		this.frameChain.set(
 			mediaId,
 			current.catch(() => {}),
@@ -169,16 +217,13 @@ export class VideoCache {
 		isCurrent: () => boolean;
 		keyFrameFirst: boolean;
 	}): Promise<DecodedFrame | null> {
-		const frame = await this.findFrame({
+		const { frame, approximate } = await this.findFrame({
 			sinkData,
 			time,
 			isCurrent: keyFrameFirst ? isCurrent : () => true,
 			keyFrameFirst,
 		});
-		sinkData.refining =
-			frame && keyFrameFirst && !this.isFrameValid({ frame, time })
-				? time
-				: null;
+		sinkData.refining = frame && approximate ? time : null;
 		return frame;
 	}
 
@@ -193,7 +238,7 @@ export class VideoCache {
 		/** Iteration stops early, showing what it has, once this is false. */
 		isCurrent: () => boolean;
 		keyFrameFirst: boolean;
-	}): Promise<DecodedFrame | null> {
+	}): Promise<{ frame: DecodedFrame | null; approximate: boolean }> {
 		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
 			sinkData.currentFrame = sinkData.nextFrame;
 			sinkData.nextFrame = null;
@@ -207,15 +252,15 @@ export class VideoCache {
 			if (!sinkData.nextFrame && !sinkData.prefetching) {
 				this.startPrefetch({ sinkData });
 			}
-			return sinkData.currentFrame;
+			return { frame: sinkData.currentFrame, approximate: false };
 		}
 
-		// Decoding on is cheaper than a seek within two seconds, and always is
-		// from the key frame a key-frame-first seek showed for this time.
+		// Decoding on is cheaper than a seek within two seconds. After a
+		// key-frame-first seek it is also how the exact frame arrives, and how
+		// playback that starts there moves on through the rest of the GOP.
+		const refining = sinkData.refining;
 		const continuing =
-			sinkData.refining !== null &&
-			time >= sinkData.lastTime &&
-			time <= sinkData.refining;
+			refining !== null && time >= sinkData.lastTime && time < refining + 2.0;
 		if (
 			sinkData.iterator &&
 			sinkData.currentFrame &&
@@ -231,17 +276,24 @@ export class VideoCache {
 				if (!sinkData.nextFrame && !sinkData.prefetching) {
 					this.startPrefetch({ sinkData });
 				}
-				return frame;
+				// Short of the target only when a newer request cut it off.
+				return { frame, approximate: !this.isFrameValid({ frame, time }) };
 			}
 		}
 
-		const frame = keyFrameFirst
+		// Refining that ran out (a gap in the video, or its end) finishes with an
+		// exact seek rather than starting from the same key frame again.
+		const keyFrame = keyFrameFirst && !continuing;
+		const frame = keyFrame
 			? await this.seekToKeyFrame({ sinkData, time })
 			: await this.seekToTime({ sinkData, time });
 		if (frame && !sinkData.nextFrame && !sinkData.prefetching) {
 			this.startPrefetch({ sinkData });
 		}
-		return frame;
+		return {
+			frame,
+			approximate: !!frame && keyFrame && !this.isFrameValid({ frame, time }),
+		};
 	}
 
 	private isFrameValid({
@@ -441,11 +493,13 @@ export class VideoCache {
 				throw new Error("Video codec not supported for decoding");
 			}
 
-			const open: VideoFrame[] = [];
-			this.sinks.set(mediaId, {
+			const sinkData: VideoSinkData = {
 				input,
-				frames: frameSource({ track: videoTrack, open }),
-				open,
+				frames: frameSource({
+					track: videoTrack,
+					admit: (frame) => this.admit({ sinkData, frame }),
+				}),
+				open: [],
 				packets: new EncodedPacketSink(videoTrack),
 				refining: null,
 				requestedAt: 0,
@@ -455,7 +509,8 @@ export class VideoCache {
 				lastTime: -1,
 				prefetching: false,
 				prefetchPromise: null,
-			});
+			};
+			this.sinks.set(mediaId, sinkData);
 		} catch (error) {
 			input.dispose();
 			if (this.signal?.aborted) throw error;
@@ -472,7 +527,7 @@ export class VideoCache {
 			}
 
 			sinkData.input.dispose();
-			for (const frame of sinkData.open.splice(0)) frame.close();
+			for (const frame of sinkData.open.splice(0)) this.retire(frame);
 			this.sinks.delete(mediaId);
 		}
 

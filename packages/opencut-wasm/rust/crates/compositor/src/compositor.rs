@@ -295,6 +295,10 @@ impl Compositor {
 
     /// Composites all frame items into a texture and returns it.
     /// Used on backends that cannot surface-render to an arbitrary canvas (e.g. WebGL).
+    ///
+    /// The texture comes from the compositor's pool, and the next render of the
+    /// same size draws into it again: use or copy it before rendering another
+    /// frame. The WASM `renderFrame` presents it straight away.
     pub fn render_frame_to_texture(
         &mut self,
         context: &GpuContext,
@@ -498,6 +502,10 @@ impl Compositor {
     ) -> Result<wgpu::Texture, CompositorError> {
         let mut current = self.copy_texture(context, encoder, source, width, height);
         for group in effect_pass_groups {
+            // A zero-strength blur has no passes; it leaves the image as it is.
+            if group.is_empty() {
+                continue;
+            }
             let passes = map_effect_passes(group);
             current = self.effects.apply_with_encoder(
                 context,

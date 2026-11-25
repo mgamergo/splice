@@ -228,16 +228,19 @@ try {
 				const cache = new Cache();
 				const read = (time: number) =>
 					cache.getFrameAt({ mediaId: item.id, file: item.file, time, keyFrameFirst });
-				await read(0);
+				cache.release(await read(0));
 				const firstMs: number[] = [];
 				const exactMs: number[] = [];
 				for (const time of targets) {
 					const started = performance.now();
 					let frame = await read(time);
 					firstMs.push(performance.now() - started);
-					while (frame && !(time >= frame.timestamp && time < frame.timestamp + frame.duration))
+					while (frame && !(time >= frame.timestamp && time < frame.timestamp + frame.duration)) {
+						cache.release(frame);
 						frame = await read(time);
+					}
 					exactMs.push(performance.now() - started);
+					cache.release(frame);
 				}
 				cache.clearAll();
 				const mean = (values: number[]) =>

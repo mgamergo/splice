@@ -4,7 +4,11 @@ import { createCanvasSurface } from "./canvas-utils";
 import { buildFrameDescriptor } from "./compositor/frame-descriptor";
 import { wasmCompositor } from "./compositor/wasm-compositor";
 import { resolveRenderTree } from "./resolve";
-import { VideoCache, videoCache } from "@/services/video-cache/service";
+import {
+	type DecodedFrame,
+	VideoCache,
+	videoCache,
+} from "@/services/video-cache/service";
 import {
 	measureSpanAsync,
 	measureSpanSync,
@@ -75,9 +79,27 @@ export class CanvasRenderer {
 	}
 
 	async render({ node, time }: { node: AnyBaseNode; time: number }) {
+		const frames: DecodedFrame[] = [];
+		try {
+			await this.draw({ node, time, frames });
+		} finally {
+			// The compositor has copied the frames, or the render failed.
+			for (const frame of frames) this.videoCache.release(frame);
+		}
+	}
+
+	private async draw({
+		node,
+		time,
+		frames,
+	}: {
+		node: AnyBaseNode;
+		time: number;
+		frames: DecodedFrame[];
+	}) {
 		await measureSpanAsync({
 			name: "resolve",
-			fn: () => resolveRenderTree({ node, renderer: this, time }),
+			fn: () => resolveRenderTree({ node, renderer: this, time, frames }),
 		});
 		const { frame, textures } = await measureSpanAsync({
 			name: "buildFrame",

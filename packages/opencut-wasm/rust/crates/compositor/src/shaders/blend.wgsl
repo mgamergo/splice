@@ -132,7 +132,9 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4f {
     let base = textureSample(base_texture, base_sampler, input.tex_coord);
     let layer = textureSample(layer_texture, layer_sampler, input.tex_coord);
 
-    let blend_rgb_value = blend_rgb(base.rgb, layer.rgb, uniforms.blend_mode);
+    // The scene is premultiplied; blend modes are defined on straight colour.
+    let straight_base = select(vec3f(0.0), base.rgb / base.a, base.a > 0.0);
+    let blend_rgb_value = blend_rgb(straight_base, layer.rgb, uniforms.blend_mode);
     let out_alpha = layer.a + base.a * (1.0 - layer.a);
     let out_rgb =
         ((1.0 - layer.a) * base.rgb) +

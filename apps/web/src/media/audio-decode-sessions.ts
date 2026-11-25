@@ -144,11 +144,17 @@ export function createAudioDecodeSessions({
 			session.iterator = sink.buffers(window.start);
 		}
 
-		while (!session.ended && decodedEnd(session) < range.end) {
-			signal?.throwIfAborted();
-			const next = await session.iterator!.next();
-			if (next.done) session.ended = true;
-			else session.chunks.push(next.value);
+		try {
+			while (!session.ended && decodedEnd(session) < range.end) {
+				signal?.throwIfAborted();
+				const next = await session.iterator!.next();
+				if (next.done) session.ended = true;
+				else session.chunks.push(next.value);
+			}
+		} catch (error) {
+			// mediabunny's decoder stays failed; the next read opens the file afresh.
+			if (sessions.get(key) === pending) close(key);
+			throw error;
 		}
 		signal?.throwIfAborted();
 
