@@ -183,12 +183,17 @@ describe("splice mcp tools", () => {
 				nextCursor: null,
 			});
 			const text = "# Keep longer breaths";
+			const metadata = tools.find(({ name }) => name === "profile_apply");
+			expect(metadata?.inputSchema.required).toEqual(
+				expect.arrayContaining(["expectedVersion", "operationId"]),
+			);
 			const applied = await client.callTool({
 				name: "profile_apply",
 				arguments: {
 					text,
 					correctionIds: [id],
 					expectedVersion: profile.version,
+					operationId: crypto.randomUUID(),
 				},
 			});
 			expect(JSON.parse(textOf(applied))).toMatchObject({

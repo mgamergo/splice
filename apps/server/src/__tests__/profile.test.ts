@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { Correction } from "@splice/bridge/profile";
+import type { Correction, CorrectionStatusEvent } from "@splice/bridge/profile";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,6 +100,7 @@ test("applies exactly the reviewed IDs and records the previous Markdown", async
 		text,
 		correctionIds: [first.id],
 		expectedVersion: original.version,
+		operationId: randomUUID(),
 	});
 	expect(update.applied).toBe(1);
 	expect(await read("profile.md")).toBe(text);
@@ -116,10 +117,16 @@ test("applies exactly the reviewed IDs and records the previous Markdown", async
 			text,
 			correctionIds: [second.id],
 			expectedVersion: original.version,
+			operationId: randomUUID(),
 		}),
 	).rejects.toThrow("profile changed");
 	await expect(
-		store.apply({ text, correctionIds: [first.id, second.id] }),
+		store.apply({
+			text,
+			correctionIds: [first.id, second.id],
+			expectedVersion: update.version,
+			operationId: randomUUID(),
+		}),
 	).rejects.toThrow("must still be pending");
 	await expect(store.pending({ after: first.id })).rejects.toThrow(
 		"cursor is no longer pending",
@@ -128,6 +135,134 @@ test("applies exactly the reviewed IDs and records the previous Markdown", async
 		corrections: [second],
 		nextCursor: null,
 	});
+});
+
+test("requires a version and rejects the second concurrent apply from the same profile", async () => {
+	const first = correction(1);
+	const second = correction(2);
+	const store = createProfileStore({ root });
+	await store.capture({ events: [first, second] });
+	const { version } = await store.read();
+	const firstRequest = {
+		text: "# First update",
+		correctionIds: [first.id],
+		operationId: randomUUID(),
+	};
+	await expect(store.apply(firstRequest)).rejects.toThrow("expectedVersion");
+	const [winner, stale] = await Promise.allSettled([
+		store.apply({ ...firstRequest, expectedVersion: version }),
+		store.apply({
+			text: "# Second update",
+			correctionIds: [second.id],
+			operationId: randomUUID(),
+			expectedVersion: version,
+		}),
+	]);
+	expect(winner.status).toBe("fulfilled");
+	expect(stale).toMatchObject({
+		status: "rejected",
+		reason: { message: expect.stringContaining("profile changed") },
+	});
+	expect(await store.read()).toMatchObject({ text: firstRequest.text });
+	expect(await store.pending({})).toEqual({
+		corrections: [second],
+		nextCursor: null,
+	});
+});
+
+test("returns the original apply result after restart and later updates", async () => {
+	const first = correction(1);
+	const second = correction(2);
+	const store = createProfileStore({ root });
+	await store.capture({ events: [first, second] });
+	const request = {
+		operationId: randomUUID(),
+		text: "# First update",
+		correctionIds: [first.id],
+		expectedVersion: (await store.read()).version,
+	};
+	const applied = await store.apply(request);
+	const next = await store.apply({
+		operationId: randomUUID(),
+		text: "# Second update",
+		correctionIds: [second.id],
+		expectedVersion: applied.version,
+	});
+	const restarted = createProfileStore({ root });
+	expect(await restarted.apply(request)).toEqual(applied);
+	await expect(
+		restarted.apply({ ...request, text: "# Changed retry" }),
+	).rejects.toThrow("already used with different arguments");
+	expect(await restarted.read()).toEqual({
+		text: "# Second update",
+		version: next.version,
+	});
+	expect(await readLines("updates.jsonl")).toHaveLength(2);
+});
+
+test("keeps undo and redo in the raw log and reactivates the original pending ID", async () => {
+	const original = correction(1);
+	const undone: CorrectionStatusEvent = {
+		id: randomUUID(),
+		correctionId: original.id,
+		kind: "cancel",
+		revision: 2,
+		projectId: original.projectId,
+		sequenceId: original.sequenceId,
+		timestamp: original.timestamp,
+	};
+	const redone: CorrectionStatusEvent = {
+		...undone,
+		id: randomUUID(),
+		kind: "reactivate",
+		revision: 3,
+	};
+	const store = createProfileStore({ root });
+	await store.capture({ events: [original, undone] });
+	expect(await store.pending({})).toEqual({
+		corrections: [],
+		nextCursor: null,
+	});
+	await expect(
+		store.apply({
+			operationId: randomUUID(),
+			text: "# Canceled update",
+			correctionIds: [original.id],
+			expectedVersion: (await store.read()).version,
+		}),
+	).rejects.toThrow("must still be pending");
+
+	const restarted = createProfileStore({ root });
+	await restarted.capture({ events: [redone] });
+	expect(
+		await restarted.capture({ events: [original, undone, redone] }),
+	).toEqual({ recorded: 0 });
+	expect(await restarted.pending({})).toEqual({
+		corrections: [original],
+		nextCursor: null,
+	});
+	expect(await readLines("corrections.jsonl")).toEqual([
+		original,
+		undone,
+		redone,
+	]);
+	await restarted.apply({
+		operationId: randomUUID(),
+		text: "# Applied preference",
+		correctionIds: [original.id],
+		expectedVersion: (await restarted.read()).version,
+	});
+	await restarted.capture({
+		events: [
+			{ ...undone, id: randomUUID(), revision: 4 },
+			{ ...redone, id: randomUUID(), revision: 5 },
+		],
+	});
+	expect(await restarted.pending({})).toEqual({
+		corrections: [],
+		nextCursor: null,
+	});
+	expect(await restarted.read()).toMatchObject({ text: "# Applied preference" });
 });
 
 test("recovers a partial append through a UTF-8 recording name without duplicating any rows", async () => {

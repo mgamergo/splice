@@ -552,7 +552,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Update the editing profile",
 			description:
-				"Replace profile.md with the full updated Markdown and clear only the given pending Correction IDs. Pass expectedVersion from profile_read to guard against concurrent changes. Splice records the previous text for later reversion.",
+				"Replace profile.md with the full updated Markdown and clear the given pending Correction IDs. Pass expectedVersion from profile_read and a new UUID as operationId. If the response is lost, retry with the same operationId and identical arguments. Splice records the previous text for later reversion.",
 			inputSchema: profileApplySchema.shape,
 		},
 		(params) =>

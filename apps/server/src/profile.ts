@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
-	type Correction,
+	type CorrectionEvent,
+	correctionEventSchema,
 	correctionSchema,
 	profileApplySchema,
 	profileCaptureSchema,
@@ -26,6 +27,9 @@ const updateSchema = z.strictObject({
 	correctionIds: z.array(z.uuid()),
 	previousText: z.string(),
 	text: z.string(),
+	operation: z
+		.strictObject({ id: z.uuid(), requestHash: z.string() })
+		.optional(),
 });
 
 const transactionSchema = z.strictObject({
@@ -74,15 +78,24 @@ function jsonLines(records: unknown[]) {
 	return records.map((record) => JSON.stringify(record) + "\n").join("");
 }
 
-function parseCorrections(text: string): Correction[] {
+function parseLines<T>({
+	text,
+	schema,
+}: {
+	text: string;
+	schema: z.ZodType<T>;
+}): T[] {
 	return text
 		.split("\n")
 		.filter((line) => line.trim())
-		.map((line) => correctionSchema.parse(JSON.parse(line)));
+		.map((line) => schema.parse(JSON.parse(line)));
 }
 
 async function readCorrections(path: string) {
-	return parseCorrections((await readIfPresent(path)) ?? "");
+	return parseLines({
+		text: (await readIfPresent(path)) ?? "",
+		schema: correctionSchema,
+	});
 }
 
 function versionOf(text: string) {
@@ -98,7 +111,23 @@ export function createProfileStore({ root }: { root: string }) {
 	const updatesPath = join(directory, "updates.jsonl");
 	const journalPath = join(directory, "transaction.json");
 	let work: Promise<unknown> = Promise.resolve();
-	let knownIds: Set<string> | undefined;
+	let correctionLog: Map<string, CorrectionEvent> | undefined;
+
+	async function readCorrectionLog() {
+		return (correctionLog ??= new Map(
+			parseLines({
+				text: (await readIfPresent(correctionPath)) ?? "",
+				schema: correctionEventSchema,
+			}).map((event) => [event.id, event]),
+		));
+	}
+
+	async function readUpdates() {
+		return parseLines({
+			text: (await readIfPresent(updatesPath)) ?? "",
+			schema: updateSchema,
+		});
+	}
 
 	async function syncDirectory() {
 		// Windows does not allow opening a directory for fsync.
@@ -158,17 +187,41 @@ export function createProfileStore({ root }: { root: string }) {
 		const pending = await readCorrections(pendingPath);
 		if (transaction.kind === "capture") {
 			const { offset, lines } = transaction;
-			const corrections = parseCorrections(lines);
+			const events = parseLines({ text: lines, schema: correctionEventSchema });
 			await append({ path: correctionPath, offset, text: lines });
-			const pendingIds = new Set(pending.map(({ id }) => id));
+			const log = await readCorrectionLog();
+			const remaining = new Map(
+				pending.map((correction) => [correction.id, correction]),
+			);
+			const applied = new Set(
+				events.some(({ kind }) => kind === "reactivate")
+					? (await readUpdates()).flatMap(({ correctionIds }) => correctionIds)
+					: [],
+			);
+			for (const event of events) {
+				log.set(event.id, event);
+				if ("correctionId" in event) {
+					const original = log.get(event.correctionId);
+					if (
+						!original ||
+						"correctionId" in original ||
+						original.projectId !== event.projectId ||
+						original.sequenceId !== event.sequenceId
+					)
+						continue;
+					remaining.delete(original.id);
+					if (event.kind === "reactivate" && !applied.has(original.id))
+						remaining.set(original.id, original);
+				} else {
+					// Moving fresh entries to the end also preserves order on journal replay.
+					remaining.delete(event.id);
+					remaining.set(event.id, event);
+				}
+			}
 			await replace({
 				path: pendingPath,
-				text: jsonLines([
-					...pending,
-					...corrections.filter(({ id }) => !pendingIds.has(id)),
-				]),
+				text: jsonLines([...remaining.values()]),
 			});
-			for (const { id } of corrections) knownIds?.add(id);
 		} else {
 			const { offset, lines } = transaction;
 			const update = updateSchema.parse(JSON.parse(lines));
@@ -217,19 +270,17 @@ export function createProfileStore({ root }: { root: string }) {
 				return { text, version: versionOf(text) };
 			}),
 		async capture(params: unknown) {
-			const { corrections } = parseRequest({
+			const request = parseRequest({
 				schema: profileCaptureSchema,
 				params,
 			});
 			return serialized(async () => {
-				const ids = (knownIds ??= new Set(
-					(await readCorrections(correctionPath)).map(({ id }) => id),
-				));
+				const events =
+					"events" in request ? request.events : request.corrections;
+				const log = await readCorrectionLog();
 				const fresh = [
-					...new Map(
-						corrections.map((correction) => [correction.id, correction]),
-					).values(),
-				].filter(({ id }) => !ids.has(id));
+					...new Map(events.map((event) => [event.id, event])).values(),
+				].filter(({ id }) => !log.has(id));
 				if (fresh.length) {
 					await commit({
 						kind: "capture",
@@ -263,16 +314,27 @@ export function createProfileStore({ root }: { root: string }) {
 			});
 		},
 		async apply(params: unknown) {
-			const { text, correctionIds, expectedVersion } = parseRequest({
-				schema: profileApplySchema,
-				params,
-			});
+			const { text, correctionIds, expectedVersion, operationId } =
+				parseRequest({
+					schema: profileApplySchema,
+					params,
+				});
 			return serialized(async () => {
+				const requestHash = versionOf(
+					JSON.stringify({ text, correctionIds, expectedVersion }),
+				);
+				const previous = (await readUpdates()).find(
+					({ operation }) => operation?.id === operationId,
+				);
+				if (previous) {
+					if (previous.operation?.requestHash !== requestHash)
+						throw invalidParams(
+							"This operation ID was already used with different arguments.",
+						);
+					return applyResult(previous);
+				}
 				const previousText = await readProfile();
-				if (
-					expectedVersion !== undefined &&
-					expectedVersion !== versionOf(previousText)
-				)
+				if (expectedVersion !== versionOf(previousText))
 					throw invalidParams(
 						"The editing profile changed. Read it again before applying an update.",
 					);
@@ -288,18 +350,27 @@ export function createProfileStore({ root }: { root: string }) {
 					correctionIds: ids,
 					previousText,
 					text,
+					operation: { id: operationId, requestHash },
 				};
 				await commit({
 					kind: "apply",
 					offset: await sizeIfPresent(updatesPath),
 					lines: jsonLines([update]),
 				});
-				return {
-					updateId: update.id,
-					applied: ids.length,
-					version: versionOf(text),
-				};
+				return applyResult(update);
 			});
 		},
+	};
+}
+
+function applyResult({
+	id,
+	correctionIds,
+	text,
+}: z.infer<typeof updateSchema>) {
+	return {
+		updateId: id,
+		applied: correctionIds.length,
+		version: versionOf(text),
 	};
 }

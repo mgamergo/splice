@@ -75,9 +75,23 @@ export const correctionSchema = z.discriminatedUnion("kind", [
 ]);
 export type Correction = z.infer<typeof correctionSchema>;
 
-export const profileCaptureSchema = z.strictObject({
-	corrections: z.array(correctionSchema).min(1).max(100),
+export const correctionStatusEventSchema = z.strictObject({
+	...context,
+	kind: z.enum(["cancel", "reactivate"]),
+	correctionId: z.uuid(),
 });
+export type CorrectionStatusEvent = z.infer<typeof correctionStatusEventSchema>;
+export const correctionEventSchema = z.union([
+	correctionSchema,
+	correctionStatusEventSchema,
+]);
+export type CorrectionEvent = z.infer<typeof correctionEventSchema>;
+
+export const profileCaptureSchema = z.union([
+	z.strictObject({ events: z.array(correctionEventSchema).min(1).max(100) }),
+	// Older editor tabs still send just the initial Corrections.
+	z.strictObject({ corrections: z.array(correctionSchema).min(1).max(100) }),
+]);
 
 export const profilePendingSchema = z.strictObject({
 	after: z.uuid().optional().describe("nextCursor from the previous page"),
@@ -97,6 +111,11 @@ export const profileApplySchema = z.strictObject({
 		.describe("IDs of the pending Corrections reflected in this update"),
 	expectedVersion: z
 		.string()
-		.optional()
+		.min(1)
 		.describe("The version returned by profile_read"),
+	operationId: z
+		.uuid()
+		.describe(
+			"A new UUID for this update. Reuse it with identical arguments when retrying.",
+		),
 });
