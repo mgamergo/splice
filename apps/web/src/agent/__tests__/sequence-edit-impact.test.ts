@@ -248,28 +248,34 @@ test("a picture repair changes the visible clip at both edges below a translucen
 	});
 });
 
-test("razoring a clip before an existing gap does not report a new gap", () => {
-	const { editor, api, sequence } = fixture();
-	const before = sequence();
-	const main = {
-		...before.tracks.main,
-		clips: [
-			videoClip({ id: "first", start: 0, duration: 6 }),
-			videoClip({ id: "second", start: 8, duration: 2, trimStart: 8 }),
-		],
-	};
-	editor.sequences.setSequences({
-		sequences: [{ ...before, tracks: { ...before.tracks, main } }],
-	});
-	expect(
-		api.previewOps({
-			sequenceId: before.id,
-			expectedRevision: api.getRevision(),
-			label: "Split clip",
-			ops: [{ op: "razor", at: time(3), clipIds: ["first"] }],
-		}),
-	).toMatchObject({ ok: true, impact: { newGapsAndJumpCuts: [] } });
-});
+test.each([1, 1 + 0.4 / s(3)])(
+	"razoring a clip at rate %d before an existing gap does not report a new gap",
+	(rate) => {
+		const { editor, api, sequence } = fixture();
+		const before = sequence();
+		const main = {
+			...before.tracks.main,
+			clips: [
+				{
+					...videoClip({ id: "first", start: 0, duration: 6 }),
+					retime: { rate },
+				},
+				videoClip({ id: "second", start: 8, duration: 2, trimStart: 8 }),
+			],
+		};
+		editor.sequences.setSequences({
+			sequences: [{ ...before, tracks: { ...before.tracks, main } }],
+		});
+		expect(
+			api.previewOps({
+				sequenceId: before.id,
+				expectedRevision: api.getRevision(),
+				label: "Split clip",
+				ops: [{ op: "razor", at: time(3), clipIds: ["first"] }],
+			}),
+		).toMatchObject({ ok: true, impact: { newGapsAndJumpCuts: [] } });
+	},
+);
 
 test("scoped ops and markers share the frame grid", () => {
 	const { api, request, sequence } = fixture();

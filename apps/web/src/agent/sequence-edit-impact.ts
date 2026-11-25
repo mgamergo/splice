@@ -169,7 +169,7 @@ function transition({
 		left.clip.type === "video" &&
 		right.clip.type === "video" &&
 		left.clip.mediaId === right.clip.mediaId &&
-		sourceAt(left) !== sourceAt(right)
+		Math.abs(sourceAt(left) - sourceAt(right)) > 1
 	);
 	return {
 		left: summarizeClip(left?.clip),
@@ -217,7 +217,7 @@ function boundary({ clips, at }: { clips: PictureClip[]; at: number }) {
 				(side === "left"
 					? clip.startTime < point && clipEnd(clip) >= point
 					: clip.startTime <= point && clipEnd(clip) > point) &&
-				isOpaque({ clip, at: point }),
+				isOpaque({ clip, at: side === "left" ? point - 1 : point }),
 		);
 		return clip && { clip, at: point };
 	};
@@ -251,18 +251,16 @@ function joins({ tracks }: TSequence) {
 		const result = transition({ left, right });
 		if (!result.jumpCut && (result.gapSeconds ?? 0) === 0) return [];
 		// A split changes the clip ID but preserves the source at the join.
-		const sourceKey = (edge: PictureEdge) => [
-			edge.clip.mediaId,
-			sourceAt(edge),
-		];
 		return [
 			{
 				key: JSON.stringify([
-					sourceKey(left),
-					sourceKey(right),
+					left.clip.mediaId,
+					right.clip.mediaId,
+					sourceAt(right),
 					result.gapSeconds,
 					result.jumpCut,
 				]),
+				sourceOut: sourceAt(left),
 				result,
 			},
 		];
@@ -318,8 +316,15 @@ export function sequenceEditImpact({
 					},
 				}
 			: null,
-		newGapsAndJumpCuts: joins(after).flatMap(({ key, result }) =>
-			oldJoins.get(key)?.pop() ? [] : [result],
-		),
+		newGapsAndJumpCuts: joins(after).flatMap(({ key, sourceOut, result }) => {
+			const previous = oldJoins.get(key);
+			// Rounding each half of a retimed split can shift the source out by one tick.
+			const match = previous?.findIndex(
+				(join) => Math.abs(join.sourceOut - sourceOut) <= 1,
+			);
+			if (!previous || match === undefined || match < 0) return [result];
+			previous.splice(match, 1);
+			return [];
+		}),
 	};
 }
