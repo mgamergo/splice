@@ -3,13 +3,12 @@
  * and paragraphs. Like the SRT cues it is built from, it is derived, never
  * stored, so every cut, take swap and restore updates its passage.
  */
-import type { CaptionWordRef } from "@splice/bridge/delivery";
 import type {
 	TranscriptParagraphSummary,
 	TranscriptSelectionSummary,
 	TranscriptSentenceSummary,
 } from "@splice/bridge/transcript";
-import { type PlacedCaptionCue, SENTENCE_END } from "@/captions/cues";
+import { type CaptionCue, SENTENCE_END } from "@/captions/cues";
 import type { Marker, SequenceTracks } from "@/timeline/types";
 import { mediaTimeToSeconds } from "@/wasm";
 
@@ -25,7 +24,7 @@ const MAX_PARAGRAPH_SENTENCES = 6;
 export interface TranscriptSentence extends TranscriptSentenceSummary {
 	/** The SRT cues it reads, in order. */
 	cueIds: string[];
-	words: CaptionWordRef[];
+	words: CaptionCue["words"];
 }
 
 export interface TranscriptParagraph
@@ -75,10 +74,10 @@ function sectionRanges({
 }
 
 /** What a cue says aloud: its corrected text, or the transcript's if hidden. */
-const spoken = (cue: PlacedCaptionCue) => cue.text || cue.originalText || "";
+const spoken = (cue: CaptionCue) => cue.text || cue.originalText || "";
 
 /** Each run names a clip and the source words heard through it. */
-function sentenceId(cues: PlacedCaptionCue[]): string {
+function sentenceId(cues: CaptionCue[]): string {
 	const runs: [
 		clipId: string,
 		projectItemId: string,
@@ -86,7 +85,7 @@ function sentenceId(cues: PlacedCaptionCue[]): string {
 		last: number,
 	][] = [];
 	for (const cue of cues)
-		for (const { clipId, projectItemId, index } of cue.placedWords) {
+		for (const { clipId, projectItemId, index } of cue.words) {
 			const run = runs.at(-1);
 			if (
 				run &&
@@ -110,12 +109,12 @@ export function buildCutTranscript({
 	tracks,
 	markers,
 }: {
-	cues: PlacedCaptionCue[];
+	cues: CaptionCue[];
 	tracks: SequenceTracks;
 	markers: Marker[];
 }): CutTranscript {
-	const groups: PlacedCaptionCue[][] = [];
-	let current: PlacedCaptionCue[] = [];
+	const groups: CaptionCue[][] = [];
+	let current: CaptionCue[] = [];
 	for (const cue of cues) {
 		if (!spoken(cue)) continue;
 		const previous = current.at(-1);

@@ -18,11 +18,16 @@ interface CaptionsState {
 	/** The cue the caption list and the preview overlay have selected. */
 	selectedCueId: string | null;
 	selectCue: (cueId: string | null) => void;
-	/** Fetches the spellings once; later calls reuse them. */
+	/**
+	 * Fetches the spellings once; later calls reuse them, or wait for the
+	 * fetch already under way.
+	 */
 	loadSpellings: (options?: { force?: boolean }) => Promise<Replacement[]>;
 	saveSpelling: (spelling: Replacement) => Promise<void>;
 	removeSpelling: (from: string) => Promise<void>;
 }
+
+let loadingSpellings: Promise<Replacement[]> | null = null;
 
 export const useCaptionsStore = create<CaptionsState>((set, get) => ({
 	spellings: [],
@@ -31,16 +36,23 @@ export const useCaptionsStore = create<CaptionsState>((set, get) => ({
 	selectCue: (selectedCueId) => set({ selectedCueId }),
 	loadSpellings: async ({ force = false } = {}) => {
 		if (get().spellingsLoaded && !force) return get().spellings;
+		if (loadingSpellings && !force) return loadingSpellings;
 		// Outside splice there is nowhere to keep spellings.
 		if (!readBridgeToken()) {
 			set({ spellingsLoaded: true });
 			return [];
 		}
-		const { spellings } = spellingsResultSchema.parse(
-			await callSplice({ method: "spellings.list" }),
-		);
-		set({ spellings, spellingsLoaded: true });
-		return spellings;
+		const loading = callSplice({ method: "spellings.list" }).then((result) => {
+			const { spellings } = spellingsResultSchema.parse(result);
+			set({ spellings, spellingsLoaded: true });
+			return spellings;
+		});
+		loadingSpellings = loading;
+		try {
+			return await loading;
+		} finally {
+			if (loadingSpellings === loading) loadingSpellings = null;
+		}
 	},
 	saveSpelling: async (spelling) => {
 		const { spellings } = spellingsResultSchema.parse(

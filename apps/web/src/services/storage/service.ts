@@ -1,5 +1,5 @@
 import { captionsRequestSchema } from "@splice/bridge/ops";
-import { projectCaptionsSchema } from "@splice/bridge/delivery";
+import { parseProjectCaptions } from "@splice/bridge/delivery";
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
 import { removalMarkerDataSchema } from "@splice/bridge/ops";
@@ -268,8 +268,7 @@ class StorageService {
 			settings: serializedProject.settings,
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
-			captions: projectCaptionsSchema.safeParse(serializedProject.captions)
-				.data,
+			captions: parseProjectCaptions(serializedProject.captions),
 		};
 
 		return { project };

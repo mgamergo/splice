@@ -59,7 +59,7 @@ export function deriveTranscript({
 	spellings,
 	wordCache,
 }: {
-	sequence: Pick<TSequence, "tracks" | "markers">;
+	sequence: Pick<TSequence, "id" | "tracks" | "markers">;
 	captions: ProjectCaptions | undefined;
 	spellings?: Replacement[];
 	wordCache?: ClipWordCache;
@@ -69,6 +69,7 @@ export function deriveTranscript({
 		captions,
 		spellings,
 		sequenceEnd: sequenceEndSeconds({ sequence }),
+		sequenceId: sequence.id,
 		wordCache,
 	});
 	return buildCutTranscript({

@@ -49,13 +49,19 @@ export function useCutTranscript({
 	}>();
 
 	useEffect(() => {
-		const { tracks, markers, captions, spellings } = inputs;
-		if (!tracks || !markers || !captions?.sources.length) return;
+		const { sequenceId, tracks, markers, captions, spellings } = inputs;
+		if (
+			sequenceId === undefined ||
+			!tracks ||
+			!markers ||
+			!captions?.sources.length
+		)
+			return;
 		const rebuild = () =>
 			setDerived({
 				inputs,
 				transcript: deriveTranscript({
-					sequence: { tracks, markers },
+					sequence: { id: sequenceId, tracks, markers },
 					captions,
 					spellings,
 					wordCache,

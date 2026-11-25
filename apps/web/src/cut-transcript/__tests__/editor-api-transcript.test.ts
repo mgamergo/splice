@@ -160,6 +160,45 @@ describe("Cut transcript through the editor API", () => {
 		});
 	});
 
+	test("a cue correction reaches the transcript only at its clip placement", async () => {
+		const { api } = horizontalEditor([
+			videoClip({ id: "first", start: 0, duration: 3 }),
+			videoClip({ id: "repeat", start: 10, duration: 3 }),
+		]);
+		const before = await api.cutTranscript({});
+		if (!before.ok) throw new Error(before.message);
+		const [first, repeat] = before.paragraphs.flatMap(
+			({ sentences }) => sentences,
+		);
+		useTranscriptStore.getState().select({
+			sequenceId: before.sequenceId,
+			sentenceId: repeat.id,
+		});
+
+		const captions = await api.captionCues({});
+		if (!captions?.ok) throw new Error(captions?.message ?? "Expected captions.");
+		expect(
+			await api.correctCaption({
+				sequenceId: before.sequenceId,
+				expectedRevision: captions.revision,
+				cueId: captions.cues[1].id,
+				text: "Open Next.js.",
+				scope: "cue",
+			}),
+		).toMatchObject({ ok: true });
+
+		const after = await api.cutTranscript({});
+		if (!after.ok) throw new Error(after.message);
+		expect(after.paragraphs.flatMap(({ sentences }) => sentences)).toEqual([
+			first,
+			{ ...repeat, text: "Open Next.js." },
+		]);
+		expect(await api.transcriptSelection({})).toMatchObject({
+			ok: true,
+			selection: { text: "Open Next.js.", sentences: [{ id: repeat.id }] },
+		});
+	});
+
 	test("both transcript reads use the revision, times and selection after spellings load", async () => {
 		const { api } = horizontalEditor([
 			{
