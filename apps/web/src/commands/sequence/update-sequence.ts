@@ -12,7 +12,7 @@ export class UpdateSequenceCommand extends Command {
 		private readonly options: {
 			editor: EditorCore;
 			sequenceId: string;
-			updates: Partial<Pick<TSequence, "tracks" | "captions">>;
+			updates: Partial<Pick<TSequence, "tracks" | "captions" | "mix">>;
 			label: string;
 		},
 	) {

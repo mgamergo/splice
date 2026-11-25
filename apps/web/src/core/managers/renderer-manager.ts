@@ -1,10 +1,15 @@
+import { tracksWithMusicDucking } from "@/mix/music";
+import type { MixLoudness } from "@splice/bridge/mix";
 import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SequenceExporter } from "@/services/renderer/sequence-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import {
+	createTimelineAudioBuffer,
+	createTimelineAudioReader,
+} from "@/media/audio";
 import { calculateTotalDuration } from "@/timeline";
 import type { SequenceTracks } from "@/timeline/types";
 import { formatTimecode } from "opencut-wasm";
@@ -19,6 +24,7 @@ export interface ExportScene {
 	projectItems: ProjectItem[];
 	canvasSize: TCanvasSize;
 	background: TBackground;
+	master?: Pick<MixLoudness, "gainDb" | "ceilingDbtp">;
 }
 
 type SnapshotResult =
@@ -176,17 +182,22 @@ export class RendererManager {
 				return { success: false, error: "No active project" };
 			}
 
-			const {
-				tracks,
-				projectItems,
-				canvasSize,
-				background,
-			}: ExportScene = scene ?? {
-				tracks: this.editor.sequences.getActiveSequence().tracks,
-				projectItems: this.editor.media.getProjectItems(),
-				canvasSize: activeProject.settings.canvasSize,
-				background: activeProject.settings.background,
-			};
+			if (!scene) {
+				const sequence = this.editor.sequences.getActiveSequence();
+				const projectItems = this.editor.media.getProjectItems();
+				scene = {
+					tracks: tracksWithMusicDucking({
+						sequence,
+						projectItems,
+						projectSources: activeProject.captions?.sources,
+					}),
+					projectItems,
+					canvasSize: activeProject.settings.canvasSize,
+					background: activeProject.settings.background,
+					master: sequence.mix?.loudness,
+				};
+			}
+			const { tracks, projectItems, canvasSize, background, master } = scene;
 
 			const duration = calculateTotalDuration({ tracks });
 			if (duration === 0) {
@@ -195,14 +206,24 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 
+			const reader =
+				includeAudio && master
+					? createTimelineAudioReader({
+							tracks,
+							projectItems,
+							duration,
+							signal,
+						})
+					: null;
 			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio) {
+			if (includeAudio && !master) {
 				onProgress?.({ progress: 0.05 });
 				audioBuffer = await createTimelineAudioBuffer({
 					tracks,
 					projectItems,
 					duration,
 					signal,
+					master,
 				});
 			}
 			signal.throwIfAborted();
@@ -223,6 +244,7 @@ export class RendererManager {
 				quality,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
+				audioBlocks: master && reader ? reader.blocks({ master }) : undefined,
 				signal,
 			});
 

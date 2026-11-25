@@ -22,6 +22,7 @@ function createManager(): AudioManager {
 		playback: { getVolume: () => 1, subscribe, onSeek: subscribe },
 		timeline: { subscribe },
 		media: { subscribe },
+		sequences: { subscribe },
 	};
 	return new AudioManager(editor as unknown as EditorCore);
 }

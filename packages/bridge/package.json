@@ -7,6 +7,7 @@
 		".": "./src/index.ts",
 		"./ops": "./src/ops.ts",
 		"./delivery": "./src/delivery.ts",
+		"./mix": "./src/mix.ts",
 		"./transcript": "./src/transcript.ts"
 	},
 	"dependencies": {

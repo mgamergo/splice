@@ -1,5 +1,7 @@
 "use client";
 
+import { FinalMixPopover } from "./final-mix-popover";
+import { projectFormat } from "@/project/format";
 import { useState, useEffect } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { formatTimecode } from "opencut-wasm";
@@ -31,11 +33,15 @@ export function PreviewToolbar({
 }: {
 	onToggleFullscreen: () => void;
 }) {
+	const horizontal = useEditor(
+		(e) => projectFormat({ project: e.project.getActive() }) === "horizontal",
+	);
 	return (
 		<div className="grid grid-cols-[1fr_auto_1fr] items-center pb-3 pt-5 px-5">
 			<TimecodeDisplay />
 			<PlayPauseButton />
 			<div className="justify-self-end flex items-center gap-2.5">
+				{horizontal && <FinalMixPopover />}
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />
 				{/* v0.4.0 */}
@@ -133,14 +139,27 @@ function ZoomSelect() {
 
 function PlayPauseButton() {
 	const isPlaying = useEditor((e) => e.playback.getIsPlaying());
+	const preparing = useEditor((e) => e.playback.getIsPreparingPreview());
 
 	return (
 		<Button
 			variant="text"
 			size="icon"
+			aria-label={
+				preparing
+					? "Cancel final mix preparation"
+					: isPlaying
+						? "Pause"
+						: "Play"
+			}
+			title={preparing ? "Preparing final mix…" : undefined}
 			onClick={() => invokeAction("toggle-play")}
 		>
-			<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
+			{preparing ? (
+				<span className="size-4 animate-spin rounded-full border-2 border-current border-r-transparent" />
+			) : (
+				<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
+			)}
 		</Button>
 	);
 }

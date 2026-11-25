@@ -123,6 +123,7 @@ async function importOne({
 	path,
 	isBlocked,
 	isStale,
+	beforeCommit,
 	readers,
 }: {
 	editor: EditorCore;
@@ -130,6 +131,7 @@ async function importOne({
 	path: string;
 	isBlocked: () => boolean;
 	isStale: () => boolean;
+	beforeCommit?: () => void;
 	readers: ImportReaders;
 }): Promise<ProjectItem> {
 	const media = await readers.probe({ path });
@@ -148,6 +150,7 @@ async function importOne({
 	if (isStale()) {
 		throw new Error(PROJECT_CHANGED);
 	}
+	beforeCommit?.();
 	const item = await editor.media.addProjectItem({ projectId, projectItem });
 	if (!item) {
 		throw new Error("Couldn't save the project item");
@@ -163,11 +166,13 @@ export async function importDiskItems({
 	editor,
 	paths,
 	isBlocked,
+	beforeCommit,
 	readers = defaultReaders,
 }: {
 	editor: EditorCore;
 	paths: string[];
 	isBlocked: () => boolean;
+	beforeCommit?: () => void;
 	readers?: ImportReaders;
 }): Promise<ImportItemsResult> {
 	const project = editor.project.getActiveOrNull();
@@ -208,6 +213,7 @@ export async function importDiskItems({
 				path,
 				isBlocked,
 				isStale,
+				beforeCommit,
 				readers,
 			}).finally(() => inFlight.delete(key));
 			inFlight.set(key, pending);

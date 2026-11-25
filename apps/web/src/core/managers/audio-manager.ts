@@ -1,9 +1,12 @@
+import type { SequenceMix } from "@splice/bridge/mix";
+import { tracksWithMusicDucking } from "@/mix/music";
 import type { EditorCore } from "@/core";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
 import type { AudioClipSource } from "@/media/audio";
 import {
 	createAudioContext,
+	createTimelineAudioReader,
 	collectAudioClipSources,
 	decodeAudioRange,
 } from "@/media/audio";
@@ -12,6 +15,7 @@ import {
 	hasAnimatedVolume,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
+import type { SequenceTracks } from "@/timeline/types";
 import { createMediaSource } from "@/media/media-data";
 import { getClipSourceRange, type SourceRange } from "@/media/source-range";
 import {
@@ -29,6 +33,17 @@ import {
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
+	private previewGain: GainNode | null = null;
+	private finalPreview: {
+		controller: AbortController;
+		blocks: ReturnType<
+			NonNullable<ReturnType<typeof createTimelineAudioReader>>["blocks"]
+		>;
+		first: { buffer: AudioBuffer; time: number };
+	} | null = null;
+	private previewPlayback: AbortController | null = null;
+	private lastTracks: SequenceTracks | undefined;
+	private lastMix: SequenceMix | undefined;
 	private playbackStartTime = 0;
 	private playbackStartContextTime = 0;
 	private scheduleTimer: number | null = null;
@@ -60,6 +75,7 @@ export class AudioManager {
 			this.editor.timeline.subscribe(this.handleTimelineChange),
 			this.editor.media.subscribe(this.handleTimelineChange),
 			this.editor.playback.onSeek(this.handleSeek),
+			this.editor.sequences.subscribe(this.handleSequenceChange),
 		);
 	}
 
@@ -75,6 +91,8 @@ export class AudioManager {
 			void this.audioContext.close();
 			this.audioContext = null;
 			this.masterGain = null;
+			this.previewGain = null;
+			this.finalPreview = null;
 		}
 	}
 
@@ -113,7 +131,28 @@ export class AudioManager {
 		this.stopPlayback();
 	};
 
+	private handleSequenceChange = (): void => {
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		const tracks = sequence?.tracks;
+		const mix = sequence?.mix;
+		if (mix !== this.lastMix) {
+			this.lastMix = mix;
+			this.editor.playback.pause();
+		}
+		if (tracks !== this.lastTracks) {
+			this.lastTracks = tracks;
+			this.handleTimelineChange();
+		}
+	};
+
 	private handleTimelineChange = (): void => {
+		if (this.editor.playback.getIsPreparingPreview())
+			this.editor.playback.pause();
+		this.finalPreview?.controller.abort();
+		this.finalPreview = null;
+		if (this.previewPlayback && this.editor.playback.getIsPlaying()) {
+			this.editor.playback.pause();
+		}
 		this.disposeSinks();
 		this.preparedClipBuffers.clear();
 
@@ -134,13 +173,128 @@ export class AudioManager {
 			destination: this.audioContext.destination,
 		});
 		this.masterGain = input;
-		this.masterGain.gain.value = this.lastVolume;
+		this.previewGain = this.audioContext.createGain();
+		this.previewGain.connect(this.audioContext.destination);
+		this.updateGain();
 		return this.audioContext;
 	}
 
 	private updateGain(): void {
-		if (!this.masterGain) return;
-		this.masterGain.gain.value = this.lastVolume;
+		if (this.masterGain) this.masterGain.gain.value = this.lastVolume;
+		if (this.previewGain) this.previewGain.gain.value = this.lastVolume;
+	}
+
+	/** Preload only the block containing the playhead. */
+	prepareFinalPreview({
+		signal,
+	}: {
+		signal: AbortSignal;
+	}): Promise<void> | undefined {
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		const loudness = sequence?.mix?.loudness;
+		if (!sequence || !loudness) return;
+		const audioContext = this.ensureAudioContext();
+		if (!audioContext) return;
+		const duration = this.editor.timeline.getTotalDuration();
+		const playhead = this.editor.playback.getCurrentTime();
+		const controller = new AbortController();
+		const readSignal = AbortSignal.any([signal, controller.signal]);
+		const projectItems = this.editor.media.getProjectItems();
+		const tracks = tracksWithMusicDucking({
+			sequence,
+			projectItems,
+			projectSources: this.editor.project.getActiveOrNull()?.captions?.sources,
+		});
+		const reader = createTimelineAudioReader({
+			tracks,
+			projectItems,
+			duration,
+			signal: readSignal,
+		});
+		if (!reader) return;
+		return (async () => {
+			if (audioContext.state === "suspended") await audioContext.resume();
+			const blocks = reader.blocks({
+				master: loudness,
+				fromSeconds: playhead >= duration ? 0 : playhead / TICKS_PER_SECOND,
+			});
+			const block = await blocks.next();
+			readSignal.throwIfAborted();
+			if (
+				this.audioContext !== audioContext ||
+				this.editor.sequences.getActiveSequenceOrNull() !== sequence ||
+				this.editor.media.getProjectItems() !== projectItems
+			) {
+				await blocks.return();
+				throw new Error(
+					"The mix changed while preparing playback. Play again to hear the new mix.",
+				);
+			}
+			if (!block.done)
+				this.finalPreview = { controller, blocks, first: block.value };
+		})();
+	}
+
+	private scheduleFinalPreview({
+		preview,
+		audioContext,
+		destination,
+	}: {
+		preview: NonNullable<AudioManager["finalPreview"]>;
+		audioContext: AudioContext;
+		destination: GainNode;
+	}): void {
+		this.previewPlayback = preview.controller;
+		const origin = audioContext.currentTime + 0.01 - preview.first.time;
+		const schedule = ({ buffer, time }: typeof preview.first) => {
+			const when = origin + time;
+			const offset = Math.max(0, audioContext.currentTime - when);
+			if (offset >= buffer.duration) return;
+			const source = audioContext.createBufferSource();
+			source.buffer = buffer;
+			source.connect(destination);
+			source.start(when, offset);
+			this.queuedSources.add(source);
+			source.addEventListener("ended", () => {
+				source.disconnect();
+				this.queuedSources.delete(source);
+			});
+		};
+		schedule(preview.first);
+		let scheduledUntil =
+			origin + preview.first.time + preview.first.buffer.duration;
+		let rendering = false;
+		const fill = async () => {
+			if (rendering) return;
+			rendering = true;
+			try {
+				while (
+					!preview.controller.signal.aborted &&
+					scheduledUntil < audioContext.currentTime + this.lookaheadSeconds
+				) {
+					const block = await preview.blocks.next();
+					if (preview.controller.signal.aborted) return;
+					if (block.done) {
+						if (this.scheduleTimer !== null)
+							window.clearInterval(this.scheduleTimer);
+						this.scheduleTimer = null;
+						return;
+					}
+					schedule(block.value);
+					scheduledUntil =
+						origin + block.value.time + block.value.buffer.duration;
+				}
+			} catch (error) {
+				if (!preview.controller.signal.aborted) {
+					console.error("Couldn't render the next final mix block:", error);
+					this.editor.playback.pause();
+				}
+			} finally {
+				rendering = false;
+			}
+		};
+		this.scheduleTimer = window.setInterval(() => void fill(), 100);
+		void fill();
 	}
 
 	private getPlaybackTime(): number {
@@ -154,22 +308,45 @@ export class AudioManager {
 		const audioContext = this.ensureAudioContext();
 		if (!audioContext) return;
 
+		const preview = this.finalPreview;
+		this.finalPreview = null;
 		this.stopPlayback();
-		this.playbackSessionId++;
+		const sessionId = this.playbackSessionId;
 		this.playbackLatencyCompensationSeconds = 0;
+		if (audioContext.state === "suspended") await audioContext.resume();
+		if (
+			sessionId !== this.playbackSessionId ||
+			!this.editor.playback.getIsPlaying()
+		)
+			return;
 
-		const tracks = this.editor.sequences.getActiveSequence().tracks;
+		if (preview && this.previewGain) {
+			this.scheduleFinalPreview({
+				preview,
+				audioContext,
+				destination: this.previewGain,
+			});
+			return;
+		}
+
+		const sequence = this.editor.sequences.getActiveSequence();
 		const projectItems = this.editor.media.getProjectItems();
+		const tracks = tracksWithMusicDucking({
+			sequence,
+			projectItems,
+			projectSources: this.editor.project.getActiveOrNull()?.captions?.sources,
+		});
 		const duration = this.editor.timeline.getTotalDuration();
 
 		if (duration <= 0) return;
 
-		if (audioContext.state === "suspended") {
-			await audioContext.resume();
-		}
-
-		this.clips = await collectAudioClipSources({ tracks, projectItems });
-		if (!this.editor.playback.getIsPlaying()) return;
+		const clips = await collectAudioClipSources({ tracks, projectItems });
+		if (
+			sessionId !== this.playbackSessionId ||
+			!this.editor.playback.getIsPlaying()
+		)
+			return;
+		this.clips = clips;
 
 		this.playbackStartTime = time;
 		this.playbackStartContextTime = audioContext.currentTime;
@@ -215,6 +392,9 @@ export class AudioManager {
 	}
 
 	private stopPlayback(): void {
+		this.previewPlayback?.abort();
+		this.previewPlayback = null;
+		this.playbackSessionId++;
 		if (this.scheduleTimer && typeof window !== "undefined") {
 			window.clearInterval(this.scheduleTimer);
 		}
@@ -599,7 +779,12 @@ export class AudioManager {
 		range: SourceRange;
 		sampleRate: number;
 	}): Promise<AudioBuffer | null> {
-		const key = JSON.stringify([clip.sourceKey, range.start, range.end, sampleRate]);
+		const key = JSON.stringify([
+			clip.sourceKey,
+			range.start,
+			range.end,
+			sampleRate,
+		]);
 		const pending = this.pendingRangeDecodes.get(key);
 		if (pending) return pending;
 
