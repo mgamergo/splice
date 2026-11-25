@@ -9,6 +9,7 @@ import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
 import type { EditorCore } from "@/core";
 import { projectShortStyle } from "@/project/format";
 import { buildScene } from "@/services/renderer/scene-builder";
+import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { TextNode } from "@/services/renderer/nodes/text-node";
 
 const canvas = { width: 1080, height: 1920 };
@@ -155,6 +156,68 @@ describe("Short styles", () => {
 		});
 	});
 
+	test("restyles a corrected source word from a saved cue across casing and grouping changes", () => {
+		const transcript = [
+			{
+				projectItemId: "rec",
+				words: [
+					{ start: 0.2, end: 0.4, text: "Open" },
+					{ start: 0.5, end: 0.8, text: "Spice" },
+					{ start: 0.9, end: 1.1, text: "settings." },
+				],
+			},
+		];
+		const restyle = (style: { uppercase: boolean; wordsPerCaption: number }) =>
+			api.addCaptions({ ...revision(), sources: transcript, style });
+		expect(restyle({ uppercase: false, wordsPerCaption: 3 })).toMatchObject({
+			ok: true,
+		});
+		const track = captionTrack();
+		const [clip] = track.clips;
+		const layout = clip.captionLayout;
+		if (!layout) throw new Error("Caption layout missing");
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [
+					{
+						trackId: track.id,
+						clipId: clip.id,
+						patch: {
+							captionLayout: { y: layout.y, text: layout.text },
+							params: { ...clip.params, content: "Open Splice settings." },
+						},
+					},
+				],
+			}),
+		});
+		expect(restyle({ uppercase: true, wordsPerCaption: 1 })).toMatchObject({
+			ok: true,
+		});
+		expect(captionTrack().clips.map(({ params }) => params.content)).toEqual([
+			"OPEN",
+			"SPLICE",
+			"SETTINGS.",
+		]);
+		expect(api.shortCaptionSrt()).toMatchObject({
+			srt: expect.stringContaining("\nSPLICE\n"),
+		});
+		const saved = savedShortCaptionsSchema.parse(
+			JSON.parse(JSON.stringify(sequence().captions)),
+		);
+		expect(saved.corrections).toEqual([
+			{
+				words: [{ projectItemId: "rec", index: 1, start: 0.5, end: 0.8 }],
+				text: "Splice",
+			},
+		]);
+		expect(restyle({ uppercase: false, wordsPerCaption: 3 })).toMatchObject({
+			ok: true,
+		});
+		expect(captionTrack().clips[0].params.content).toBe(
+			"Open Splice settings.",
+		);
+	});
+
 	test("uses the available clearance below a tall caption when the usual placements overlap", () => {
 		addCaptions();
 		const tracks = placeShortCaptions({
@@ -294,6 +357,78 @@ describe("Short styles", () => {
 		expect(sequence().tracks.overlay.find(isHookTrack)).toBeUndefined();
 	});
 
+	test("remaps a Raw hook when the picture speeds up and flags a removed anchor", () => {
+		setRaw();
+		expect(
+			api.setShortHook({
+				...revision(),
+				hook: {
+					...opening,
+					demonstrationStart: 2,
+					evidence: { ...opening.evidence, kind: "footage" },
+				},
+			}),
+		).toMatchObject({ status: "placed" });
+		const hook = () => sequence().tracks.overlay.find(isHookTrack)?.clips[0];
+		expect(hook()?.duration).toBe(s(2));
+		const {
+			id: trackId,
+			clips: [picture],
+		} = sequence().tracks.main;
+		editor.timeline.updateClipRetime({
+			trackId,
+			clipId: picture.id,
+			retime: { rate: 2 },
+		});
+		expect(hook()?.duration).toBe(s(1));
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [{ trackId, clipId: picture.id, patch: { duration: s(0.8) } }],
+			}),
+		});
+		expect(hook()).toMatchObject({
+			shortHook: { unavailable: true },
+		});
+		const scene = buildScene({
+			tracks: sequence().tracks,
+			projectItems: [recording],
+			duration: s(0.8),
+			canvasSize: canvas,
+			background: { type: "color", color: "#000000" },
+		});
+		expect(scene.children.some((node) => node instanceof TextNode)).toBe(false);
+		editor.command.undo();
+		expect(hook()).toMatchObject({ name: "Opening hook", duration: s(1) });
+	});
+
+	test("fills only default framing when switching a Raw cut to Explainer", () => {
+		setRaw();
+		editor.media.setProjectItems({
+			projectItems: [{ ...recording, width: 1080, height: 1440 }],
+		});
+		const { tracks } = sequence();
+		const manual = videoClip({ id: "manual", start: 6, duration: 1 });
+		manual.params["transform.positionX"] = 100;
+		editor.timeline.updateTracks({
+			...tracks,
+			main: { ...tracks.main, clips: [...tracks.main.clips, manual] },
+		});
+		expect(
+			api.setShortStyle({ ...revision(), style: "explainer" }),
+		).toMatchObject({
+			ok: true,
+		});
+		expect(sequence().tracks.main.clips[0].params).toMatchObject({
+			"transform.scaleX": 4 / 3,
+			"transform.scaleY": 4 / 3,
+		});
+		expect(sequence().tracks.main.clips[1]?.params).toEqual(manual.params);
+		editor.command.undo();
+		expect(
+			sequence().tracks.main.clips[0].params["transform.scaleY"],
+		).toBeUndefined();
+	});
+
 	test("fills the frame for default vertical footage and preserves manually framed footage", () => {
 		const { tracks } = sequence();
 		const [clip] = tracks.main.clips;
@@ -316,6 +451,73 @@ describe("Short styles", () => {
 				projectItems: items,
 			}).main.clips[0],
 		).toBe(manual);
+	});
+
+	test("keeps saved composition coordinates when delivering a legacy Short at 1080 × 1920", async () => {
+		const project = editor.project.getActive();
+		const legacyCanvas = { width: 2160, height: 3840 };
+		editor.project.setActiveProject({
+			project: {
+				...project,
+				settings: { ...project.settings, canvasSize: legacyCanvas },
+			},
+		});
+		expect(addCaptions()).toMatchObject({ ok: true });
+		const track = captionTrack();
+		const [clip] = track.clips;
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [
+					{
+						trackId: track.id,
+						clipId: clip.id,
+						patch: { params: { ...clip.params, "transform.positionY": 1100 } },
+					},
+				],
+			}),
+		});
+		const file = new ArrayBuffer(1);
+		editor.renderer.exportProject = async ({ scene }) => {
+			if (!scene) throw new Error("Short export scene missing");
+			expect(scene.canvasSize).toEqual(legacyCanvas);
+			expect(scene.outputSize).toEqual(canvas);
+			const tree = buildScene({ ...scene, duration: s(6) });
+			const node = tree.children.find((node) => node instanceof TextNode);
+			expect(node?.params).toMatchObject({
+				canvasCenter: { x: 1080, y: 1920 },
+				transform: { position: { y: 1100 } },
+			});
+			return { success: true, buffer: file };
+		};
+		expect(
+			await editor.project.export({
+				options: { format: "mp4", quality: "high" },
+			}),
+		).toEqual({ success: true, buffer: file });
+	});
+
+	test("serializes overlapping Short captions at their independent timeline times", () => {
+		addCaptions();
+		const track = captionTrack();
+		const [first, second] = track.clips;
+		const { tracks } = sequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			overlay: tracks.overlay.map((item) =>
+				item === track
+					? {
+							...track,
+							clips: [
+								{ ...first, startTime: s(1), duration: s(2) },
+								{ ...second, startTime: s(2), duration: s(0.5) },
+							],
+						}
+					: item,
+			),
+		});
+		expect(api.shortCaptionSrt()).toMatchObject({
+			srt: "1\n00:00:01,000 --> 00:00:03,000\nOpen settings.\n\n2\n00:00:02,000 --> 00:00:02,500\nPick a device.\n",
+		});
 	});
 
 	test("captures the Short MP4 and optional SRT from the same tracks before rendering", async () => {
