@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Download, FolderOpen, RotateCcw } from "lucide-react";
+import { Check, Copy, FolderOpen, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
 	Section,
@@ -9,6 +9,7 @@ import {
 	SectionTitle,
 } from "@/components/section";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { PopoverContent } from "@/components/ui/popover";
@@ -16,19 +17,17 @@ import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useCaptionsStore } from "@/captions/store";
 import { useCaptionCues } from "@/captions/use-caption-cues";
-import {
-	isMixLoudnessStale,
-	measureMixLoudness,
-	saveMixLoudness,
-} from "@/mix/final-mix";
 import { useEditor } from "@/editor/use-editor";
 import {
 	DELIVERY_STEP_LABELS,
 	EXPORT_QUALITY_VALUES,
 	type ExportQuality,
 } from "@/export";
+import { projectShortStyle } from "@/project/format";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
+import { ExportGate } from "@/approval/components/export-gate";
 import {
+	type DeliverySnapshot,
 	deliveryFingerprint,
 	type ListedExport,
 	listExports,
@@ -51,28 +50,19 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Horizontal export: a clean 1080p30 MP4 and its SRT, published together
- * under the Exports folder, with this project's earlier exports below.
- */
+/** Publishes the approved export under Exports and shows earlier exports. */
 export function DeliveryPopover() {
 	const editor = useEditor();
 	const project = useEditor((e) => e.project.getActive());
 	const sequence = useEditor((e) => e.sequences.getActiveSequence());
 	const projectItems = useEditor((e) => e.media.getProjectItems());
-	const loudness = sequence.mix?.loudness;
-	const stale = isMixLoudnessStale({
-		sequence,
-		projectItems,
-		projectSources: project.captions?.sources,
-	});
-	const [measuring, setMeasuring] = useState(false);
-	const [approvalError, setApprovalError] = useState<string | null>(null);
 	const exportState = useEditor((e) => e.project.getExportState());
 	const revision = useEditor((e) => e.command.getRevision());
 	// Saved spellings change the SRT without a new revision.
 	const spellings = useCaptionsStore((state) => state.spellings);
+	const shortStyle = projectShortStyle({ project });
 	const cueCount = useCaptionCues().filter(({ text }) => text).length;
+	const [includeSrt, setIncludeSrt] = useState(false);
 	const { isExporting, progress, result, step } = exportState;
 	const [quality, setQuality] = useState<ExportQuality>(
 		DEFAULT_EXPORT_OPTIONS.quality,
@@ -112,41 +102,19 @@ export function DeliveryPopover() {
 		return () => {
 			cancelled = true;
 		};
-	}, [editor, revision, spellings, sequence, projectItems, project.captions]);
+	}, [editor, revision, spellings, sequence, projectItems, project.captions, project.settings]);
 
-	const handleExport = async ({
-		acceptStaleGain,
-	}: {
-		acceptStaleGain: boolean;
-	}) => {
+	const handleExport = async (snapshot: DeliverySnapshot) => {
 		setFolderMessage(null);
-		setApprovalError(null);
-		const exported = await editor.project.deliver({ quality, acceptStaleGain });
+		const exported = await editor.project.deliver({
+			quality,
+			snapshot: shortStyle
+				? { ...snapshot, includeSrt: includeSrt && !!snapshot.srt }
+				: snapshot,
+		});
 		if (exported.success) void refreshHistory();
 		else if (!exported.failedStep && !exported.cancelled)
-			setApprovalError(exported.error ?? "Couldn't export the edit.");
-	};
-
-	const handleRemeasure = async () => {
-		if (!loudness) return;
-		const revision = editor.command.getRevision();
-		setMeasuring(true);
-		setApprovalError(null);
-		try {
-			const measured = await measureMixLoudness({
-				editor,
-				sequenceId: sequence.id,
-				targetLufs: loudness.targetLufs,
-				ceilingDbtp: loudness.ceilingDbtp,
-			});
-			if (editor.command.getRevision() !== revision)
-				throw new Error("The edit changed while measuring. Measure it again.");
-			saveMixLoudness({ editor, sequenceId: sequence.id, loudness: measured });
-		} catch (error) {
-			setApprovalError(errorMessage(error));
-		} finally {
-			setMeasuring(false);
-		}
+			throw new Error(exported.error ?? "Couldn't export the edit.");
 	};
 
 	const handleRetry = async () => {
@@ -174,12 +142,15 @@ export function DeliveryPopover() {
 		<PopoverContent className="bg-background mr-4 flex max-h-[80vh] w-[min(22rem,calc(100vw-2rem))] flex-col overflow-y-auto p-0">
 			<div className="flex items-center justify-between border-b p-3">
 				<h3 className="text-sm font-medium">
-					{isExporting ? "Exporting MP4 and SRT" : "Export MP4 and SRT"}
+					{shortStyle
+						? isExporting ? "Exporting Short" : "Export Short"
+						: isExporting ? "Exporting MP4 and SRT" : "Export MP4 and SRT"}
 				</h3>
 			</div>
 
 			{failed ? (
 				<ExportFailure
+					onStartOver={() => editor.project.clearExportState()}
 					step={
 						result.failedStep
 							? DELIVERY_STEP_LABELS[result.failedStep]
@@ -218,14 +189,16 @@ export function DeliveryPopover() {
 								<Check className="text-constructive size-4" /> Exported
 							</p>
 							<p className="text-muted-foreground text-xs break-all">
-								{record.stem}.mp4 and .srt, in the folder {record.stem}
+								{record.stem}.mp4{record.bytes.srt !== undefined && " and .srt"}, in the folder {record.stem}
 							</p>
-							{record.revision !== revision && (
-								<p className="text-muted-foreground text-xs">
-									The sequence changed after this export started. Export
-									again to include the newer edit.
-								</p>
-							)}
+							{(result?.newerEdit ||
+								(currentFingerprint && record.fingerprint !== currentFingerprint)) && (
+									<p className="text-muted-foreground text-xs">
+										A newer edit is available. This export holds the
+										approved revision; export again to deliver the newer
+										edit.
+									</p>
+								)}
 						</div>
 					)}
 					<Section collapsible defaultOpen={false} showTopBorder={false}>
@@ -252,37 +225,19 @@ export function DeliveryPopover() {
 					</Section>
 					<div className="flex flex-col gap-2 p-3">
 						<p className="text-muted-foreground text-xs">
-							{cueCount > 0
+							{shortStyle
+								? "1080×1920 MP4 with burned-in captions, written to Exports."
+								: cueCount > 0
 								? `1080p30 MP4 without burned-in captions, and an SRT with ${cueCount} cues, written together to Exports.`
 								: "No captions yet, so the SRT will be empty. Load transcripts in Captions first."}
 						</p>
-						{approvalError && (
-							<p role="alert" className="text-destructive text-xs">
-								{approvalError}
-							</p>
+						{shortStyle && (
+							<div className="flex items-center gap-2">
+								<Checkbox id="deliver-short-srt" checked={includeSrt} onCheckedChange={(checked) => setIncludeSrt(checked === true)} />
+								<Label htmlFor="deliver-short-srt">Include a separate SRT when captions are available</Label>
+							</div>
 						)}
-						{stale && (
-							<>
-								<p className="text-muted-foreground text-xs">
-									The audio changed since the mix was measured.
-								</p>
-								<Button
-									variant="outline"
-									disabled={measuring}
-									onClick={handleRemeasure}
-								>
-									{measuring ? "Measuring…" : "Remeasure mix"}
-								</Button>
-							</>
-						)}
-						<Button
-							disabled={measuring}
-							onClick={() => void handleExport({ acceptStaleGain: stale })}
-							className="w-full gap-2"
-						>
-							<Download className="size-4" />
-							{stale ? "Export with saved gain" : "Export"}
-						</Button>
+						<ExportGate onExport={handleExport} />
 					</div>
 				</div>
 			)}
@@ -302,10 +257,12 @@ function ExportFailure({
 	step,
 	error,
 	onRetry,
+	onStartOver,
 }: {
 	step: string;
 	error: string;
 	onRetry: () => void;
+	onStartOver: () => void;
 }) {
 	const [copied, setCopied] = useState(false);
 	return (
@@ -344,6 +301,7 @@ function ExportFailure({
 					Retry
 				</Button>
 			</div>
+			<Button variant="text" size="sm" onClick={onStartOver}>Back to export options</Button>
 		</div>
 	);
 }
@@ -396,7 +354,7 @@ function ExportHistory({
 								<time dateTime={entry.exportedAt} className="font-medium">
 									{new Date(entry.exportedAt).toLocaleString()}
 								</time>
-								{entry.fingerprint === currentFingerprint && (
+								{!entry.checkpointId && entry.fingerprint === currentFingerprint && (
 									<Badge variant="secondary" className="px-1.5 py-0 text-[0.65rem]">
 										Current edit
 									</Badge>
@@ -412,10 +370,10 @@ function ExportHistory({
 							</span>
 							<span className="text-muted-foreground">
 								{entry.projectName} · {entry.sequenceName} · revision{" "}
-								{entry.fingerprint.slice(0, 8)}
+								{entry.revision}
 							</span>
 							<span className="text-muted-foreground break-all">
-								{entry.files.mp4}, {entry.files.srt}
+								{entry.files.mp4}{entry.files.srt && `, ${entry.files.srt}`}
 							</span>
 						</li>
 					))}

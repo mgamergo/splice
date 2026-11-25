@@ -1,4 +1,3 @@
-import { mixFingerprint } from "@/mix/final-mix";
 import {
 	afterEach,
 	beforeEach,
@@ -8,15 +7,31 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
+import { MEDIA_VERSION_HEADER } from "@splice/bridge";
 import { type ExportRecord, exportRecordSchema } from "@splice/bridge/delivery";
+import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
+import {
+	checkpointDeliverySnapshot,
+	finalizeCut,
+	parseProjectApproval,
+} from "@/approval/checkpoint";
+import { approvedIssues, reviewState } from "@/approval/review";
 import { setCaptionSources } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { ExportOptions, ExportResult } from "@/export";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
+import { recording } from "@/media/__tests__/stub-fetch";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
+import {
+	addMusic,
+	mixFingerprint,
+	saveMixLoudness,
+	updateMusic,
+} from "@/mix/final-mix";
+import { normalizeMarkers, storageService } from "@/services/storage/service";
 import { buildDefaultSequence } from "@/timeline/sequences";
 
 const initialCaptionsState = useCaptionsStore.getState();
@@ -30,7 +45,8 @@ const originalWindow = globals.window;
  */
 function fakeSplice() {
 	const published: ExportRecord[] = [];
-	const begun = new Map<string, { deliveryId: string; source: object }>();
+	const begun = new Map<string, { deliveryId: string; source: object; includeSrt: boolean }>();
+	const uploads: string[] = [];
 	const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
 	let loseNextPublishAnswer = false;
 	const respond = (result: unknown) =>
@@ -38,7 +54,10 @@ function fakeSplice() {
 	// fetch's own signature, so positional.
 	const fakeFetch = async (...[input, init]: Parameters<typeof fetch>) => {
 		const url = String(input);
-		if (init?.method === "PUT") return respond({ bytes: 1 });
+		if (init?.method === "PUT") {
+			uploads.push(url.split("?")[0].split("/").at(-1) ?? "");
+			return respond({ bytes: 1 });
+		}
 		const { method, params } = JSON.parse(String(init?.body));
 		calls.push({ method, params });
 		if (method === "exports.begin") {
@@ -47,8 +66,8 @@ function fakeSplice() {
 			);
 			if (committed) return respond({ committed });
 			const exportId = crypto.randomUUID();
-			const { deliveryId, ...source } = params;
-			begun.set(exportId, { deliveryId, source });
+			const { deliveryId, includeSrt, ...source } = params;
+			begun.set(exportId, { deliveryId, source, includeSrt: includeSrt !== false });
 			return respond({ exportId });
 		}
 		if (method === "exports.publish") {
@@ -60,7 +79,7 @@ function fakeSplice() {
 				deliveryId: entry.deliveryId,
 				stem: `Test ${published.length + 1}`,
 				exportedAt: new Date(0).toISOString(),
-				bytes: { mp4: 8, srt: 1 },
+				bytes: { mp4: 8, ...(entry.includeSrt && { srt: 1 }) },
 			});
 			published.push(record);
 			if (loseNextPublishAnswer) {
@@ -74,10 +93,13 @@ function fakeSplice() {
 	return {
 		published,
 		calls,
+		uploads,
 		loseNextPublishAnswer: () => {
 			loseNextPublishAnswer = true;
 		},
-		fetch: Object.assign(fakeFetch, { preconnect: globalThis.fetch.preconnect }),
+		fetch: Object.assign(fakeFetch, {
+			preconnect: globalThis.fetch.preconnect,
+		}),
 	};
 }
 
@@ -85,7 +107,23 @@ function fakeSplice() {
 function horizontalEditor(): EditorCore {
 	const { main } = buildDefaultSequence({ name: "S", isMain: true }).tracks;
 	const editor = setUpEditor({
-		tracks: { main: { ...main, clips: [videoClip({ id: "a", start: 0, duration: 10 })] } },
+		tracks: {
+			main: {
+				...main,
+				clips: [videoClip({ id: "a", start: 0, duration: 10 })],
+			},
+		},
+	});
+	editor.media.setProjectItems({
+		projectItems: [
+			{
+				id: "rec",
+				name: "Recording",
+				type: "video",
+				url: "blob:recording",
+				file: new File(["video"], "video.mp4", { type: "video/mp4" }),
+			},
+		],
 	});
 	const project = editor.project.getActive();
 	editor.project.setActiveProject({
@@ -139,6 +177,65 @@ afterEach(() => {
 	else delete globals.window;
 });
 
+test("delivers a mastered Short at 1080×1920 and uploads the SRT only when requested", async () => {
+	const editor = horizontalEditor();
+	const project = editor.project.getActive();
+	editor.project.setActiveProject({
+		project: {
+			...project,
+			settings: {
+				...project.settings,
+				format: "short",
+				canvasSize: { width: 720, height: 1280 },
+			},
+		},
+	});
+	const api = new EditorApi(editor);
+	expect(api.addCaptions({
+		expectedRevision: api.getRevision(),
+		sources: project.captions?.sources,
+	})).toMatchObject({ ok: true });
+	const sequence = editor.sequences.getActiveSequence();
+	saveMixLoudness({
+		editor,
+		sequenceId: sequence.id,
+		loudness: {
+			targetLufs: -14,
+			ceilingDbtp: -1,
+			measuredLufs: -17,
+			measuredTruePeakDbtp: -5,
+			expectedLufs: -14,
+			expectedTruePeakDbtp: -2,
+			gainDb: 3,
+			fingerprint: mixFingerprint({
+				tracks: sequence.tracks,
+				projectItems: editor.media.getProjectItems(),
+			}),
+		},
+	});
+	const renders = recordRenders(editor);
+	const snapshot = takeDeliverySnapshot({ editor });
+	expect(snapshot.srt).toContain("Deploy to versel.");
+	expect(await editor.project.deliver({
+		quality: "high",
+		snapshot: { ...snapshot, includeSrt: false },
+	})).toMatchObject({ success: true, record: { bytes: { mp4: 8 } } });
+	expect(splice.uploads).toEqual(["mp4"]);
+	expect(renders[0]).toMatchObject({
+		options: { fps: { numerator: 60, denominator: 1 }, includeAudio: true },
+		scene: {
+			canvasSize: { width: 720, height: 1280 },
+			outputSize: { width: 1080, height: 1920 },
+			master: { gainDb: 3, ceilingDbtp: -1 },
+		},
+	});
+	expect(await editor.project.deliver({
+		quality: "high",
+		snapshot: { ...snapshot, deliveryId: crypto.randomUUID(), includeSrt: true },
+	})).toMatchObject({ success: true, record: { bytes: { mp4: 8, srt: 1 } } });
+	expect(splice.uploads).toEqual(["mp4", "mp4", "srt"]);
+});
+
 describe("Horizontal delivery", () => {
 	test("applies spellings to the approved edit while newer edits are made", async () => {
 		const editor = horizontalEditor();
@@ -168,10 +265,15 @@ describe("Horizontal delivery", () => {
 		editor.sequences.updateSequenceTracks({
 			tracks: { ...tracks, main: { ...tracks.main, clips: [] } },
 		});
-		expect(editor.command.getRevision()).toBeGreaterThan(approved.source.revision);
+		expect(editor.command.getRevision()).toBeGreaterThan(
+			approved.source.revision,
+		);
 		release();
 		const result = await exported;
-		expect(result).toMatchObject({ success: true, record: { ...approved.source } });
+		expect(result).toMatchObject({
+			success: true,
+			record: { ...approved.source },
+		});
 		expect(renders[0].scene).toEqual(approved.scene);
 		expect(loadSpellings).toHaveBeenCalled();
 		const begin = splice.calls.find(({ method }) => method === "exports.begin");
@@ -204,7 +306,10 @@ describe("Horizontal delivery", () => {
 		setCaptionSources({ editor, sources: [] });
 		expect(await editor.project.retryDelivery()).toMatchObject({
 			success: true,
-			record: { ...approved.source, fingerprint: await deliveryFingerprint(approved) },
+			record: {
+				...approved.source,
+				fingerprint: await deliveryFingerprint(approved),
+			},
 		});
 		expect(attempts).toBe(2);
 		expect(renders).toHaveLength(1);
@@ -215,27 +320,34 @@ describe("Horizontal delivery", () => {
 		useCaptionsStore.setState({ spellingsLoaded: true });
 		const sequenceId = editor.sequences.getActiveSequence().id;
 		const setGain = (gainDb: number) => {
-			editor.command.execute({ command: new UpdateSequenceCommand({
-				editor,
-				sequenceId,
-				label: "Adjust mix",
-				updates: { mix: { loudness: {
-					gainDb,
-					targetLufs: -14,
-					ceilingDbtp: -1,
-					measuredLufs: -17,
-					measuredTruePeakDbtp: -5,
-					expectedLufs: -14,
-					expectedTruePeakDbtp: -2,
-					fingerprint: "mix",
-				} } },
-			}) });
+			editor.command.execute({
+				command: new UpdateSequenceCommand({
+					editor,
+					sequenceId,
+					label: "Adjust mix",
+					updates: {
+						mix: {
+							loudness: {
+								gainDb,
+								targetLufs: -14,
+								ceilingDbtp: -1,
+								measuredLufs: -17,
+								measuredTruePeakDbtp: -5,
+								expectedLufs: -14,
+								expectedTruePeakDbtp: -2,
+								fingerprint: "mix",
+							},
+						},
+					},
+				}),
+			});
 		};
 		setGain(3);
 		const approved = takeDeliverySnapshot({ editor });
 		setGain(2);
-		expect(await deliveryFingerprint(takeDeliverySnapshot({ editor })))
-			.not.toBe(await deliveryFingerprint(approved));
+		expect(
+			await deliveryFingerprint(takeDeliverySnapshot({ editor })),
+		).not.toBe(await deliveryFingerprint(approved));
 		setGain(3);
 		const projectItems = [
 			{
@@ -244,6 +356,7 @@ describe("Horizontal delivery", () => {
 				hasAudio: true,
 				name: "rec",
 				file: new File([], "rec.mp4"),
+				url: "blob:recording",
 			},
 		];
 		editor.media.setProjectItems({ projectItems });
@@ -337,6 +450,167 @@ describe("Horizontal delivery", () => {
 		expect(renders[1].scene).toBe(renders[0].scene);
 	});
 
+	test("exports the approved mix after the live music and master settings change", async () => {
+		const editor = horizontalEditor();
+		spyOn(storageService, "saveProject").mockResolvedValue(undefined);
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const projectItems = [
+			...editor.media
+				.getProjectItems()
+				.map((item) => ({ ...item, hasAudio: true })),
+			{
+				id: "music",
+				type: "audio" as const,
+				name: "Music",
+				duration: 10,
+				file: new File(["music"], "bed.mp3", { type: "audio/mpeg" }),
+			},
+		];
+		editor.media.setProjectItems({ projectItems });
+		const sequenceId = editor.sequences.getActiveSequence().id;
+		await addMusic({
+			editor,
+			sequenceId,
+			projectItemId: "music",
+			options: { levelDb: -20, overrides: [{ start: 5, end: 7 }] },
+		});
+		const measured = takeDeliverySnapshot({ editor });
+		const loudness = {
+			gainDb: 3,
+			ceilingDbtp: -1,
+			targetLufs: -14,
+			measuredLufs: -17,
+			measuredTruePeakDbtp: -5,
+			expectedLufs: -14,
+			expectedTruePeakDbtp: -2,
+			fingerprint: mixFingerprint({
+				tracks: measured.scene.tracks,
+				projectItems,
+			}),
+		};
+		saveMixLoudness({ editor, sequenceId, loudness });
+		const approval = await finalizeCut({ editor, origin: "editor" });
+
+		// Reload the saved checkpoint before using it again.
+		const restored = parseProjectApproval({
+			raw: JSON.parse(JSON.stringify(editor.project.getActive().approval)),
+			parseMarkers: (raw) => normalizeMarkers({ raw }),
+		});
+		const checkpoint = restored?.checkpoints[0];
+		if (!checkpoint) throw new Error("Expected a saved checkpoint");
+		expect(checkpoint.mix?.music?.overrides).toMatchObject([
+			{ start: 5, end: 7 },
+		]);
+		expect(checkpoint.mix?.loudness).toEqual(loudness);
+
+		await updateMusic({
+			editor,
+			sequenceId,
+			options: { overrides: [], levelDb: -30 },
+		});
+		expect(reviewState({ editor }).unresolved).toContainEqual(
+			expect.objectContaining({ kind: "stale-mix" }),
+		);
+		const current = takeDeliverySnapshot({ editor });
+		saveMixLoudness({
+			editor,
+			sequenceId,
+			loudness: {
+				...loudness,
+				gainDb: 6,
+				ceilingDbtp: -2,
+				fingerprint: mixFingerprint({
+					tracks: current.scene.tracks,
+					projectItems,
+				}),
+			},
+		});
+		expect(
+			reviewState({ editor }).issues.some(({ kind }) => kind === "stale-mix"),
+		).toBe(false);
+		expect(approvedIssues({ editor, checkpoint })).toEqual([]);
+
+		const renders = recordRenders(editor);
+		const snapshot = checkpointDeliverySnapshot({ editor, checkpoint });
+		expect(
+			await editor.project.deliver({ quality: "high", snapshot }),
+		).toMatchObject({
+			success: true,
+			record: {
+				checkpointId: checkpoint.id,
+				fingerprint: approval.checkpoint.fingerprint,
+			},
+		});
+		expect(renders).toHaveLength(1);
+		expect(renders[0].scene?.master).toEqual({ gainDb: 3, ceilingDbtp: -1 });
+		expect(renders[0].scene?.tracks.audio).toEqual(
+			approval.snapshot.scene.tracks.audio,
+		);
+		expect(renders[0].scene?.tracks.audio).not.toEqual(
+			current.scene.tracks.audio,
+		);
+	});
+
+	test("refuses a render retry when the recording at the same path was replaced", async () => {
+		const editor = horizontalEditor();
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const file = {
+			...recording,
+			version: "original",
+			contentHash: "original-hash",
+		};
+		editor.media.setProjectItems({
+			projectItems: [
+				{ id: "rec", name: "Recording", type: "video", url: file.url, file },
+			],
+		});
+		let serverVersion = "original";
+		spyOn(globalThis, "fetch").mockImplementation(
+			Object.assign(
+				(...[input, init]: Parameters<typeof fetch>) =>
+					init?.method === "HEAD"
+						? Promise.resolve(
+								new Response(null, {
+									headers: {
+										"content-length": String(file.size),
+										[MEDIA_VERSION_HEADER]: serverVersion,
+									},
+								}),
+							)
+						: splice.fetch(input, init),
+				{ preconnect: fetch.preconnect },
+			),
+		);
+		const render = spyOn(editor.renderer, "exportProject").mockResolvedValue({
+			success: false,
+			error: "GPU lost",
+		});
+		const captured = takeDeliverySnapshot({ editor });
+		const snapshot = {
+			...captured,
+			source: { ...captured.source, checkpointId: "approved" },
+		};
+		expect(
+			await editor.project.deliver({ quality: "high", snapshot }),
+		).toMatchObject({
+			success: false,
+			failedStep: "render",
+			error: "GPU lost",
+		});
+		expect(render.mock.calls[0][0].scene?.projectItems[0].url).toEndWith(
+			"?version=original",
+		);
+
+		serverVersion = "replacement";
+		expect(await editor.project.retryDelivery()).toMatchObject({
+			success: false,
+			failedStep: "render",
+			error: expect.stringContaining("changed on disk"),
+		});
+		expect(render).toHaveBeenCalledTimes(1);
+		expect(splice.calls).toEqual([]);
+	});
+
 	test("Retry after a lost publish answer returns the published pair instead of a second one", async () => {
 		const editor = horizontalEditor();
 		useCaptionsStore.setState({ spellingsLoaded: true });
@@ -355,10 +629,14 @@ describe("Horizontal delivery", () => {
 			record: { stem: splice.published[0].stem },
 		});
 		expect(splice.published).toHaveLength(1);
-		const begins = splice.calls.filter(({ method }) => method === "exports.begin");
+		const begins = splice.calls.filter(
+			({ method }) => method === "exports.begin",
+		);
 		expect(begins).toHaveLength(2);
 		expect(begins[1].params.deliveryId).toBe(begins[0].params.deliveryId);
 		// The pair was published, so nothing more went up.
-		expect(splice.calls.filter(({ method }) => method === "exports.publish")).toHaveLength(1);
+		expect(
+			splice.calls.filter(({ method }) => method === "exports.publish"),
+		).toHaveLength(1);
 	});
 });

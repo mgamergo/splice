@@ -1,6 +1,10 @@
 import { type FootageFile, isFootagePath } from "@splice/bridge";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { realpath, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
+
+import { fileIdentity } from "./file-identity";
 
 export const FOOTAGE_FOLDER = "Footage";
 
@@ -104,6 +108,51 @@ export async function listFootage({
 	}
 	await walk(footage);
 	return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** Changes even when a replacement has the same size and modification time. */
+export async function footageVersion({
+	absolutePath,
+}: {
+	absolutePath: string;
+}): Promise<string> {
+	const info = await stat(absolutePath);
+	if (!info.isFile()) throw new Error("Footage is unavailable.");
+	return createHash("sha256")
+		.update([info.dev, ...fileIdentity(info)].join())
+		.digest("hex");
+}
+
+const footageHashes = new Map<string, Promise<string>>();
+const MAX_CACHED_HASHES = 512;
+
+/** Hash the file on demand and share the result between probes of that version. */
+export function footageContentHash({
+	absolutePath,
+	version,
+}: {
+	absolutePath: string;
+	version: string;
+}): Promise<string> {
+	const cached = footageHashes.get(version);
+	if (cached) return cached;
+	const pending = (async () => {
+		const hash = createHash("sha256");
+		for await (const chunk of createReadStream(absolutePath))
+			hash.update(chunk);
+		if ((await footageVersion({ absolutePath })) !== version)
+			throw new Error("Footage changed while reading its identity.");
+		return hash.digest("hex");
+	})().catch((error: unknown) => {
+		if (footageHashes.get(version) === pending) footageHashes.delete(version);
+		throw error;
+	});
+	if (footageHashes.size >= MAX_CACHED_HASHES) {
+		const oldest = footageHashes.keys().next();
+		if (!oldest.done) footageHashes.delete(oldest.value);
+	}
+	footageHashes.set(version, pending);
+	return pending;
 }
 
 /** Serves a file with HTTP range support, which media elements and mediabunny rely on. */

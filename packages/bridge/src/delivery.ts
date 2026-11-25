@@ -45,6 +45,8 @@ export const projectCaptionsSchema = z.strictObject({
 	cueEdits: z.array(cueEditSchema).default([]),
 	/** Corrections the creator applied across the project. */
 	replacements: z.array(replacementSchema).default([]),
+	/** The reusable spellings restored with an approved cut. */
+	spellings: z.array(replacementSchema).optional(),
 });
 
 /**
@@ -73,6 +75,9 @@ export function parseProjectCaptions(value: unknown): ProjectCaptions | undefine
 		sources: valid({ schema: captionSourceSchema, entries: saved.sources }),
 		cueEdits: valid({ schema: cueEditSchema, entries: saved.cueEdits }),
 		replacements: valid({ schema: replacementSchema, entries: saved.replacements }),
+		...(Array.isArray(saved.spellings) && {
+			spellings: valid({ schema: replacementSchema, entries: saved.spellings }),
+		}),
 	};
 }
 
@@ -141,7 +146,8 @@ export const exportSourceSchema = z.strictObject({
 	projectName: z.string().min(1).max(200),
 	sequenceId: z.string().min(1).max(200),
 	sequenceName: z.string().max(200),
-	/** The editor's command revision when the export started. */
+	checkpointId: z.string().min(1).max(200).optional(),
+	/** The editor's command revision when the cut was approved. */
 	revision: z.number().int().nonnegative(),
 	/** A hash of the exported sequence and its captions, stable across reloads. */
 	fingerprint: z.string().regex(/^[0-9a-f]{8,64}$/),
@@ -152,17 +158,17 @@ export const exportSourceSchema = z.strictObject({
 /** Names one Export click, so retrying it can't publish a second pair. */
 const deliveryId = z.string().regex(/^[0-9a-f-]{36}$/);
 
-/** One published MP4/SRT pair under Exports. */
+/** One published MP4 and its optional SRT under Exports. */
 export const exportRecordSchema = exportSourceSchema.extend({
 	/**
-	 * Both files are `<stem>.mp4` and `<stem>.srt` in the folder `<stem>`
+	 * Files are named `<stem>.mp4` and `<stem>.srt` in the folder `<stem>`
 	 * under Exports (directly in Exports for pairs from before folders).
 	 */
 	stem: z.string().min(1),
 	/** Missing on pairs from before delivery ids. */
 	deliveryId: deliveryId.optional(),
 	exportedAt: z.string(),
-	bytes: z.strictObject({ mp4: z.number(), srt: z.number() }),
+	bytes: z.strictObject({ mp4: z.number(), srt: z.number().optional() }),
 });
 
 /** `Exports/exports.json`, the history of pairs from before per-export folders. */
@@ -176,6 +182,7 @@ export type ExportFileKind = (typeof EXPORT_FILE_KINDS)[number];
 
 export const beginExportRequestSchema = exportSourceSchema.extend({
 	deliveryId,
+	includeSrt: z.boolean().optional(),
 });
 export const exportIdRequestSchema = z.strictObject({
 	exportId: z.string().regex(/^[0-9a-f-]{36}$/),

@@ -131,6 +131,25 @@ describe("the export store", () => {
 		expect((await store.list({ projectId: "other" })).exports).toEqual([]);
 	});
 
+	test("publishes an MP4 without an SRT when the export omits the sidecar", async () => {
+		const root = await tempRoot();
+		const store = createExportStore({ root });
+		const request = { ...source, deliveryId: crypto.randomUUID(), includeSrt: false };
+		const begun = await store.begin(request);
+		if (!("exportId" in begun)) throw new Error("Expected a new export");
+		await store.write({ ...begun, kind: "mp4", offset: 0, body: body("video") });
+		const record = await store.publish(begun);
+		expect(record.bytes).toEqual({ mp4: 5 });
+		expect(await visible(join(root, "Exports", record.stem))).toEqual([
+			`${record.stem}.mp4`,
+			"export.json",
+		]);
+		const { exports } = await store.list({});
+		expect(exports[0].files).toEqual({ mp4: `${record.stem}/${record.stem}.mp4` });
+		expect(exports[0].present).toBe(true);
+		expect(await store.begin(request)).toEqual({ committed: record });
+	});
+
 	test("publishes nothing until both files are written, and an abort drops the staged files", async () => {
 		const root = await tempRoot();
 		const store = createExportStore({ root });

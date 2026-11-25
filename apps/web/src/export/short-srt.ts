@@ -6,8 +6,8 @@ import { mediaTimeToSeconds } from "@/wasm";
 const seconds = (time: SequenceTracks["main"]["clips"][number]["startTime"]) =>
 	mediaTimeToSeconds({ time });
 
-/** Uses the exact caption clips the export burns in, including direct corrections. */
-export function shortSrt({ tracks }: { tracks: SequenceTracks }): string {
+/** Reads the caption clips the export burns in, including direct corrections. */
+export function shortCaptionDelivery({ tracks }: { tracks: SequenceTracks }) {
 	const cues = tracks.overlay
 		.flatMap((track) =>
 			track.type === "text" &&
@@ -24,6 +24,14 @@ export function shortSrt({ tracks }: { tracks: SequenceTracks }): string {
 						}))
 				: [],
 		)
+		.filter(({ text }) => text.length > 0)
 		.sort((a, b) => a.start - b.start);
-	return serializeCuesToSrt({ cues, preserveOverlaps: true });
+	return {
+		srt: serializeCuesToSrt({ cues, preserveOverlaps: true }),
+		cueCount: cues.length,
+	};
+}
+
+export function shortSrt({ tracks }: { tracks: SequenceTracks }): string {
+	return shortCaptionDelivery({ tracks }).srt;
 }

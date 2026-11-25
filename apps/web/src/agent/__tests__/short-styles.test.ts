@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
+import { ApprovalApi } from "@/approval/api";
 import { CAPTION_TRACK_NAME, placeShortCaptions } from "@/agent/short-captions";
 import { isHookTrack } from "@/agent/short-hook";
 import { fillExplainerPicture } from "@/agent/explainer-picture";
@@ -20,6 +21,7 @@ const recording = {
 	duration: 6,
 	...canvas,
 	hasAudio: true,
+	url: "blob:recording",
 	file: new File([], "recording.mp4"),
 };
 const sources = [
@@ -357,7 +359,7 @@ describe("Short styles", () => {
 		expect(sequence().tracks.overlay.find(isHookTrack)).toBeUndefined();
 	});
 
-	test("remaps a Raw hook when the picture speeds up and flags a removed anchor", () => {
+	test("remaps a Raw hook when the picture speeds up and reports a removed anchor for review", async () => {
 		setRaw();
 		expect(
 			api.setShortHook({
@@ -389,6 +391,24 @@ describe("Short styles", () => {
 		expect(hook()).toMatchObject({
 			shortHook: { unavailable: true },
 		});
+		const approval = new ApprovalApi({ editor, api });
+		const review = await approval.issuesList({});
+		expect(review).toMatchObject({
+			ok: true,
+			issues: [{
+				kind: "short-hook-flag",
+				title: "Opening hook flagged for review",
+				start: 0,
+				end: 1,
+			}],
+		});
+		if (!review.ok) throw new Error("Expected review issues");
+		const [issue] = review.issues;
+		expect(await approval.dismissIssue({
+			issueId: issue.id,
+			evidence: issue.evidence,
+		})).toMatchObject({ ok: true });
+		expect(await approval.issuesList({})).toMatchObject({ issues: [], dismissed: 1 });
 		const scene = buildScene({
 			tracks: sequence().tracks,
 			projectItems: [recording],
@@ -399,6 +419,7 @@ describe("Short styles", () => {
 		expect(scene.children.some((node) => node instanceof TextNode)).toBe(false);
 		editor.command.undo();
 		expect(hook()).toMatchObject({ name: "Opening hook", duration: s(1) });
+		expect(await approval.issuesList({ includeDismissed: true })).toMatchObject({ issues: [] });
 	});
 
 	test("fills only default framing when switching a Raw cut to Explainer", () => {

@@ -466,7 +466,7 @@ export function buildCaptionCues({
 	tokens = applyReplacements({ tokens, ...project });
 	tokens = applyReplacements({
 		tokens,
-		replacements: spellings,
+		replacements: captions.spellings ?? spellings,
 		scope: "spelling",
 	});
 	tokens = applyReplacements({ tokens, ...project, over: "spelling" });

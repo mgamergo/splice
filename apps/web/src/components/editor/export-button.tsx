@@ -53,15 +53,11 @@ export function ExportButton() {
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActiveOrNull());
 	const hasProject = !!activeProject;
-	// Horizontal exports publish an MP4/SRT pair through splice; without splice
-	// (or for a Short) the export downloads.
-	const deliversPair =
-		!!activeProject &&
-		projectFormat({ project: activeProject }) === "horizontal" &&
-		readBridgeToken() !== null;
+	// The bridge saves exports under Exports. Standalone editors download them.
+	const usesDelivery = hasProject && readBridgeToken() !== null;
 
 	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
-		if (!open) {
+		if (!open && !usesDelivery) {
 			editor.project.cancelExport();
 			editor.project.clearExportState();
 		}
@@ -99,7 +95,7 @@ export function ExportButton() {
 				</button>
 			</PopoverTrigger>
 			{hasProject &&
-				(deliversPair ? (
+				(usesDelivery ? (
 					// Mounted only while open, so the history and the current edit's
 					// fingerprint are read fresh each time.
 					isExportPopoverOpen && <DeliveryPopover />

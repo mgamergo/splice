@@ -108,10 +108,16 @@ export async function fetchTranscriptSources({
 	editor,
 }: {
 	editor: EditorCore;
-}): Promise<{ sources: CaptionsRequest["sources"]; withoutTranscript: string[] }> {
+}): Promise<{
+	sources: CaptionsRequest["sources"];
+	withoutTranscript: string[];
+}> {
 	const items = recordings({ editor });
 	const paths = [...new Set(items.flatMap(({ path }) => (path ? [path] : [])))];
-	const wordsByPath = new Map<string, CaptionsRequest["sources"][number]["words"]>();
+	const wordsByPath = new Map<
+		string,
+		CaptionsRequest["sources"][number]["words"]
+	>();
 	// transcript.words takes at most 200 paths per call.
 	for (let offset = 0; offset < paths.length; offset += 200) {
 		const { transcripts } = transcriptWordsSchema.parse(
@@ -141,7 +147,9 @@ export async function loadCaptionWords({
 }: {
 	editor: EditorCore;
 }): Promise<{ loaded: number; withoutTranscript: string[] }> {
-	const { sources, withoutTranscript } = await fetchTranscriptSources({ editor });
+	const { sources, withoutTranscript } = await fetchTranscriptSources({
+		editor,
+	});
 	if (sources.length) setCaptionSources({ editor, sources });
 	return { loaded: sources.length, withoutTranscript };
 }
@@ -170,15 +178,22 @@ export async function correctCaption({
 	if (plan.scope === "spelling") {
 		await useCaptionsStore.getState().saveSpelling(plan.replacement);
 		// The project's own correction of these words would hide the spelling.
-		const withoutRule = withoutRuleFor({
-			captions: editor.project.getActive().captions ?? EMPTY_CAPTIONS,
-			spelling: plan.replacement,
-		});
-		if (withoutRule)
+		const current = editor.project.getActive().captions ?? EMPTY_CAPTIONS;
+		const withoutRule = withoutRuleFor({ captions: current, spelling: plan.replacement });
+		const updated = current.spellings
+			? {
+				...(withoutRule ?? current),
+				spellings: [
+					...current.spellings.filter(({ from }) => from !== plan.replacement.from),
+					plan.replacement,
+				],
+			}
+			: withoutRule;
+		if (updated)
 			editor.command.execute({
 				command: new UpdateProjectCaptionsCommand({
 					editor,
-					captions: withoutRule,
+					captions: updated,
 					label: "Use the saved spelling",
 				}),
 			});
@@ -195,7 +210,7 @@ export async function correctCaption({
 	return plan.scope === "project" ? { replacement: plan.replacement } : {};
 }
 
-let stopPassage: (() => void) | null = null;
+const passageStops = new WeakMap<EditorCore["playback"], () => void>();
 
 /**
  * Plays one cue's passage and pauses with the playhead on its end, unless the
@@ -205,39 +220,40 @@ export function playCue({
 	editor,
 	cue,
 }: {
-	editor: EditorCore;
+	editor: Pick<EditorCore, "playback">;
 	cue: Pick<CaptionCue, "start" | "end">;
 }): void {
-	stopPassage?.();
+	const { playback } = editor;
+	passageStops.get(playback)?.();
 	const end = mediaTimeFromSeconds({ seconds: cue.end });
-	editor.playback.seek({ time: mediaTimeFromSeconds({ seconds: cue.start }) });
-	editor.playback.play();
+	playback.seek({ time: mediaTimeFromSeconds({ seconds: cue.start }) });
+	playback.play();
 	const finish = () => {
 		stop();
-		editor.playback.pause();
-		editor.playback.seek({ time: end });
+		playback.pause();
+		playback.seek({ time: end });
 	};
 	// Count from playback, which may wait for the final mix to render.
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const followPlayback = () => {
-		if (editor.playback.getIsPlaying()) {
+		if (playback.getIsPlaying()) {
 			timer ??= setTimeout(finish, (cue.end - cue.start) * 1000);
-		} else if (!editor.playback.getIsPreparingPreview()) {
+		} else if (!playback.getIsPreparingPreview()) {
 			stop();
 		}
 	};
-	const unsubscribeUpdate = editor.playback.onUpdate((time) => {
+	const unsubscribeUpdate = playback.onUpdate((time) => {
 		if (time >= end) finish();
 	});
-	const unsubscribeSeek = editor.playback.onSeek(() => stop());
-	const unsubscribePause = editor.playback.subscribe(followPlayback);
+	const unsubscribeSeek = playback.onSeek(() => stop());
+	const unsubscribePause = playback.subscribe(followPlayback);
 	function stop() {
 		clearTimeout(timer);
 		unsubscribeUpdate();
 		unsubscribeSeek();
 		unsubscribePause();
-		if (stopPassage === stop) stopPassage = null;
+		passageStops.delete(playback);
 	}
-	stopPassage = stop;
+	passageStops.set(playback, stop);
 	followPlayback();
 }

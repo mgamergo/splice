@@ -334,10 +334,12 @@ function resolveSourceTime({
 }: Parameters<typeof locateSourceTime>[0]): {
 	anchor: Anchor | null;
 	covered: boolean;
+	reviewTime?: number;
 } {
 	const pictureTracks = videoTracks(tracks).filter((track) => !track.hidden);
 	let anchor: Anchor | null = null;
-	let covered = false;
+	let coveredAt: number | undefined;
+	let nearestEdge: { time: number; sourceDistance: number } | undefined;
 	const distance = (time: number) =>
 		near === undefined ? time : Math.abs(time - near);
 	for (const [layer, track] of pictureTracks.entries()) {
@@ -349,7 +351,19 @@ function resolveSourceTime({
 			)
 				continue;
 			const range = sourceRange(clip);
-			if (sourceTime < range.start || sourceTime >= range.end) continue;
+			if (sourceTime < range.start || sourceTime >= range.end) {
+				const edge = sourceTime < range.start ? range.start : range.end;
+				const sourceDistance = Math.abs(edge - sourceTime);
+				const time = seconds(clip.startTime) + (edge - range.start) / range.rate;
+				if (
+					!nearestEdge ||
+					sourceDistance < nearestEdge.sourceDistance ||
+					(sourceDistance === nearestEdge.sourceDistance &&
+						distance(time) < distance(nearestEdge.time))
+				)
+					nearestEdge = { time, sourceDistance };
+				continue;
+			}
 			const time =
 				seconds(clip.startTime) + (sourceTime - range.start) / range.rate;
 			const frameTime = ticks(time);
@@ -375,17 +389,23 @@ function resolveSourceTime({
 					),
 				);
 			if (obscured) {
-				covered = true;
+				if (coveredAt === undefined || distance(time) < distance(coveredAt))
+					coveredAt = time;
 			} else if (
 				!anchor ||
 				clip.id === preferredClipId ||
-				(anchor.clip.id !== preferredClipId && distance(time) < distance(anchor.time))
+				(anchor.clip.id !== preferredClipId &&
+					distance(time) < distance(anchor.time))
 			) {
 				anchor = { time, trackId: track.id, clip };
 			}
 		}
 	}
-	return { anchor, covered };
+	return {
+		anchor,
+		covered: coveredAt !== undefined,
+		reviewTime: coveredAt ?? nearestEdge?.time,
+	};
 }
 
 /** Map the planned source range onto the contiguous surviving picture nearest the action. */
@@ -1111,11 +1131,11 @@ export function syncGraphics({
 	);
 	for (const record of ordered) {
 		const current = shown.get(record.id);
-		const { anchor, covered } = resolveSourceTime({
+		const { anchor, covered, reviewTime } = resolveSourceTime({
 			tracks,
 			projectItemId: record.action.projectItemId,
 			sourceTime: record.action.time,
-			near: record.placed?.anchor,
+			near: record.placed?.anchor ?? record.reviewTime,
 		});
 		const overrides = current
 			? captureAdjustments({
@@ -1139,6 +1159,10 @@ export function syncGraphics({
 			records.push({
 				...adjusted,
 				placed: undefined,
+				reviewTime: Math.min(
+					pictureEnd,
+					reviewTime ?? record.placed?.anchor ?? record.reviewTime ?? 0,
+				),
 				flags: [
 					flag({
 						code: covered ? "action_covered" : "action_missing",
@@ -1191,6 +1215,7 @@ export function syncGraphics({
 			records.push({
 				...adjusted,
 				placed: undefined,
+				reviewTime: anchor.time,
 				flags: [
 					...flags,
 					flag({
@@ -1462,7 +1487,7 @@ export function syncGraphics({
 				);
 			}
 		}
-		records.push({ ...adjusted, placed, flags });
+		records.push({ ...adjusted, placed, reviewTime: undefined, flags });
 	}
 
 	return {

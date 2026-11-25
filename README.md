@@ -38,7 +38,7 @@ To let an agent edit, register `splice mcp` as a stdio MCP server in your agent 
 }
 ```
 
-`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe`, `transcribe_status`, `detect_pauses`, `raw_sequence`, `rough_cut`, `takes_list`, `captions_add`, `captions_list`, `captions_correct`, `cut_transcript`, `transcript_selection`, `exports_list`, `measure_loudness`, `normalize_loudness` and `noise_reduction`.
+`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe`, `transcribe_status`, `detect_pauses`, `raw_sequence`, `rough_cut`, `takes_list`, `captions_add`, `captions_list`, `captions_correct`, `cut_transcript`, `transcript_selection`, `exports_list`, `measure_loudness`, `normalize_loudness` and `noise_reduction`. Use `cut_finalize` to save the reviewed revision, `checkpoint_status` and `checkpoint_compare` to inspect it, and `issues_list` and `issue_dismiss` to work through export review.
 
 Put recordings in the `Footage` folder. `items_import` adds them to the open project as project items that reference the files in place; nothing is copied into the browser. Files you drop or upload in the editor are still stored in the browser, as before. `bun run splice link` prints the editor link of a running `splice`, for example one that `splice mcp` started. The editor header shows whether an agent is connected, and **Stop agent** refuses its edits until you allow them again.
 
@@ -85,7 +85,7 @@ Explainer fills the 9:16 frame with vertical footage by default. Use `graphics_p
 
 `rough_cut` burns in word-by-word captions from the cached transcripts and follows the timing of the tightened cut. To restyle them or caption another sequence, call `captions_add`. Captions start centered in Explainer and lower in Raw. Auto placement keeps each passage together where possible and uses graphics targets to keep the action visible. Use `short_caption_placement` to set a fixed placement, or edit caption clips in the Timeline panel. Direct placement changes survive a rerun.
 
-Click **Export** to download a 1080×1920 MP4 with burned-in captions. Select **Download a separate SRT** if you also want the caption file. The SRT uses the text and timing from the same export. Agents can request the active sequence's current SRT with `short_srt`.
+Click **Export**, review any issues, and choose the current edit or an approved cut. Splice saves a 1080×1920 MP4 with burned-in captions and applies the cut's saved master gain. Select **Include a separate SRT when captions are available** to save the same caption text and timing alongside the MP4. In the standalone editor, Export downloads the files. Agents can request the active sequence's current SRT with `short_srt`.
 
 ### Horizontal captions and export
 
