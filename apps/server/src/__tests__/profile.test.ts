@@ -333,10 +333,13 @@ test("finishes a restarted apply whose history row and profile were already writ
 	expect(await read("updates.jsonl")).toBe(line(update));
 });
 
-async function learn(
-	store: ReturnType<typeof createProfileStore>,
-	preference: Omit<Preference, "evidenceIds">,
-) {
+async function learn({
+	store,
+	preference,
+}: {
+	store: ReturnType<typeof createProfileStore>;
+	preference: Omit<Preference, "evidenceIds">;
+}) {
 	const evidence = correction(1);
 	await store.capture({ corrections: [evidence] });
 	await store.analyze({
@@ -356,8 +359,14 @@ test.each([false, true])(
 	async (newestFirst) => {
 		const store = createProfileStore({ root });
 		const original = await store.read();
-		const a = await learn(store, { kind: "pause_padding_seconds", value: 0.5 });
-		const b = await learn(store, { kind: "false_starts", value: "remove" });
+		const a = await learn({
+			store,
+			preference: { kind: "pause_padding_seconds", value: 0.5 },
+		});
+		const b = await learn({
+			store,
+			preference: { kind: "false_starts", value: "remove" },
+		});
 		const first = newestFirst ? b : a;
 		const second = newestFirst ? a : b;
 		const params = { id: first, operationId: randomUUID() };
@@ -383,8 +392,14 @@ test.each([false, true])(
 	async (overwrite) => {
 		const store = createProfileStore({ root });
 		const original = await store.read();
-		const a = await learn(store, { kind: "pause_padding_seconds", value: 0.5 });
-		const b = await learn(store, { kind: "pause_padding_seconds", value: 1 });
+		const a = await learn({
+			store,
+			preference: { kind: "pause_padding_seconds", value: 0.5 },
+		});
+		const b = await learn({
+			store,
+			preference: { kind: "pause_padding_seconds", value: 1 },
+		});
 		const params = { id: a, operationId: randomUUID() };
 		expect(
 			(await store.panel()).updates.find(({ id }) => id === a)?.conflicts,
@@ -408,9 +423,18 @@ test.each([false, true])(
 test("reverting a superseded update does not revive another overwritten value", async () => {
 	const store = createProfileStore({ root });
 	const original = await store.read();
-	const a = await learn(store, { kind: "pause_padding_seconds", value: 0.5 });
-	await learn(store, { kind: "pause_padding_seconds", value: 1 });
-	const c = await learn(store, { kind: "pause_padding_seconds", value: 2 });
+	const a = await learn({
+		store,
+		preference: { kind: "pause_padding_seconds", value: 0.5 },
+	});
+	await learn({
+		store,
+		preference: { kind: "pause_padding_seconds", value: 1 },
+	});
+	const c = await learn({
+		store,
+		preference: { kind: "pause_padding_seconds", value: 2 },
+	});
 	await store.revert({
 		id: a,
 		operationId: randomUUID(),
@@ -432,7 +456,10 @@ test("reverts an automatic preference independently of older free-form MCP text"
 		expectedVersion: original.version,
 		operationId: randomUUID(),
 	});
-	const id = await learn(store, { kind: "false_starts", value: "keep" });
+	const id = await learn({
+		store,
+		preference: { kind: "false_starts", value: "keep" },
+	});
 	expect((await store.read()).text).toContain(manual);
 	await store.revert({ id: applied.updateId, operationId: randomUUID() });
 	expect((await store.read()).text).not.toContain(manual);

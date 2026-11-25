@@ -148,7 +148,7 @@ function describe(preference: Preference) {
 }
 
 export function renderProfile(entries: ProfileEntry[]) {
-	const manual = entries.find(({ kind }) => kind === "manual");
+	const manual = entries.find((entry) => entry.kind === "manual");
 	const preferences = entries
 		.filter((entry) => entry.kind !== "manual")
 		.sort((a, b) => a.kind.localeCompare(b.kind, "en"));

@@ -67,7 +67,13 @@ function changesFor(update: Update) {
 	);
 }
 
-function entriesFor(text: string, latest: Update | undefined) {
+function entriesFor({
+	text,
+	latest,
+}: {
+	text: string;
+	latest: Update | undefined;
+}) {
 	return latest?.text === text && latest.entries
 		? latest.entries
 		: manualEntries(text);
@@ -103,7 +109,13 @@ function revertHistory(updates: Update[]) {
 			.map((later) => updates[later].id);
 	}
 
-	function inverseAt(index: number, entries: ProfileEntry[]) {
+	function inverseAt({
+		index,
+		entries,
+	}: {
+		index: number;
+		entries: ProfileEntry[];
+	}) {
 		const next = new Map(entries.map((entry) => [entry.kind, entry]));
 		for (const change of changes[index] ?? []) {
 			const kind = changeKind(change);
@@ -139,8 +151,15 @@ function revertHistory(updates: Update[]) {
 	}
 
 	return {
-		canRevert: (update: Update, index: number) =>
-			!update.reverts && !reverted.has(update.id) && !!changes[index]?.length,
+		canRevert(index: number) {
+			const update = updates[index];
+			return (
+				!!update &&
+				!update.reverts &&
+				!reverted.has(update.id) &&
+				!!changes[index]?.length
+			);
+		},
 		conflictsAt,
 		inverseAt,
 	};
@@ -462,7 +481,7 @@ export function createProfileStore({ root }: { root: string }) {
 		const ids = [...new Set(correctionIds)];
 		if (ids.some((id) => !pending.has(id)))
 			throw invalidParams("Every correction ID must still be pending.");
-		const before = entriesFor(previousText, updates.at(-1));
+		const before = entriesFor({ text: previousText, latest: updates.at(-1) });
 		const after =
 			entries ?? (text === previousText ? before : manualEntries(text));
 		const update = {
@@ -558,7 +577,7 @@ export function createProfileStore({ root }: { root: string }) {
 					text,
 					updates: updates
 						.map((update, index) => {
-							const canRevert = current && history.canRevert(update, index);
+							const canRevert = current && history.canRevert(index);
 							return {
 								id: update.id,
 								timestamp: update.timestamp,
@@ -603,11 +622,7 @@ export function createProfileStore({ root }: { root: string }) {
 					const latest = updates.at(-1);
 					const text = await readProfile();
 					const history = revertHistory(updates);
-					if (
-						!target ||
-						latest?.text !== text ||
-						!history.canRevert(target, index)
-					)
+					if (!target || latest?.text !== text || !history.canRevert(index))
 						throw invalidParams(
 							"This profile update can no longer be reverted.",
 						);
@@ -618,7 +633,10 @@ export function createProfileStore({ root }: { root: string }) {
 								? `This revert conflicts with update ${conflicts.join(", ")}. Review the conflicts before confirming.`
 								: "Revert conflicts changed. Review this update before trying again.",
 						);
-					const entries = history.inverseAt(index, entriesFor(text, latest));
+					const entries = history.inverseAt({
+						index,
+						entries: entriesFor({ text, latest }),
+					});
 					return apply({
 						text: renderProfile(entries),
 						entries,
@@ -686,7 +704,7 @@ export function createProfileStore({ root }: { root: string }) {
 					const text = await readProfile();
 					return {
 						text,
-						entries: entriesFor(text, updates.at(-1)),
+						entries: entriesFor({ text, latest: updates.at(-1) }),
 						corrections: (await readCorrections(pendingPath)).slice(0, 12),
 						evidence: responses
 							.flatMap(({ question, answer }) =>
