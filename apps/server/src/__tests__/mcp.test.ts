@@ -10,7 +10,7 @@ import { createNoiseReducer, renderDenoised } from "../noise-reduction";
 import { createRpcClient, RpcCallError, type RpcCall } from "../rpc-client";
 import { BridgeError } from "../tab-bridge";
 import { startServer } from "../server";
-import { BRIDGE_PATHS } from "@splice/bridge";
+import { BRIDGE_PATHS, RPC_ERRORS } from "@splice/bridge";
 import { randomUUID } from "node:crypto";
 
 async function connect(rpc: RpcCall) {
@@ -151,15 +151,17 @@ describe("splice mcp tools", () => {
 					},
 				}),
 			).toMatchObject({ result: { recorded: 1 } });
-			expect(await tabCall({ method: "profile.read" })).toMatchObject({
-				error: expect.anything(),
-			});
-			expect(await tabCall({ method: "profile.pending" })).toMatchObject({
-				error: expect.anything(),
-			});
-			expect(await tabCall({ method: "profile.apply" })).toMatchObject({
-				error: expect.anything(),
-			});
+			const blocked = { error: { code: RPC_ERRORS.METHOD_NOT_FOUND } };
+			expect(await tabCall({ method: "profile.read" })).toMatchObject(blocked);
+			expect(await tabCall({ method: "profile.pending" })).toMatchObject(
+				blocked,
+			);
+			expect(
+				await tabCall({
+					method: "profile.apply",
+					params: { text: "# Unwanted edit", correctionIds: [id] },
+				}),
+			).toMatchObject(blocked);
 
 			const { tools } = await client.listTools();
 			expect(

@@ -3,6 +3,7 @@ import { callSplice } from "./splice-api";
 
 const outbox: Correction[] = [];
 let sending = false;
+let flushRequested = false;
 
 export function reportCorrections(corrections: Correction[]) {
 	outbox.push(...corrections);
@@ -11,8 +12,13 @@ export function reportCorrections(corrections: Correction[]) {
 
 /** Retries with the same IDs when the editor next connects or records a Correction. */
 export async function flushCorrections() {
-	if (sending || !outbox.length) return;
+	if (sending) {
+		flushRequested = true;
+		return;
+	}
+	if (!outbox.length) return;
 	sending = true;
+	flushRequested = false;
 	try {
 		while (outbox.length) {
 			const corrections = outbox.slice(0, 100);
@@ -23,5 +29,6 @@ export async function flushCorrections() {
 		console.warn("Couldn't send editing profile Corrections to splice:", error);
 	} finally {
 		sending = false;
+		if (flushRequested) void flushCorrections();
 	}
 }
