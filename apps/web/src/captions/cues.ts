@@ -3,13 +3,15 @@
  * words heard in the sequence are corrected, grouped into readable phrases
  * and timed against the sequence, so they follow every cut and take swap.
  */
-import type {
-	CaptionCueSummary,
-	CaptionScope,
-	CaptionWordRef,
-	CueEdit,
-	ProjectCaptions,
-	Replacement,
+import {
+	type CaptionCueSummary,
+	type CaptionScope,
+	type CaptionWordRef,
+	type CueEdit,
+	MAX_CUE_TEXT_CHARS,
+	MAX_REPLACEMENT_CHARS,
+	type ProjectCaptions,
+	type Replacement,
 } from "@splice/bridge/delivery";
 import { mapWordsToTimeline } from "@/agent/captions";
 import type { SequenceTracks } from "@/timeline/types";
@@ -57,20 +59,30 @@ const CONNECTIVES = new Set([
 	"unless",
 ]);
 
-/** A cue as the editor uses it: the summary plus the words it covers. */
-export interface CaptionCue extends CaptionCueSummary {
-	words: CaptionWordRef[];
-}
-
-/** One word, or several words a correction joined, on the sequence. */
-interface Token {
-	start: number;
-	end: number;
+/** What one stretch of a cue shows, and where its text came from. */
+export interface CuePart {
 	text: string;
 	/** The transcript's words. */
 	original: string;
-	words: CaptionWordRef[];
 	correctedBy?: CaptionScope;
+	/** The cue edit that wrote this text. */
+	edit?: CueEdit;
+}
+
+/**
+ * A cue as the editor uses it: the summary plus the words it covers, each
+ * with the clip it is heard through, and the parts its text is made of.
+ */
+export interface CaptionCue extends CaptionCueSummary {
+	words: CaptionWordRef[];
+	parts: CuePart[];
+}
+
+/** One word, or several words a correction joined, on the sequence. */
+interface Token extends CuePart {
+	start: number;
+	end: number;
+	words: CaptionWordRef[];
 	/** A cue the creator corrected stays a cue of its own. */
 	wholeCue?: boolean;
 }
@@ -117,28 +129,84 @@ function join({
 	};
 }
 
-/** Replaces each run of words a cue edit names with the creator's text. */
+/** Whether placed words are the ones an edit names, through the clips it names. */
+function editMatch({
+	placed,
+	edit,
+}: {
+	placed: CaptionWordRef[];
+	edit: CueEdit;
+}): "placement" | "words" | null {
+	if (!sameRefs({ a: placed, b: edit.words })) return null;
+	return edit.words.every(
+		(ref, i) => !ref.clipId || ref.clipId === placed[i].clipId,
+	)
+		? "placement"
+		: "words";
+}
+
+const hasPlacement = (edit: CueEdit) =>
+	edit.words.every(({ clipId }) => clipId !== undefined);
+
+/**
+ * Replaces the run of words each cue edit names with the creator's text, at
+ * the placement the edit was made on, so a repeat of the same words keeps
+ * its own captions. When a split moved the words to a new clip, the edit
+ * follows them if they are heard only once.
+ */
 function applyCueEdits({
 	tokens,
 	edits,
+	sequenceId,
+	clipIds,
 }: {
 	tokens: Token[];
 	edits: CueEdit[];
+	sequenceId?: string;
+	/** The clips on the sequence. */
+	clipIds: Set<string>;
 }): Token[] {
-	if (!edits.length) return tokens;
-	const byFirst = new Map<string, CueEdit[]>();
-	for (const edit of edits) {
-		const key = refKey(edit.words[0]);
-		byFirst.set(key, [...(byFirst.get(key) ?? []), edit]);
+	const relevant = edits.filter(
+		(edit) => !edit.sequenceId || edit.sequenceId === sequenceId,
+	);
+	if (!relevant.length) return tokens;
+	const startsAt = new Map<string, number[]>();
+	for (const [i, token] of tokens.entries()) {
+		const key = refKey(token.words[0]);
+		startsAt.set(key, [...(startsAt.get(key) ?? []), i]);
 	}
+	const placedClaims = new Map<number, CueEdit>();
+	const legacyClaims = new Map<number, CueEdit>();
+	for (const edit of relevant) {
+		const placements: number[] = [];
+		const elsewhere: number[] = [];
+		for (const i of startsAt.get(refKey(edit.words[0])) ?? []) {
+			const match = editMatch({
+				placed: tokens.slice(i, i + edit.words.length).flatMap((t) => t.words),
+				edit,
+			});
+			if (match === "placement") placements.push(i);
+			else if (match === "words") elsewhere.push(i);
+		}
+		// A removed clip takes its edits with it; a split one keeps its id.
+		const followsSplit =
+			elsewhere.length === 1 &&
+			edit.words.every(({ clipId }) => !clipId || clipIds.has(clipId));
+		const claims = hasPlacement(edit) ? placedClaims : legacyClaims;
+		for (const i of placements.length ? placements : followsSplit ? elsewhere : [])
+			if (!claims.has(i)) claims.set(i, edit);
+	}
+	// A placed edit overrides any legacy edit covering the same words here.
+	const placedWords = new Set<number>();
+	for (const [start, edit] of placedClaims)
+		for (let i = start; i < start + edit.words.length; i++) placedWords.add(i);
+	for (const [start, edit] of legacyClaims)
+		if (!edit.words.some((_, offset) => placedWords.has(start + offset)))
+			placedClaims.set(start, edit);
+
 	const result: Token[] = [];
 	for (let i = 0; i < tokens.length; ) {
-		const edit = byFirst.get(refKey(tokens[i].words[0]))?.find((candidate) =>
-			sameRefs({
-				a: tokens.slice(i, i + candidate.words.length).flatMap((t) => t.words),
-				b: candidate.words,
-			}),
-		);
+		const edit = placedClaims.get(i);
 		if (!edit) {
 			result.push(tokens[i]);
 			i++;
@@ -147,6 +215,7 @@ function applyCueEdits({
 		const run = tokens.slice(i, i + edit.words.length);
 		result.push({
 			...join({ tokens: run, scope: "cue", text: edit.text }),
+			edit,
 			wholeCue: true,
 		});
 		i += run.length;
@@ -171,6 +240,28 @@ function withEdgePunctuation({
 	return `${start}${text}${end}`;
 }
 
+/**
+ * Whether a replacement may join two neighbouring words: not across a pause
+ * that ends a phrase, a sentence end the replacement doesn't name itself, or
+ * a change of recording.
+ */
+function joinable({
+	before,
+	after,
+	said,
+}: {
+	before: Token;
+	after: Token;
+	/** The replacement's word matched to `before`. */
+	said: string;
+}): boolean {
+	return (
+		after.start - before.end < PAUSE_SECONDS &&
+		(!SENTENCE_END.test(before.text) || SENTENCE_END.test(said)) &&
+		before.words.at(-1)?.projectItemId === after.words[0].projectItemId
+	);
+}
+
 /** Joins every run of words matching a replacement's words into its text. */
 function applyReplacements({
 	tokens,
@@ -187,6 +278,7 @@ function applyReplacements({
 	const patterns = replacements
 		.map((replacement) => ({
 			...replacement,
+			said: words(replacement.from),
 			match: words(replacement.from).map(normalizeWord),
 		}))
 		.filter(({ match }) => match.length && match.every(Boolean))
@@ -195,13 +287,19 @@ function applyReplacements({
 	if (!patterns.length) return tokens;
 	const result: Token[] = [];
 	for (let i = 0; i < tokens.length; ) {
-		const pattern = patterns.find(({ match }) =>
+		const pattern = patterns.find(({ match, said }) =>
 			match.every((word, offset) => {
 				const token = tokens[i + offset];
 				return (
 					token !== undefined &&
 					(!token.correctedBy || token.correctedBy === over) &&
-					normalizeWord(token.text) === word
+					normalizeWord(token.text) === word &&
+					(offset === 0 ||
+						joinable({
+							before: tokens[i + offset - 1],
+							after: token,
+							said: said[offset - 1],
+						}))
 				);
 			}),
 		);
@@ -322,12 +420,15 @@ export function buildCaptionCues({
 	captions,
 	spellings = [],
 	sequenceEnd,
+	sequenceId,
 }: {
 	tracks: SequenceTracks;
 	captions: ProjectCaptions | undefined;
 	spellings?: Replacement[];
 	/** Seconds; no cue runs past it. */
 	sequenceEnd: number;
+	/** The sequence the tracks belong to; cue edits made on others don't apply. */
+	sequenceId?: string;
 }): CaptionCue[] {
 	if (!captions?.sources.length) return [];
 	let tokens: Token[] = mapWordsToTimeline({
@@ -335,14 +436,24 @@ export function buildCaptionCues({
 		sources: captions.sources,
 	})
 		.filter(({ start }) => start < sequenceEnd)
-		.map(({ start, end, text, ref }) => ({
+		.map(({ start, end, text, ref, clipId }) => ({
 			start,
 			end,
 			text,
 			original: text,
-			words: [ref],
+			words: [{ ...ref, clipId }],
 		}));
-	tokens = applyCueEdits({ tokens, edits: captions.cueEdits });
+	const clipIds = new Set(
+		[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+			track.clips.map(({ id }) => id),
+		),
+	);
+	tokens = applyCueEdits({
+		tokens,
+		edits: captions.cueEdits,
+		sequenceId,
+		clipIds,
+	});
 	// The project's corrections win over reusable spellings, whether they name
 	// the transcript's words or a spelling's.
 	const project = { replacements: captions.replacements, scope: "project" } as const;
@@ -385,6 +496,12 @@ export function buildCaptionCues({
 			...(text !== originalText && { originalText }),
 			...(correctedBy && { correctedBy }),
 			words: group.flatMap((token) => token.words),
+			parts: group.map(({ text, original, correctedBy, edit }) => ({
+				text,
+				original,
+				...(correctedBy && { correctedBy }),
+				...(edit && { edit }),
+			})),
 		};
 	});
 }
@@ -443,7 +560,9 @@ export function formatSrtTime(milliseconds: number): string {
 }
 
 /** SRT for the cues with text, numbered from 1, in whole milliseconds. */
-export function cuesToSrt(cues: CaptionCue[]): string {
+export function cuesToSrt(
+	cues: Array<Pick<CaptionCue, "start" | "end" | "text">>,
+): string {
 	const blocks: string[] = [];
 	let previousEnd = 0;
 	for (const cue of cues) {
@@ -458,16 +577,18 @@ export function cuesToSrt(cues: CaptionCue[]): string {
 	return blocks.join("\n");
 }
 
-/** The words a correction changed: what differs once shared words and punctuation are trimmed. */
-export function changedWords({
-	before,
-	after,
-}: {
-	before: string;
-	after: string;
-}): Replacement | null {
-	const a = words(before);
-	const b = words(after);
+/** Drops the punctuation both ends of a change share. */
+function trimSharedPunctuation({ from, to }: Replacement): Replacement {
+	const punctuation = /[\p{P}]/u;
+	while (from && to && from.at(-1) === to.at(-1) && punctuation.test(from.at(-1) ?? ""))
+		[from, to] = [from.slice(0, -1), to.slice(0, -1)];
+	while (from && to && from[0] === to[0] && punctuation.test(from[0]))
+		[from, to] = [from.slice(1), to.slice(1)];
+	return { from: from.trim(), to: to.trim() };
+}
+
+/** Where `before` and `after` differ, in words: the shared words around a change. */
+function wordChange({ a, b }: { a: string[]; b: string[] }) {
 	let prefix = 0;
 	while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix])
 		prefix++;
@@ -478,77 +599,197 @@ export function changedWords({
 		a[a.length - 1 - suffix] === b[b.length - 1 - suffix]
 	)
 		suffix++;
-	let from = a.slice(prefix, a.length - suffix).join(" ");
-	let to = b.slice(prefix, b.length - suffix).join(" ");
-	const punctuation = /[\p{P}]/u;
-	while (from && to && from.at(-1) === to.at(-1) && punctuation.test(from.at(-1) ?? ""))
-		[from, to] = [from.slice(0, -1), to.slice(0, -1)];
-	while (from && to && from[0] === to[0] && punctuation.test(from[0]))
-		[from, to] = [from.slice(1), to.slice(1)];
-	from = from.trim();
-	to = to.trim();
+	return { prefix, suffix };
+}
+
+/** The words a correction changed: what differs once shared words and punctuation are trimmed. */
+export function changedWords({
+	before,
+	after,
+}: {
+	before: string;
+	after: string;
+}): Replacement | null {
+	const a = words(before);
+	const b = words(after);
+	const { prefix, suffix } = wordChange({ a, b });
+	const { from, to } = trimSharedPunctuation({
+		from: a.slice(prefix, a.length - suffix).join(" "),
+		to: b.slice(prefix, b.length - suffix).join(" "),
+	});
 	if (!from || !to || !normalizeWord(from) || from === to) return null;
+	return { from, to };
+}
+
+/**
+ * The words a project or spelling correction changes, traced back to the
+ * transcript: re-correcting words an earlier correction or spelling wrote
+ * corrects the transcript's words that one replaced, so the new wording
+ * takes over from it instead of naming words the transcript never says.
+ */
+export function correctionWords({
+	cue,
+	text,
+}: {
+	cue: Pick<CaptionCue, "text" | "parts">;
+	text: string;
+}): Replacement | null {
+	const plain = changedWords({ before: cue.text, after: text });
+	if (!plain) return null;
+	const a = words(cue.text);
+	const b = words(text);
+	// The part of the cue each of its words comes from.
+	const partOf = cue.parts.flatMap((part, k) => words(part.text).map(() => k));
+	if (partOf.length !== a.length) return plain;
+	const { prefix, suffix } = wordChange({ a, b });
+	if (prefix >= a.length - suffix) return plain;
+	const first = partOf[prefix];
+	const last = partOf[a.length - suffix - 1];
+	const covered = cue.parts.slice(first, last + 1);
+	if (
+		!covered.some(
+			({ correctedBy }) => correctedBy === "project" || correctedBy === "spelling",
+		) ||
+		covered.some(({ correctedBy }) => correctedBy === "cue")
+	)
+		return plain;
+	// Widen the change to whole parts, so it names the words they replaced.
+	const start = partOf.indexOf(first);
+	const end = partOf.lastIndexOf(last) + 1;
+	const { to } = trimSharedPunctuation({
+		from: a.slice(start, end).join(" "),
+		to: b.slice(start, b.length - (a.length - end)).join(" "),
+	});
+	const from = covered
+		.map(({ original }) => original)
+		.join(" ")
+		.replace(EDGE_PUNCTUATION, "");
+	if (!to || !normalizeWord(from)) return plain;
 	return { from, to };
 }
 
 export class CaptionCorrectionError extends Error {}
 
+const ruleKey = (from: string) => words(from).map(normalizeWord).join(" ");
+
+/** Replaces the rule for the same words, or drops it when `to` puts them back. */
+function withRule({
+	rules,
+	replacement,
+}: {
+	rules: Replacement[];
+	replacement: Replacement;
+}): Replacement[] {
+	const others = rules.filter(
+		({ from }) => ruleKey(from) !== ruleKey(replacement.from),
+	);
+	return replacement.to === replacement.from ? others : [...others, replacement];
+}
+
+/**
+ * The project's corrections without one for a spelling's words, which would
+ * hide the spelling in this project; null when there is none.
+ */
+export function withoutRuleFor({
+	captions,
+	spelling,
+}: {
+	captions: ProjectCaptions;
+	spelling: Replacement;
+}): ProjectCaptions | null {
+	const replacements = captions.replacements.filter(
+		({ from }) => ruleKey(from) !== ruleKey(spelling.from),
+	);
+	return replacements.length === captions.replacements.length
+		? null
+		: { ...captions, replacements };
+}
+
 /**
  * What a correction changes. A cue correction stores the creator's text for
- * the cue's words. Project and spelling corrections replace the words that
- * changed wherever they appear; a spelling is also kept for future projects.
+ * the cue's words at this placement on this sequence. Project and spelling
+ * corrections replace the words that changed wherever they appear; a
+ * spelling is also kept for future projects.
  */
 export function planCorrection({
 	cue,
 	text,
 	scope,
 	captions,
+	sequenceId,
 }: {
 	cue: CaptionCue;
 	text: string;
 	scope: CaptionScope;
 	captions: ProjectCaptions;
+	/** The sequence the cue is on. */
+	sequenceId?: string;
 }):
 	| { scope: "cue"; captions: ProjectCaptions }
 	| { scope: "project"; captions: ProjectCaptions; replacement: Replacement }
 	| { scope: "spelling"; replacement: Replacement } {
 	const corrected = text.replace(/\s+/g, " ").trim();
 	if (scope === "cue") {
-		const covered = new Set(cue.words.map(refKey));
+		if (corrected.length > MAX_CUE_TEXT_CHARS)
+			throw new CaptionCorrectionError(
+				`A caption can hold at most ${MAX_CUE_TEXT_CHARS.toLocaleString("en-US")} characters; this one has ${corrected.length.toLocaleString("en-US")}.`,
+			);
+		const shaping = new Set(cue.parts.flatMap(({ edit }) => (edit ? [edit] : [])));
+		const atThisPlacement = (ref: CaptionWordRef) =>
+			cue.words.some(
+				(word) =>
+					refKey(word) === refKey(ref) &&
+					(!ref.clipId || ref.clipId === word.clipId),
+			);
+		// Other placements of the same words keep their own edits.
+		const overlaps = (edit: CueEdit) =>
+			shaping.has(edit) ||
+			((!edit.sequenceId || edit.sequenceId === sequenceId) &&
+				edit.words.some(atThisPlacement));
 		const others = captions.cueEdits.filter(
-			(edit) => !edit.words.some((ref) => covered.has(refKey(ref))),
+			(edit) => !hasPlacement(edit) || !overlaps(edit),
 		);
-		// Typing the transcript's words back removes the edit.
+		// Restoring the transcript needs an override if a legacy edit still applies.
 		const restores =
-			corrected === (cue.originalText ?? cue.text) && cue.correctedBy === "cue";
+			corrected === (cue.originalText ?? cue.text) &&
+			cue.correctedBy === "cue" &&
+			!others.some((edit) => !hasPlacement(edit) && overlaps(edit));
 		return {
 			scope,
 			captions: {
 				...captions,
 				cueEdits: restores
 					? others
-					: [...others, { words: cue.words, text: corrected }],
+					: [
+							...others,
+							{
+								...(sequenceId && { sequenceId }),
+								words: cue.words,
+								text: corrected,
+							},
+						],
 			},
 		};
 	}
-	const replacement = changedWords({ before: cue.text, after: corrected });
+	const replacement = correctionWords({ cue, text: corrected });
 	if (!replacement)
 		throw new CaptionCorrectionError(
 			"Change at least one word to correct it everywhere. To add or remove words, correct this cue only.",
 		);
+	if (
+		replacement.from.length > MAX_REPLACEMENT_CHARS ||
+		replacement.to.length > MAX_REPLACEMENT_CHARS
+	)
+		throw new CaptionCorrectionError(
+			`A correction everywhere replaces at most ${MAX_REPLACEMENT_CHARS} characters. Change fewer words at once, or correct this cue only.`,
+		);
 	if (scope === "spelling") return { scope, replacement };
-	const key = (from: string) => words(from).map(normalizeWord).join(" ");
 	return {
 		scope,
 		replacement,
 		captions: {
 			...captions,
-			replacements: [
-				...captions.replacements.filter(
-					({ from }) => key(from) !== key(replacement.from),
-				),
-				replacement,
-			],
+			replacements: withRule({ rules: captions.replacements, replacement }),
 		},
 	};
 }

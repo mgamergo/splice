@@ -1,6 +1,11 @@
 "use client";
 
-import { CAPTION_SCOPES, type CaptionScope } from "@splice/bridge/delivery";
+import {
+	CAPTION_SCOPES,
+	type CaptionScope,
+	MAX_CUE_TEXT_CHARS,
+	MAX_REPLACEMENT_CHARS,
+} from "@splice/bridge/delivery";
 import { Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/library/views/base-panel";
@@ -16,7 +21,7 @@ import { isPreviewOverlayVisible } from "@/preview/overlays";
 import { usePreviewStore } from "@/preview/preview-store";
 import { cn } from "@/utils/ui";
 import { mediaTimeToSeconds } from "@/wasm";
-import { type CaptionCue, changedWords, cueAt } from "../cues";
+import { type CaptionCue, correctionWords, cueAt } from "../cues";
 import { captionsPreviewOverlay } from "../preview-overlay-source";
 import {
 	correctCaption,
@@ -269,13 +274,26 @@ function CueRow({
 
 function CueEditor({ cue, onClose }: { cue: CaptionCue; onClose: () => void }) {
 	const editor = useEditor();
+	const sequenceId = useEditor((e) => e.sequences.getActiveSequence().id);
 	const [text, setText] = useState(cue.text);
 	const [scope, setScope] = useState<CaptionScope>("cue");
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const corrected = text.replace(/\s+/g, " ").trim();
 	const replacement =
-		scope === "cue" ? null : changedWords({ before: cue.text, after: text });
-	const unchanged = text.replace(/\s+/g, " ").trim() === cue.text;
+		scope === "cue" ? null : correctionWords({ cue, text: corrected });
+	const unchanged = corrected === cue.text;
+	// Checked here as well as on save, so an edit too long to keep is never saved.
+	const tooLong =
+		scope === "cue"
+			? corrected.length > MAX_CUE_TEXT_CHARS
+				? `A caption can hold at most ${MAX_CUE_TEXT_CHARS.toLocaleString("en-US")} characters; this one has ${corrected.length.toLocaleString("en-US")}.`
+				: null
+			: replacement &&
+					(replacement.from.length > MAX_REPLACEMENT_CHARS ||
+						replacement.to.length > MAX_REPLACEMENT_CHARS)
+				? `A correction everywhere replaces at most ${MAX_REPLACEMENT_CHARS} characters. Change fewer words at once, or correct this cue only.`
+				: null;
 	const textRef = useRef<HTMLTextAreaElement>(null);
 	// Opening a cue to correct it puts the cursor in its text.
 	useEffect(() => {
@@ -283,10 +301,11 @@ function CueEditor({ cue, onClose }: { cue: CaptionCue; onClose: () => void }) {
 	}, []);
 
 	const handleSave = async () => {
+		if (tooLong) return;
 		setSaving(true);
 		setError(null);
 		try {
-			await correctCaption({ editor, cue, text, scope });
+			await correctCaption({ editor, sequenceId, cue, text, scope });
 			onClose();
 		} catch (failure) {
 			setError(errorMessage(failure));
@@ -309,6 +328,7 @@ function CueEditor({ cue, onClose }: { cue: CaptionCue; onClose: () => void }) {
 			<Textarea
 				id={`cue-text-${cue.id}`}
 				value={text}
+				aria-invalid={!!tooLong}
 				rows={2}
 				ref={textRef}
 				onChange={(event) => setText(event.target.value)}
@@ -353,9 +373,9 @@ function CueEditor({ cue, onClose }: { cue: CaptionCue; onClose: () => void }) {
 						: "Change at least one word to correct it everywhere."}
 				</p>
 			)}
-			{error && (
+			{(tooLong ?? error) && (
 				<p role="alert" className="text-destructive text-xs">
-					{error}
+					{tooLong ?? error}
 				</p>
 			)}
 			<div className="flex justify-end gap-2">
@@ -366,7 +386,9 @@ function CueEditor({ cue, onClose }: { cue: CaptionCue; onClose: () => void }) {
 					type="submit"
 					size="sm"
 					disabled={
-						saving || (scope === "cue" ? unchanged : replacement === null)
+						saving ||
+						!!tooLong ||
+						(scope === "cue" ? unchanged : replacement === null)
 					}
 				>
 					{saving && <Spinner />}

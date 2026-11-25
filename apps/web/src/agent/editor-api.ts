@@ -408,7 +408,7 @@ export class EditorApi {
 	}
 
 	private summarizeCues(cues: CaptionCue[]) {
-		return cues.map(({ words: _words, ...cue }) => cue);
+		return cues.map(({ words: _words, parts: _parts, ...cue }) => cue);
 	}
 
 	/** The SRT cues of a Horizontal sequence, as the caption list shows them. */
@@ -437,12 +437,14 @@ export class EditorApi {
 	async correctCaption(request: unknown) {
 		const parsed = correctCaptionRequestSchema.safeParse(request);
 		if (!parsed.success) return this.invalidRequest(parsed.error);
+		// The revision is checked after the spellings load, so nothing can
+		// change between the check and the correction.
+		await useCaptionsStore.getState().loadSpellings();
 		const conflict = this.checkWrite(parsed.data);
 		if (conflict) return conflict;
 		const found = this.captionSequence(parsed.data);
 		if ("error" in found) return found.error;
 		const { cueId, text, scope } = parsed.data;
-		await useCaptionsStore.getState().loadSpellings();
 		const cue = sequenceCaptionCues({
 			editor: this.editor,
 			sequence: found.sequence,
@@ -454,6 +456,7 @@ export class EditorApi {
 		try {
 			const { replacement } = await correctCaption({
 				editor: this.editor,
+				sequenceId: found.sequence.id,
 				cue,
 				text,
 				scope,

@@ -50,13 +50,44 @@ describe("exportStem", () => {
 	});
 });
 
+type ExportStore = ReturnType<typeof createExportStore>;
+
+/** Starts an export that this Export click hasn't published yet. */
+async function begin({
+	store,
+	deliveryId = crypto.randomUUID(),
+	...overrides
+}: Partial<ExportSource> & { store: ExportStore; deliveryId?: string }) {
+	const begun = await store.begin({ ...source, ...overrides, deliveryId });
+	if (!("exportId" in begun)) throw new Error("Already published");
+	return begun;
+}
+
+/** Writes both files and publishes them. */
+async function publishPair({
+	store,
+	exportId,
+	video = "video",
+}: {
+	store: ExportStore;
+	exportId: string;
+	video?: string;
+}) {
+	await store.write({ exportId, kind: "mp4", offset: 0, body: body(video) });
+	await store.write({ exportId, kind: "srt", offset: 0, body: body("1\n") });
+	return store.publish({ exportId });
+}
+
+const visible = async (folder: string) =>
+	(await readdir(folder)).filter((name) => !name.startsWith(".")).sort();
+
 describe("the export store", () => {
-	test("publishes the MP4 and SRT together under one stem and keeps earlier pairs", async () => {
+	test("publishes the MP4 and SRT together in a folder of their own and keeps earlier pairs", async () => {
 		const root = await tempRoot();
 		const at = new Date(2026, 10, 24, 9, 5, 7);
 		const store = createExportStore({ root, now: () => at });
 
-		const first = await store.begin(source);
+		const first = await begin({ store });
 		await store.write({ ...first, kind: "mp4", offset: 0, body: body("video-1") });
 		await store.write({ ...first, kind: "srt", offset: 0, body: body("1\n") });
 		const published = await store.publish(first);
@@ -67,39 +98,45 @@ describe("the export store", () => {
 		});
 
 		// Same second: the second pair gets its own stem.
-		const second = await store.begin({ ...source, revision: 43 });
+		const second = await begin({ store, revision: 43 });
 		await store.write({ ...second, kind: "srt", offset: 0, body: body("2\n") });
 		await store.write({ ...second, kind: "mp4", offset: 0, body: body("video-2") });
 		await store.publish(second);
 
 		const folder = join(root, "Exports");
-		expect((await readdir(folder)).filter((name) => !name.startsWith(".")).sort()).toEqual([
+		expect(await visible(folder)).toEqual([
+			"My Tutorial 2026-11-24 09.05.07",
+			"My Tutorial 2026-11-24 09.05.07 (2)",
+		]);
+		expect(await visible(join(folder, "My Tutorial 2026-11-24 09.05.07 (2)"))).toEqual([
 			"My Tutorial 2026-11-24 09.05.07 (2).mp4",
 			"My Tutorial 2026-11-24 09.05.07 (2).srt",
-			"My Tutorial 2026-11-24 09.05.07.mp4",
-			"My Tutorial 2026-11-24 09.05.07.srt",
-			"exports.json",
+			"export.json",
 		]);
 		expect(
-			await readFile(join(folder, "My Tutorial 2026-11-24 09.05.07.mp4"), "utf8"),
+			await readFile(
+				join(folder, published.stem, "My Tutorial 2026-11-24 09.05.07.mp4"),
+				"utf8",
+			),
 		).toBe("video-1");
 		const { exports } = await store.list({ projectId: "project-1" });
 		expect(exports.map(({ revision, present }) => [revision, present])).toEqual([
 			[43, true],
 			[42, true],
 		]);
+		expect(exports[1].files).toEqual({
+			mp4: `${published.stem}/${published.stem}.mp4`,
+			srt: `${published.stem}/${published.stem}.srt`,
+		});
 		expect((await store.list({ projectId: "other" })).exports).toEqual([]);
 	});
 
 	test("publishes nothing until both files are written, and an abort drops the staged files", async () => {
 		const root = await tempRoot();
 		const store = createExportStore({ root });
-		const previous = await store.begin(source);
-		await store.write({ ...previous, kind: "mp4", offset: 0, body: body("old") });
-		await store.write({ ...previous, kind: "srt", offset: 0, body: body("old") });
-		const kept = await store.publish(previous);
+		const kept = await publishPair({ store, ...(await begin({ store })), video: "old" });
 
-		const failed = await store.begin({ ...source, revision: 50 });
+		const failed = await begin({ store, revision: 50 });
 		await store.write({ ...failed, kind: "mp4", offset: 0, body: body("new") });
 		await expect(store.publish(failed)).rejects.toThrow("SRT was not written");
 		await store.abort(failed);
@@ -110,9 +147,137 @@ describe("the export store", () => {
 		const { exports } = await store.list({});
 		expect(exports.map(({ stem }) => stem)).toEqual([kept.stem]);
 		expect(await readdir(join(root, "Exports", ".staging"))).toEqual([]);
-		expect(await readFile(join(root, "Exports", `${kept.stem}.mp4`), "utf8")).toBe(
-			"old",
+		expect(
+			await readFile(join(root, "Exports", kept.stem, `${kept.stem}.mp4`), "utf8"),
+		).toBe("old");
+	});
+
+	test("a publish that fails leaves no file of the pair in Exports", async () => {
+		const root = await tempRoot();
+		const at = new Date(2026, 10, 24, 9, 5, 7);
+		const store = createExportStore({ root, now: () => at });
+		const pair = await begin({ store });
+		await store.write({ ...pair, kind: "mp4", offset: 0, body: body("v") });
+		await store.write({ ...pair, kind: "srt", offset: 0, body: body("s") });
+		// Something takes the staged SRT away before it can be published.
+		const staged = join(root, "Exports", ".staging", pair.exportId, "srt");
+		await rm(staged);
+		await expect(store.publish(pair)).rejects.toThrow();
+		expect(await visible(join(root, "Exports"))).toEqual([]);
+		expect((await store.list({})).exports).toEqual([]);
+		// A late abort finds nothing left to drop.
+		expect(await store.abort(pair)).toEqual({ aborted: false });
+	});
+
+	test("starting another export keeps the files of a concurrent publish", async () => {
+		const at = new Date(2026, 10, 24, 9, 5, 7);
+		const store = createExportStore({ root: await tempRoot(), now: () => at });
+		const first = await begin({ store });
+		await store.write({ ...first, kind: "mp4", offset: 0, body: body("v") });
+		await store.write({ ...first, kind: "srt", offset: 0, body: body("s") });
+
+		const starting = begin({ store, revision: 43 });
+		const publishing = store.publish(first);
+		const [second, published] = await Promise.all([starting, publishing]);
+		await publishPair({ store, ...second });
+		expect((await store.list({})).exports).toEqual([
+			expect.objectContaining({ revision: 43, present: true }),
+			expect.objectContaining({ stem: published.stem, present: true }),
+		]);
+	});
+
+	test("lists and recovers exports for dot-prefixed project names and older stems", async () => {
+		const root = await tempRoot();
+		const at = new Date(2026, 10, 24, 9, 5, 7);
+		const store = createExportStore({ root, now: () => at });
+		const dotSource = { ...source, projectName: ".NET tutorial" };
+		const started = await begin({ store, ...dotSource });
+		const published = await publishPair({ store, ...started });
+		expect(published.stem).toBe("NET tutorial 2026-11-24 09.05.07");
+
+		const legacy = {
+			...published,
+			stem: `.${published.stem}`,
+			deliveryId: crypto.randomUUID(),
+		};
+		const legacyFolder = join(store.folder, legacy.stem);
+		await Bun.write(join(legacyFolder, "export.json"), JSON.stringify(legacy));
+		await Bun.write(join(legacyFolder, `${legacy.stem}.mp4`), "video");
+		await Bun.write(join(legacyFolder, `${legacy.stem}.srt`), "1\n");
+
+		const restarted = createExportStore({ root });
+		expect((await restarted.list({})).exports).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ ...published, present: true }),
+				expect.objectContaining({ ...legacy, present: true }),
+			]),
 		);
+		for (const record of [published, legacy]) {
+			const retry = await restarted.begin({ ...dotSource, deliveryId: record.deliveryId });
+			expect(retry).toEqual({ committed: record });
+		}
+	});
+
+	test("retrying an Export whose publish answer was lost returns the pair it published", async () => {
+		const root = await tempRoot();
+		const store = createExportStore({ root });
+		const deliveryId = crypto.randomUUID();
+		const first = await begin({ store, deliveryId });
+		// The publish succeeds, but the tab never hears back.
+		const published = await publishPair({ store, ...first });
+		expect(published.deliveryId).toBe(deliveryId);
+
+		// Retry starts the same Export again: splice answers with the pair.
+		expect(await store.begin({ ...source, deliveryId })).toEqual({
+			committed: published,
+		});
+		// Even a restarted splice finds it on disk.
+		const restarted = createExportStore({ root });
+		expect(await restarted.begin({ ...source, deliveryId })).toEqual({
+			committed: published,
+		});
+		// Two attempts at one Export in flight at once publish one pair.
+		const racingId = crypto.randomUUID();
+		const a = await begin({ store, deliveryId: racingId });
+		const b = await begin({ store, deliveryId: racingId });
+		const [fromA, fromB] = await Promise.all([
+			publishPair({ store, ...a }),
+			publishPair({ store, ...b }),
+		]);
+		expect(fromB).toEqual(fromA);
+		expect((await store.list({})).exports).toHaveLength(2);
+		expect(await readdir(join(root, "Exports", ".staging"))).toEqual([]);
+	});
+
+	test("lists pairs published before per-export folders", async () => {
+		const root = await tempRoot();
+		const stem = "Old 2026-11-20 10.00.00";
+		await Bun.write(join(root, "Exports", `${stem}.mp4`), "v");
+		await Bun.write(join(root, "Exports", `${stem}.srt`), "s");
+		await Bun.write(
+			join(root, "Exports", "exports.json"),
+			JSON.stringify({
+				version: 1,
+				exports: [
+					{
+						...source,
+						stem,
+						exportedAt: "2026-11-20T10:00:00.000Z",
+						bytes: { mp4: 1, srt: 1 },
+					},
+				],
+			}),
+		);
+		// A folder the creator made isn't an export.
+		await Bun.write(join(root, "Exports", "Notes", "todo.txt"), "x");
+		const store = createExportStore({ root });
+		const published = await publishPair({ store, ...(await begin({ store })) });
+		const { exports } = await store.list({});
+		expect(exports.map(({ stem, present }) => [stem, present])).toEqual([
+			[published.stem, true],
+			[stem, true],
+		]);
+		expect(exports[1].files).toEqual({ mp4: `${stem}.mp4`, srt: `${stem}.srt` });
 	});
 
 	test("reports a pair whose files were moved, and opens the folder", async () => {
@@ -124,11 +289,8 @@ describe("the export store", () => {
 				opened.push(folder);
 			},
 		});
-		const pair = await store.begin(source);
-		await store.write({ ...pair, kind: "mp4", offset: 0, body: body("v") });
-		await store.write({ ...pair, kind: "srt", offset: 0, body: body("s") });
-		const { stem } = await store.publish(pair);
-		await rm(join(root, "Exports", `${stem}.srt`));
+		const { stem } = await publishPair({ store, ...(await begin({ store })) });
+		await rm(join(root, "Exports", stem, `${stem}.srt`));
 		expect((await store.list({})).exports[0].present).toBe(false);
 		expect(await store.open()).toEqual({
 			opened: true,
@@ -235,7 +397,11 @@ describe("the tab's API on splice", () => {
 	test("publishes a pair uploaded by the tab, and splice mcp lists it", async () => {
 		const { server, root } = await start();
 		const { origin } = server;
-		const begun = await call({ origin, method: "exports.begin", params: source });
+		const begun = await call({
+			origin,
+			method: "exports.begin",
+			params: { ...source, deliveryId: crypto.randomUUID() },
+		});
 		const { exportId } = (begun.message as { result: { exportId: string } }).result;
 		const video = new Uint8Array(3 * 1024 * 1024).fill(7);
 		// eslint-disable-next-line opencut/prefer-object-params -- terse test data
@@ -257,14 +423,16 @@ describe("the tab's API on splice", () => {
 		const published = await call({ origin, method: "exports.publish", params: { exportId } });
 		const record = (published.message as { result: { stem: string; bytes: { mp4: number } } }).result;
 		expect(record.bytes.mp4).toBe(video.length);
-		expect((await Bun.file(join(root, "Exports", `${record.stem}.srt`)).text()).trim()).toEndWith("Hi");
+		expect(
+			(await Bun.file(join(root, "Exports", record.stem, `${record.stem}.srt`)).text()).trim(),
+		).toEndWith("Hi");
 
 		const mcp = createRpcClient({ origin, token: TOKEN });
 		const listed = (await mcp({ method: "exports.list", params: {} })) as {
 			exports: Array<{ stem: string; files: { mp4: string } }>;
 		};
 		expect(listed.exports.map(({ stem }) => stem)).toEqual([record.stem]);
-		expect(listed.exports[0].files.mp4).toBe(`${record.stem}.mp4`);
+		expect(listed.exports[0].files.mp4).toBe(`${record.stem}/${record.stem}.mp4`);
 	});
 
 	test("a bad upload path or method is refused", async () => {
