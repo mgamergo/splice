@@ -95,19 +95,19 @@ function sequenceChanges({
 			ranges.push({ start: anchor, end: anchor });
 		}
 	}
-	const trackSettings = (sequence: TSequence, shared: Set<string>) =>
-		tracksOf(sequence)
-			.filter(({ id }) => shared.has(id))
-			.map(({ clips: _clips, ...track }) => track);
 	const afterTrackIds = new Set(tracksOf(after).map(({ id }) => id));
 	const shared = new Set(
 		tracksOf(before)
 			.map(({ id }) => id)
 			.filter((id) => afterTrackIds.has(id)),
 	);
+	const trackSettings = (sequence: TSequence) =>
+		tracksOf(sequence)
+			.filter(({ id }) => shared.has(id))
+			.map(({ clips: _clips, ...track }) => track);
 	if (
-		stableStringify(trackSettings(before, shared)) !==
-		stableStringify(trackSettings(after, shared))
+		stableStringify(trackSettings(before)) !==
+		stableStringify(trackSettings(after))
 	)
 		sequenceWideChanges.push("track settings or order");
 	if (stableStringify(before.captions) !== stableStringify(after.captions))
@@ -129,10 +129,13 @@ function summarizeClip(clip: TimelineClip | undefined) {
 		: null;
 }
 
-function transition(
-	left: TimelineClip | undefined,
-	right: TimelineClip | undefined,
-) {
+function transition({
+	left,
+	right,
+}: {
+	left: TimelineClip | undefined;
+	right: TimelineClip | undefined;
+}) {
 	const gapSeconds =
 		left && right
 			? Math.max(0, seconds(right.startTime - left.startTime - left.duration))
@@ -162,16 +165,16 @@ function transition(
 	};
 }
 
-function boundary(clips: TimelineClip[], at: number) {
+function boundary({ clips, at }: { clips: TimelineClip[]; at: number }) {
 	const left = clips.findLast((clip) => clip.startTime < at);
 	const right = clips.find((clip) => clip.startTime + clip.duration > at);
-	return transition(left, right);
+	return transition({ left, right });
 }
 
 function joins(clips: TimelineClip[]) {
 	return clips.slice(1).flatMap((right, index) => {
 		const left = clips[index];
-		const result = transition(left, right);
+		const result = transition({ left, right });
 		return result.jumpCut || (result.gapSeconds ?? 0) > 0 ? [result] : [];
 	});
 }
@@ -220,12 +223,12 @@ export function sequenceEditImpact({
 		adjacentTransitions: edges
 			? {
 					start: {
-						before: boundary(oldPicture, edges.start),
-						after: boundary(picture, edges.start),
+						before: boundary({ clips: oldPicture, at: edges.start }),
+						after: boundary({ clips: picture, at: edges.start }),
 					},
 					end: {
-						before: boundary(oldPicture, edges.end),
-						after: boundary(picture, edges.end),
+						before: boundary({ clips: oldPicture, at: edges.end }),
+						after: boundary({ clips: picture, at: edges.end }),
 					},
 				}
 			: null,

@@ -4,7 +4,7 @@ import { EditorApi } from "@/agent/editor-api";
 import type { ApplyRequest } from "@splice/bridge/ops";
 
 const time = (seconds: number) => ({ seconds });
-const range = (start: number, end: number) => ({
+const range = ([start, end]: [number, number]) => ({
 	start: time(start),
 	end: time(end),
 });
@@ -43,7 +43,7 @@ function fixture() {
 		sequenceId: sequence().id,
 		expectedRevision: api.getRevision(),
 		label: "Revise the detail",
-		scope: range(2, 4),
+		scope: range([2, 4]),
 	};
 	return { editor, api, sequence, request };
 }
@@ -114,7 +114,7 @@ test("scope refuses a ripple shift and reports its new jump cut before an author
 	const before = sequence();
 	const edit: ApplyRequest = {
 		...request,
-		ops: [{ op: "ripple_delete", ranges: [range(2, 4)] }],
+		ops: [{ op: "ripple_delete", ranges: [range([2, 4])] }],
 	};
 	const impact = {
 		outsideScopeUntouched: false,

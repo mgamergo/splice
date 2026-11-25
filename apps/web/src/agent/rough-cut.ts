@@ -603,7 +603,7 @@ export function buildRoughCut({
 	});
 
 	const deleted = unionSpans(cuts);
-	const hasKeptMaterial = (spans: Window[], holes: Window[]) =>
+	const hasKeptMaterial = ({ spans, holes }: { spans: Window[]; holes: Window[] }) =>
 		spans.some((area) => outsideHoles({ area, holes }).length > 0);
 	if (!plan.restructure) {
 		const badTakes = unionSpans(takeCuts);
@@ -627,7 +627,7 @@ export function buildRoughCut({
 			}),
 		];
 		for (const { sectionName, spans } of protects) {
-			if (spans.length && !hasKeptMaterial(spans, deleted))
+			if (spans.length && !hasKeptMaterial({ spans, holes: deleted }))
 				throw new RemovalTakeError(
 					`This cut would remove the whole “${sectionName}” section. Keep part of its best take, or pass restructure: true if the creator explicitly asked to remove it.`,
 				);
@@ -639,7 +639,7 @@ export function buildRoughCut({
 				end: addMediaTime({ a: clip.startTime, b: clip.duration }),
 			}));
 			// A recording can be entirely bad takes. Guard only the content left after take removal.
-			if (hasKeptMaterial(spans, badTakes) && !hasKeptMaterial(spans, deleted))
+			if (hasKeptMaterial({ spans, holes: badTakes }) && !hasKeptMaterial({ spans, holes: deleted }))
 				throw new RemovalTakeError(
 					`Tightening would remove all kept material from recording ${itemId}. Keep some of the recording, or pass restructure: true if the creator explicitly asked to remove it.`,
 				);
@@ -655,7 +655,7 @@ export function buildRoughCut({
 				0,
 			);
 			const report = { sectionName, removedSeconds: seconds(removed) };
-			if (sectionCuts.length === 0 || !hasKeptMaterial([bestWindow], deleted))
+			if (sectionCuts.length === 0 || !hasKeptMaterial({ spans: [bestWindow], holes: deleted }))
 				return report;
 			const marker: RemovalMarker = {
 				id: generateUUID(),
