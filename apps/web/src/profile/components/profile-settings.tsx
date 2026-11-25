@@ -139,9 +139,10 @@ function ProviderSettings() {
 			)}
 			{choice === "api" && (
 				<>
-					<label className="block space-y-1">
+					<label className="block space-y-1" htmlFor="profile-base-url">
 						<span>Base URL</span>
 						<Input
+							id="profile-base-url"
 							name="baseUrl"
 							type="url"
 							required
@@ -149,9 +150,10 @@ function ProviderSettings() {
 							defaultValue={provider?.kind === "api" ? provider.baseUrl : ""}
 						/>
 					</label>
-					<label className="block space-y-1">
+					<label className="block space-y-1" htmlFor="profile-model">
 						<span>Model</span>
 						<Input
+							id="profile-model"
 							name="model"
 							required
 							defaultValue={provider?.kind === "api" ? provider.model : ""}

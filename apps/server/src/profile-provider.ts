@@ -46,7 +46,7 @@ async function readOutput(body: ReadableStream<Uint8Array>) {
 	}
 }
 
-function parseOutput(text: string, key?: string): unknown {
+function parseOutput({ text, key }: { text: string; key?: string }): unknown {
 	// Parse errors from a provider must never leak its response body.
 	const result: unknown = JSON.parse(
 		text.trim().replace(/^```(?:json)?\s*|\s*```$/gi, ""),
@@ -119,7 +119,7 @@ async function callCli({
 				child.exited,
 			]);
 			if (exitCode !== 0) throw new Error("Profile CLI failed.");
-			return parseOutput(output);
+			return parseOutput({ text: output });
 		} finally {
 			if (child.exitCode === null && child.signalCode === null)
 				child.kill("SIGKILL");
@@ -225,7 +225,10 @@ export function createProfileProviders({
 				const parsed = chatResponse.parse(
 					JSON.parse(await readOutput(response.body)),
 				);
-				return parseOutput(parsed.choices[0].message.content, apiKey);
+				return parseOutput({
+					text: parsed.choices[0].message.content,
+					key: apiKey,
+				});
 			};
 		},
 	};

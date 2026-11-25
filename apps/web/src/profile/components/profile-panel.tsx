@@ -72,7 +72,13 @@ function ProfileContents() {
 		};
 	}, []);
 
-	async function revert(kind: "profile" | "framing", id: string) {
+	async function revert({
+		kind,
+		id,
+	}: {
+		kind: "profile" | "framing";
+		id: string;
+	}) {
 		setBusy(true);
 		setActionError("");
 		try {
@@ -138,7 +144,9 @@ function ProfileContents() {
 													size="sm"
 													variant="outline"
 													disabled={busy}
-													onClick={() => void revert("profile", update.id)}
+													onClick={() =>
+														void revert({ kind: "profile", id: update.id })
+													}
 												>
 													Revert
 												</Button>
@@ -173,7 +181,9 @@ function ProfileContents() {
 												size="sm"
 												variant="outline"
 												disabled={busy}
-												onClick={() => void revert("framing", preference.id)}
+												onClick={() =>
+													void revert({ kind: "framing", id: preference.id })
+												}
 											>
 												Revert
 											</Button>

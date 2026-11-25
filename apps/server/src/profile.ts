@@ -290,10 +290,13 @@ export function createProfileStore({ root }: { root: string }) {
 			: z.array(questionResponseSchema).parse(JSON.parse(text));
 	}
 
-	function activeQuestion(
-		updates: Awaited<ReturnType<typeof readUpdates>>,
-		responses: Awaited<ReturnType<typeof readResponses>>,
-	) {
+	function activeQuestion({
+		updates,
+		responses,
+	}: {
+		updates: Awaited<ReturnType<typeof readUpdates>>;
+		responses: Awaited<ReturnType<typeof readResponses>>;
+	}) {
 		const closed = new Set(responses.map(({ question }) => question.id));
 		const reverted = new Set(
 			updates.flatMap(({ reverts }) => (reverts ? [reverts] : [])),
@@ -460,9 +463,9 @@ export function createProfileStore({ root }: { root: string }) {
 						(update) => update.operation?.id === operationId,
 					);
 					if (previous?.reverts === id) return applyResult(previous);
-					const latest = updates.reverse().find(
-						(update) => update.previousText !== update.text,
-					);
+					const latest = updates
+						.reverse()
+						.find((update) => update.previousText !== update.text);
 					const text = await readProfile();
 					if (!latest || latest.id !== id || latest.text !== text)
 						throw invalidParams(
@@ -480,7 +483,10 @@ export function createProfileStore({ root }: { root: string }) {
 		},
 		question: () =>
 			serialized(async () =>
-				activeQuestion(await readUpdates(), await readResponses()),
+				activeQuestion({
+					updates: await readUpdates(),
+					responses: await readResponses(),
+				}),
 			),
 		async respond(params: unknown) {
 			const response = parseRequest({
@@ -494,7 +500,10 @@ export function createProfileStore({ root }: { root: string }) {
 				);
 				const answer = response.kind === "answer" ? response.answer : null;
 				if (previous?.answer === answer) return null;
-				const question = activeQuestion(await readUpdates(), responses);
+				const question = activeQuestion({
+					updates: await readUpdates(),
+					responses,
+				});
 				if (!question || question.id !== response.id)
 					throw invalidParams("This profile question has already closed.");
 				await replace({
@@ -534,7 +543,7 @@ export function createProfileStore({ root }: { root: string }) {
 									: [],
 							)
 							.slice(0, 4),
-						canAsk: !activeQuestion(updates, responses),
+						canAsk: !activeQuestion({ updates, responses }),
 					};
 				});
 				if (
