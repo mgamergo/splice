@@ -271,6 +271,8 @@ export const graphicRecordSchema = z.strictObject({
 			anchor: z.number().finite(),
 		})
 		.optional(),
+	/** Where to review a flagged graphic without a clip, in sequence seconds. */
+	reviewTime: z.number().finite().nonnegative().optional(),
 	flags: z.array(graphicFlagSchema).max(10),
 });
 

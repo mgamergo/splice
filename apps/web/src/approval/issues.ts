@@ -4,6 +4,7 @@
  */
 import type { Dismissal, ReviewIssue } from "@splice/bridge/approval";
 import type { ProjectCaptions } from "@splice/bridge/delivery";
+import { findGraphicClip } from "@/agent/graphics";
 import { getSourceSpanAtClipTime } from "@/retime";
 import { isDiskMedia } from "@/media/media-data";
 import { recordingIdentity } from "@/media/sequence-media";
@@ -374,6 +375,29 @@ function flaggedIssues(sequence: Pick<TSequence, "markers">): ReviewIssue[] {
 	});
 }
 
+function graphicIssues(
+	sequence: Pick<TSequence, "graphics" | "tracks">,
+): ReviewIssue[] {
+	return (sequence.graphics?.records ?? []).flatMap((record) => {
+		if (!record.flags.length) return [];
+		const placed = findGraphicClip({
+			tracks: sequence.tracks,
+			graphicId: record.id,
+		});
+		const time = record.reviewTime ?? 0;
+		const span = placed ? clipSpan(placed.clip) : { start: time, end: time };
+		return record.flags.map(({ code, message }): ReviewIssue => ({
+			id: `graphic-flag:${record.id}:${code}`,
+			kind: "graphic-flag",
+			title: `${record.kind[0].toUpperCase()}${record.kind.slice(1)} flagged for review`,
+			detail: message,
+			graphicId: record.id,
+			...span,
+			evidence: hashText(stableStringify([record.action, code, message])),
+		}));
+	});
+}
+
 function staleMixIssues(
 	input: Parameters<typeof staleMixFingerprint>[0],
 ): ReviewIssue[] {
@@ -404,7 +428,10 @@ export function collectIssues({
 	checkpoint,
 	comparison,
 }: {
-	sequence: Pick<TSequence, "id" | "tracks" | "markers" | "captions" | "mix">;
+	sequence: Pick<
+		TSequence,
+		"id" | "tracks" | "markers" | "captions" | "mix" | "graphics"
+	>;
 	projectItems: ProjectItem[];
 	horizontal: boolean;
 	captions?: ProjectCaptions;
@@ -429,6 +456,7 @@ export function collectIssues({
 		}),
 		...markerIssues(sequence),
 		...flaggedIssues(sequence),
+		...graphicIssues(sequence),
 	]
 		.map((issue) => ({ ...issue, id: `${sequence.id}:${issue.id}` }))
 		.sort((a, b) => a.start - b.start);

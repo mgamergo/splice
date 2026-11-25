@@ -1,5 +1,6 @@
 import type { CheckpointSummary, Dismissal } from "@splice/bridge/approval";
 import type { ProjectCaptions } from "@splice/bridge/delivery";
+import type { SequenceGraphics } from "@splice/bridge/graphics";
 import type { SequenceMix } from "@splice/bridge/mix";
 import type { CaptionsRequest } from "@splice/bridge/ops";
 import type { TBackground } from "@/project/types";
@@ -24,6 +25,7 @@ export interface FootageIdentity {
 export interface ApprovedCheckpoint extends CheckpointSummary {
 	/** Without decoded audio buffers. */
 	tracks: SequenceTracks;
+	graphics?: SequenceGraphics;
 	mix?: SequenceMix;
 	markers: Marker[];
 	background: TBackground;

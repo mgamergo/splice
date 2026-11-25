@@ -6,6 +6,7 @@ import {
 	dismissalSchema,
 } from "@splice/bridge/approval";
 import { projectCaptionsSchema } from "@splice/bridge/delivery";
+import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
 import { sequenceMixSchema } from "@splice/bridge/mix";
 import { captionsRequestSchema } from "@splice/bridge/ops";
 import { z } from "zod";
@@ -100,6 +101,7 @@ export function captureApproval({
 		origin,
 		...(note && { note }),
 		tracks,
+		...(sequence.graphics && { graphics: structuredClone(sequence.graphics) }),
 		...(sequence.mix && { mix: structuredClone(sequence.mix) }),
 		markers: structuredClone(sequence.markers),
 		background: structuredClone(snapshot.scene.background),
@@ -139,6 +141,7 @@ export function captureApproval({
 function approvalContent({
 	sequenceName,
 	tracks,
+	graphics,
 	mix,
 	markers,
 	background,
@@ -150,6 +153,7 @@ function approvalContent({
 	return stableStringify({
 		sequenceName,
 		tracks,
+		graphics,
 		mix,
 		markers,
 		background,
@@ -332,11 +336,15 @@ export function undismissIssue({
 /** The saved timeline inputs shared by preview, review and delivery. */
 export function checkpointSequence(
 	checkpoint: ApprovedCheckpoint,
-): Pick<TSequence, "id" | "name" | "tracks" | "markers" | "captions" | "mix"> {
+): Pick<
+	TSequence,
+	"id" | "name" | "tracks" | "markers" | "captions" | "mix" | "graphics"
+> {
 	return {
 		id: checkpoint.sequenceId,
 		name: checkpoint.sequenceName,
 		tracks: checkpoint.tracks,
+		graphics: checkpoint.graphics,
 		markers: checkpoint.markers,
 		captions: checkpoint.sequenceCaptions,
 		mix: checkpoint.mix,
@@ -404,6 +412,7 @@ const isTracks = (value: unknown): value is SequenceTracks =>
 
 const storedCheckpointSchema = checkpointSummarySchema.extend({
 	tracks: z.custom<SequenceTracks>(isTracks),
+	graphics: sequenceGraphicsSchema.optional(),
 	mix: sequenceMixSchema.optional(),
 	markers: z.array(z.unknown()),
 	background: z.discriminatedUnion("type", [
