@@ -10,6 +10,16 @@ import type { SequenceTracks } from "@/timeline/types";
 import { formatTimecode } from "opencut-wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import { downloadBlob } from "@/utils/browser";
+import type { ProjectItem } from "@/media/types";
+import type { TBackground, TCanvasSize } from "@/project/types";
+
+/** What an export renders: a sequence's tracks, the media they play and the frame. */
+export interface ExportScene {
+	tracks: SequenceTracks;
+	projectItems: ProjectItem[];
+	canvasSize: TCanvasSize;
+	background: TBackground;
+}
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -145,26 +155,38 @@ export class RendererManager {
 		options,
 		onProgress,
 		signal,
-		tracks: snapshot,
+		scene,
 	}: {
 		options: ExportOptions;
 		onProgress?: ({ progress }: { progress: number }) => void;
 		signal: AbortSignal;
-		/** The sequence's tracks as they were when the export was asked for. */
-		tracks?: SequenceTracks;
+		/**
+		 * Everything to render as it was when the export was asked for, in place
+		 * of the active sequence, media and project settings.
+		 */
+		scene?: ExportScene;
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio } = options;
 
 		try {
 			signal.throwIfAborted();
-			const tracks =
-				snapshot ?? this.editor.sequences.getActiveSequence().tracks;
-			const projectItems = this.editor.media.getProjectItems();
 			const activeProject = this.editor.project.getActive();
 
 			if (!activeProject) {
 				return { success: false, error: "No active project" };
 			}
+
+			const {
+				tracks,
+				projectItems,
+				canvasSize,
+				background,
+			}: ExportScene = scene ?? {
+				tracks: this.editor.sequences.getActiveSequence().tracks,
+				projectItems: this.editor.media.getProjectItems(),
+				canvasSize: activeProject.settings.canvasSize,
+				background: activeProject.settings.background,
+			};
 
 			const duration = calculateTotalDuration({ tracks });
 			if (duration === 0) {
@@ -172,7 +194,6 @@ export class RendererManager {
 			}
 
 			const exportFps = fps ?? activeProject.settings.fps;
-			const canvasSize = activeProject.settings.canvasSize;
 
 			let audioBuffer: AudioBuffer | null = null;
 			if (includeAudio) {
@@ -191,7 +212,7 @@ export class RendererManager {
 				projectItems,
 				duration,
 				canvasSize,
-				background: activeProject.settings.background,
+				background,
 			});
 
 			const exporter = new SequenceExporter({

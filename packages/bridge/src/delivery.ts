@@ -5,22 +5,38 @@
 import { z } from "zod";
 import { captionSourceSchema, expectedRevision } from "./ops";
 
-/** One transcript word: its recording and its position in that transcript. */
+/** The most text one cue correction keeps. */
+export const MAX_CUE_TEXT_CHARS = 1000;
+/** The most text either side of a project correction or spelling holds. */
+export const MAX_REPLACEMENT_CHARS = 200;
+
+/**
+ * One transcript word: its recording and its position in that transcript,
+ * and in a cue edit the clip it was heard through.
+ */
 export const captionWordRefSchema = z.strictObject({
 	projectItemId: z.string().min(1),
 	index: z.number().int().nonnegative(),
+	/**
+	 * The clip that placed the word on the sequence, so an edit fixes that
+	 * placement and not a repeat of the same words. Missing on edits from
+	 * before placements, which fix every placement.
+	 */
+	clipId: z.string().min(1).max(200).optional(),
 });
 
 /** The creator's text for the words one cue showed. Empty text hides them. */
 export const cueEditSchema = z.strictObject({
+	/** The sequence the cue is on. Missing on edits from before sequences. */
+	sequenceId: z.string().min(1).max(200).optional(),
 	words: z.array(captionWordRefSchema).min(1).max(500),
-	text: z.string().max(1000),
+	text: z.string().max(MAX_CUE_TEXT_CHARS),
 });
 
 /** A wording fix applied wherever the words appear. */
 export const replacementSchema = z.strictObject({
-	from: z.string().trim().min(1).max(200),
-	to: z.string().trim().min(1).max(200),
+	from: z.string().trim().min(1).max(MAX_REPLACEMENT_CHARS),
+	to: z.string().trim().min(1).max(MAX_REPLACEMENT_CHARS),
 });
 
 /** A Horizontal project's SRT captions: the words and the creator's corrections. */
@@ -30,6 +46,35 @@ export const projectCaptionsSchema = z.strictObject({
 	/** Corrections the creator applied across the project. */
 	replacements: z.array(replacementSchema).default([]),
 });
+
+/**
+ * A saved project's captions. An entry that doesn't fit the schema drops
+ * alone, so one bad correction never costs the transcripts or other fixes.
+ */
+export function parseProjectCaptions(value: unknown): ProjectCaptions | undefined {
+	const whole = projectCaptionsSchema.safeParse(value);
+	if (whole.success) return whole.data;
+	if (typeof value !== "object" || value === null) return undefined;
+	const saved: Record<string, unknown> = { ...value };
+	const valid = <T>({
+		schema,
+		entries,
+	}: {
+		schema: z.ZodType<T>;
+		entries: unknown;
+	}): T[] =>
+		Array.isArray(entries)
+			? entries.flatMap((entry) => {
+					const parsed = schema.safeParse(entry);
+					return parsed.success ? [parsed.data] : [];
+				})
+			: [];
+	return {
+		sources: valid({ schema: captionSourceSchema, entries: saved.sources }),
+		cueEdits: valid({ schema: cueEditSchema, entries: saved.cueEdits }),
+		replacements: valid({ schema: replacementSchema, entries: saved.replacements }),
+	};
+}
 
 export const CAPTION_SCOPES = ["cue", "project", "spelling"] as const;
 export type CaptionScope = (typeof CAPTION_SCOPES)[number];
@@ -48,7 +93,7 @@ export const correctCaptionRequestSchema = z.strictObject({
 	cueId: z.string().min(1).describe("The cue's id from captions_list"),
 	text: z
 		.string()
-		.max(1000)
+		.max(MAX_CUE_TEXT_CHARS)
 		.describe(
 			"The cue's corrected text. With scope cue, empty text hides the cue.",
 		),
@@ -104,14 +149,23 @@ export const exportSourceSchema = z.strictObject({
 	cueCount: z.number().int().nonnegative(),
 });
 
+/** Names one Export click, so retrying it can't publish a second pair. */
+const deliveryId = z.string().regex(/^[0-9a-f-]{36}$/);
+
 /** One published MP4/SRT pair under Exports. */
 export const exportRecordSchema = exportSourceSchema.extend({
-	/** Both files are `<stem>.mp4` and `<stem>.srt` in the Exports folder. */
+	/**
+	 * Both files are `<stem>.mp4` and `<stem>.srt` in the folder `<stem>`
+	 * under Exports (directly in Exports for pairs from before folders).
+	 */
 	stem: z.string().min(1),
+	/** Missing on pairs from before delivery ids. */
+	deliveryId: deliveryId.optional(),
 	exportedAt: z.string(),
 	bytes: z.strictObject({ mp4: z.number(), srt: z.number() }),
 });
 
+/** `Exports/exports.json`, the history of pairs from before per-export folders. */
 export const exportsFileSchema = z.strictObject({
 	version: z.literal(1),
 	exports: z.array(exportRecordSchema),
@@ -120,7 +174,9 @@ export const exportsFileSchema = z.strictObject({
 export const EXPORT_FILE_KINDS = ["mp4", "srt"] as const;
 export type ExportFileKind = (typeof EXPORT_FILE_KINDS)[number];
 
-export const beginExportRequestSchema = exportSourceSchema;
+export const beginExportRequestSchema = exportSourceSchema.extend({
+	deliveryId,
+});
 export const exportIdRequestSchema = z.strictObject({
 	exportId: z.string().regex(/^[0-9a-f-]{36}$/),
 });
@@ -133,6 +189,7 @@ export const exportsListRequestSchema = z.strictObject({
 });
 
 export type ExportSource = z.infer<typeof exportSourceSchema>;
+export type BeginExportRequest = z.infer<typeof beginExportRequestSchema>;
 export type ExportRecord = z.infer<typeof exportRecordSchema>;
 
 /**

@@ -23,6 +23,7 @@ export interface ExportOptions {
 
 /** The steps of a Horizontal export, which publishes an MP4/SRT pair under Exports. */
 export const DELIVERY_STEPS = [
+	"spellings",
 	"render",
 	"upload-video",
 	"upload-captions",
@@ -31,6 +32,7 @@ export const DELIVERY_STEPS = [
 export type DeliveryStep = (typeof DELIVERY_STEPS)[number];
 
 export const DELIVERY_STEP_LABELS: Record<DeliveryStep, string> = {
+	spellings: "Loading the saved spellings",
 	render: "Rendering the video",
 	"upload-video": "Writing the MP4 to Exports",
 	"upload-captions": "Writing the SRT to Exports",

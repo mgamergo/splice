@@ -51,6 +51,8 @@ export interface TimelineWord {
 	text: string;
 	/** The transcript word it shows: its recording and position there. */
 	ref: { projectItemId: string; index: number };
+	/** The clip it is heard through. */
+	clipId: string;
 }
 
 type SourceClip = VideoClip | AudioClip;
@@ -137,7 +139,13 @@ export function mapWordsToTimeline({
 				const key = `${projectItemId}:${index}:${Math.round(start * 1000)}`;
 				if (end > start && !seen.has(key)) {
 					seen.add(key);
-					words.push({ start, end, text, ref: { projectItemId, index } });
+					words.push({
+						start,
+						end,
+						text,
+						ref: { projectItemId, index },
+						clipId: clip.id,
+					});
 				}
 			}
 		}
