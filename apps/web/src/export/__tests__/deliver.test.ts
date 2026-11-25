@@ -608,7 +608,11 @@ describe("Horizontal delivery", () => {
 			error: expect.stringContaining("changed on disk"),
 		});
 		expect(render).toHaveBeenCalledTimes(1);
-		expect(splice.calls).toEqual([]);
+		// The first attempt reserved staging for the MP4 and dropped it; nothing was published.
+		expect(splice.calls.map(({ method }) => method)).toEqual([
+			"exports.begin",
+			"exports.abort",
+		]);
 	});
 
 	test("retargets a failed render to the verified new location of the approved recording", async () => {
@@ -667,6 +671,33 @@ describe("Horizontal delivery", () => {
 		expect(splice.published[0].fingerprint).toBe(
 			await deliveryFingerprint(snapshot),
 		);
+	});
+
+	test("Retry after a failed SRT write publishes the staged MP4 without rendering again", async () => {
+		const editor = horizontalEditor();
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const renders = recordRenders(editor);
+		let failSrt = true;
+		spyOn(globalThis, "fetch").mockImplementation(
+			Object.assign(
+				(...[input, init]: Parameters<typeof fetch>) =>
+					failSrt && init?.method === "PUT" && String(input).includes("/srt")
+						? Promise.reject(new TypeError("Failed to fetch"))
+						: splice.fetch(input, init),
+				{ preconnect: fetch.preconnect },
+			),
+		);
+		expect(await editor.project.deliver({ quality: "high" })).toMatchObject({
+			success: false,
+			failedStep: "upload-captions",
+		});
+		failSrt = false;
+		expect(await editor.project.retryDelivery()).toMatchObject({ success: true });
+		expect(renders).toHaveLength(1);
+		expect(splice.uploads).toEqual(["mp4", "srt"]);
+		expect(
+			splice.calls.filter(({ method }) => method === "exports.begin"),
+		).toHaveLength(1);
 	});
 
 	test("Retry after a lost publish answer returns the published pair instead of a second one", async () => {

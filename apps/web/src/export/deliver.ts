@@ -289,45 +289,51 @@ const beginResultSchema = z.union([
 	z.object({ committed: exportRecordSchema }),
 ]);
 
+/** Runs one step of a delivery, reporting it and naming it in any failure. */
+async function deliveryStep<T>({
+	name,
+	run,
+	signal,
+	onStep,
+}: {
+	name: DeliveryStep;
+	run: () => Promise<T>;
+	signal: AbortSignal;
+	onStep: (step: DeliveryStep) => void;
+}): Promise<T> {
+	onStep(name);
+	try {
+		return await run();
+	} catch (error) {
+		if (signal.aborted) throw error;
+		throw new DeliveryError({
+			step: name,
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 /**
- * Stages the MP4 and optional SRT, then publishes them together under Exports.
- * On failure, Splice drops the staged files and reports the failed step.
+ * Reserves a staging folder for this Export click's MP4 and SRT, or returns
+ * the pair an earlier attempt already published.
  */
-export async function publishDelivery({
+export async function beginDelivery({
 	snapshot,
-	video,
 	signal,
 	onStep,
 }: {
 	snapshot: DeliverySnapshot;
-	video: ArrayBuffer;
 	signal: AbortSignal;
 	onStep: (step: DeliveryStep) => void;
-}): Promise<ExportRecord> {
-	async function step<T>({
-		name,
-		run,
-	}: {
-		name: DeliveryStep;
-		run: () => Promise<T>;
-	}) {
-		onStep(name);
-		try {
-			return await run();
-		} catch (error) {
-			if (signal.aborted) throw error;
-			throw new DeliveryError({
-				step: name,
-				message: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
+}): Promise<{ exportId: string } | { committed: ExportRecord }> {
 	const source: ExportSource = {
 		...snapshot.source,
 		fingerprint: await deliveryFingerprint(snapshot),
 	};
-	const begun = await step({
-		name: "upload-video",
+	return deliveryStep({
+		name: "render",
+		signal,
+		onStep,
 		run: async () =>
 			beginResultSchema.parse(
 				await callSplice({
@@ -340,46 +346,56 @@ export async function publishDelivery({
 				}),
 			),
 	});
-	if ("committed" in begun) return begun.committed;
-	const { exportId } = begun;
-	try {
-		await step({
-			name: "upload-video",
+}
+
+/** Drops a staged export; nothing was published from it. */
+export function abortDelivery({ exportId }: { exportId: string }): void {
+	void callSplice({ method: "exports.abort", params: { exportId } }).catch(
+		() => {},
+	);
+}
+
+/**
+ * Writes the SRT beside the staged MP4, then publishes the pair under
+ * Exports. The staging stays on failure, so a retry can publish it without
+ * rendering again.
+ */
+export async function finishDelivery({
+	snapshot,
+	exportId,
+	signal,
+	onStep,
+}: {
+	snapshot: DeliverySnapshot;
+	exportId: string;
+	signal: AbortSignal;
+	onStep: (step: DeliveryStep) => void;
+}): Promise<ExportRecord> {
+	if (snapshot.includeSrt !== false)
+		await deliveryStep({
+			name: "upload-captions",
+			signal,
+			onStep,
 			run: () =>
 				uploadExportFile({
 					exportId,
-					kind: "mp4",
-					body: new Blob([video], { type: "video/mp4" }),
+					kind: "srt",
+					body: new Blob([snapshot.srt], { type: "application/x-subrip" }),
 					signal,
 				}),
 		});
-		if (snapshot.includeSrt !== false)
-			await step({
-				name: "upload-captions",
-				run: () =>
-					uploadExportFile({
-						exportId,
-						kind: "srt",
-						body: new Blob([snapshot.srt], { type: "application/x-subrip" }),
-						signal,
-					}),
-			});
-		return await step({
-			name: "publish",
-			run: async () =>
-				exportRecordSchema.parse(
-					await callSplice({
-						method: "exports.publish",
-						params: { exportId },
-					}),
-				),
-		});
-	} catch (error) {
-		void callSplice({ method: "exports.abort", params: { exportId } }).catch(
-			() => {},
-		);
-		throw error;
-	}
+	return deliveryStep({
+		name: "publish",
+		signal,
+		onStep,
+		run: async () =>
+			exportRecordSchema.parse(
+				await callSplice({
+					method: "exports.publish",
+					params: { exportId },
+				}),
+			),
+	});
 }
 
 /** One published export, as the history lists it. */

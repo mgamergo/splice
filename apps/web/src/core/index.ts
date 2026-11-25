@@ -94,11 +94,28 @@ export class EditorCore {
 	static getInstance(): EditorCore {
 		if (!EditorCore.instance) {
 			EditorCore.instance = new EditorCore();
+			exposeForBenchmark(EditorCore.instance);
 		}
 		return EditorCore.instance;
 	}
 
 	static reset(): void {
 		EditorCore.instance = null;
+	}
+}
+
+/**
+ * `bun run bench` drives exports through the editor core. It sets
+ * `localStorage["splice:bench"]`; ordinary sessions never expose the core.
+ */
+function exposeForBenchmark(editor: EditorCore): void {
+	try {
+		if (
+			typeof window !== "undefined" &&
+			window.localStorage.getItem("splice:bench") === "1"
+		)
+			Object.assign(window, { __spliceEditor: editor });
+	} catch {
+		// Storage can be blocked; the benchmark then can't run, nothing else changes.
 	}
 }

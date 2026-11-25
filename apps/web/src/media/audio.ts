@@ -33,12 +33,17 @@ import {
 	playableProjectItems,
 } from "@/media/media-data";
 import {
+	type AssembledAudio,
 	createAudioRangeAssembler,
 	getClipSourceRange,
 	getDecodeWindow,
 	type SourceRange,
 } from "@/media/source-range";
 import { TICKS_PER_SECOND } from "@/wasm";
+import {
+	type AudioDecodeSessions,
+	createAudioDecodeSessions,
+} from "@/media/audio-decode-sessions";
 import {
 	computeRmsBuckets,
 	type SampleBucket,
@@ -160,11 +165,14 @@ async function* collectAudioClips({
 	audioContext,
 	signal,
 	window,
+	sessions,
 }: {
 	candidates: AudibleClipCandidate[];
 	audioContext: BaseAudioContext;
 	signal?: AbortSignal;
 	window?: SampleRange;
+	/** Open decoders a windowed read continues from, one per clip. */
+	sessions?: AudioDecodeSessions;
 }): AsyncGenerator<CollectedAudioClip> {
 	const sampleRate = window ? EXPORT_SAMPLE_RATE : audioContext.sampleRate;
 	for (const { clip, projectItem } of candidates) {
@@ -208,14 +216,17 @@ async function* collectAudioClips({
 		// Start bounded resampling on an integer second, which lies on both
 		// sample grids. Adjacent ranges then use the same source sample phase.
 		if (window) range.start = Math.floor(range.start);
-		const decoded = projectItem
+		const media = projectItem && clipAudioMedia({ clip, projectItem });
+		const decoded = projectItem && media
 			? await resolveAudioBufferForProjectItem({
 					projectItem,
-					file: clipAudioMedia({ clip, projectItem }).file,
+					file: media.file,
 					range,
 					audioContext,
 					signal,
 					bounded: !!window,
+					stream: window &&
+						sessions && { sessions, key: `${clip.id}:${media.sourceKey}` },
 				})
 			: clip.type === "audio" && clip.sourceType === "library"
 				? await resolveLibraryAudioBuffer({ clip, audioContext, signal })
@@ -287,6 +298,7 @@ async function resolveAudioBufferForProjectItem({
 	audioContext,
 	signal,
 	bounded,
+	stream,
 }: {
 	projectItem: ProjectItem;
 	/** The item's file, or what `clipAudioMedia` reads the clip's audio from. */
@@ -295,6 +307,8 @@ async function resolveAudioBufferForProjectItem({
 	audioContext: BaseAudioContext;
 	signal?: AbortSignal;
 	bounded: boolean;
+	/** Continues an open decoder for this clip instead of opening the file again. */
+	stream?: { sessions: AudioDecodeSessions; key: string };
 }): Promise<DecodedClipAudio | null> {
 	// An uploaded audio file is already in memory, so it decodes in one go.
 	// Everything else, recordings on disk above all, decodes only the range.
@@ -312,6 +326,23 @@ async function resolveAudioBufferForProjectItem({
 	}
 
 	try {
+		if (stream) {
+			const assembled = await stream.sessions.decode({
+				key: stream.key,
+				file,
+				range,
+				maxChannels: MAX_AUDIO_CHANNELS,
+			});
+			return assembled
+				? {
+						buffer: await toAudioBuffer({
+							assembled,
+							sampleRate: audioContext.sampleRate,
+						}),
+						start: range.start,
+					}
+				: null;
+		}
 		const buffer = await decodeAudioRange({
 			file,
 			range,
@@ -368,30 +399,7 @@ export async function decodeAudioRange({
 			assembler.add(chunk);
 		}
 		const assembled = assembler.finish();
-		if (!assembled) return null;
-
-		const { channels } = assembled;
-		const nativeBuffer = new AudioBuffer({
-			numberOfChannels: channels.length,
-			length: channels[0].length,
-			sampleRate: assembled.sampleRate,
-		});
-		for (let channel = 0; channel < channels.length; channel++) {
-			nativeBuffer.copyToChannel(channels[channel], channel);
-		}
-		if (assembled.sampleRate === sampleRate) return nativeBuffer;
-
-		// OfflineAudioContext gives high-quality resampling to the target rate.
-		const offlineContext = new OfflineAudioContext(
-			channels.length,
-			Math.ceil(nativeBuffer.length * (sampleRate / assembled.sampleRate)),
-			sampleRate,
-		);
-		const sourceNode = offlineContext.createBufferSource();
-		sourceNode.buffer = nativeBuffer;
-		sourceNode.connect(offlineContext.destination);
-		sourceNode.start(0);
-		return await offlineContext.startRendering();
+		return assembled ? await toAudioBuffer({ assembled, sampleRate }) : null;
 	} catch (error) {
 		signal?.throwIfAborted();
 		throw error;
@@ -399,6 +407,38 @@ export async function decodeAudioRange({
 		signal?.removeEventListener("abort", disposeInput);
 		input.dispose();
 	}
+}
+
+/** Assembled source audio as an AudioBuffer at `sampleRate`. */
+async function toAudioBuffer({
+	assembled,
+	sampleRate,
+}: {
+	assembled: AssembledAudio;
+	sampleRate: number;
+}): Promise<AudioBuffer> {
+	const { channels } = assembled;
+	const nativeBuffer = new AudioBuffer({
+		numberOfChannels: channels.length,
+		length: channels[0].length,
+		sampleRate: assembled.sampleRate,
+	});
+	for (let channel = 0; channel < channels.length; channel++) {
+		nativeBuffer.copyToChannel(channels[channel], channel);
+	}
+	if (assembled.sampleRate === sampleRate) return nativeBuffer;
+
+	// OfflineAudioContext gives high-quality resampling to the target rate.
+	const offlineContext = new OfflineAudioContext(
+		channels.length,
+		Math.ceil(nativeBuffer.length * (sampleRate / assembled.sampleRate)),
+		sampleRate,
+	);
+	const sourceNode = offlineContext.createBufferSource();
+	sourceNode.buffer = nativeBuffer;
+	sourceNode.connect(offlineContext.destination);
+	sourceNode.start(0);
+	return await offlineContext.startRendering();
 }
 
 interface AudioMixSource {
@@ -793,6 +833,8 @@ export function createTimelineAudioReader({
 		? Math.round(0.02 * sampleRate)
 		: 0;
 	const tiles = new Map<number, AudioBuffer>();
+	const sessions = createAudioDecodeSessions({ signal });
+	signal?.addEventListener("abort", () => sessions.dispose(), { once: true });
 	const getTile = async (tileStart: number) => {
 		const cached = tiles.get(tileStart);
 		if (cached) return cached;
@@ -803,6 +845,7 @@ export function createTimelineAudioReader({
 			audioContext: context,
 			signal,
 			window: { start: tileStart, end },
+			sessions,
 		})) {
 			mixAudioChannels({
 				clip,
@@ -867,6 +910,8 @@ export function createTimelineAudioReader({
 		length,
 		sampleRate,
 		channelCount: 2,
+		/** Closes the decoders the reads kept open. */
+		dispose: () => sessions.dispose(),
 		async *blocks({
 			master,
 			fromSeconds = 0,
@@ -874,27 +919,32 @@ export function createTimelineAudioReader({
 			master: Pick<MixLoudness, "gainDb" | "ceilingDbtp">;
 			fromSeconds?: number;
 		}) {
-			for (let start = Math.floor(fromSeconds * sampleRate); start < length; ) {
-				signal?.throwIfAborted();
-				const end = Math.min(
-					length,
-					(Math.floor(start / sampleRate) + 1) * sampleRate,
-				);
-				const channels = await readMasteredSamples({
-					read,
-					start,
-					end,
-					length,
-					sampleRate,
-					...master,
-				});
-				signal?.throwIfAborted();
-				const buffer = context.createBuffer(2, end - start, sampleRate);
-				channels.forEach((data, channel) =>
-					buffer.getChannelData(channel).set(data),
-				);
-				yield { buffer, time: start / sampleRate };
-				start = end;
+			try {
+				for (let start = Math.floor(fromSeconds * sampleRate); start < length; ) {
+					signal?.throwIfAborted();
+					const end = Math.min(
+						length,
+						(Math.floor(start / sampleRate) + 1) * sampleRate,
+					);
+					const channels = await readMasteredSamples({
+						read,
+						start,
+						end,
+						length,
+						sampleRate,
+						...master,
+					});
+					signal?.throwIfAborted();
+					const buffer = context.createBuffer(2, end - start, sampleRate);
+					channels.forEach((data, channel) =>
+						buffer.getChannelData(channel).set(data),
+					);
+					yield { buffer, time: start / sampleRate };
+					start = end;
+				}
+			} finally {
+				// A later read opens what it needs again.
+				sessions.dispose();
 			}
 		},
 	};
