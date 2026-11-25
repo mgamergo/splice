@@ -2,6 +2,9 @@ import {
 	denoisedAudioUrlForPath,
 	isFootagePath,
 	mediaUrlForPath,
+	MEDIA_CONTENT_HEADER,
+	MEDIA_VERSION_HEADER,
+	MEDIA_VERSION_PARAM,
 } from "@splice/bridge";
 import { type AudioCapableClip, isNoiseReduced } from "@/timeline/audio-state";
 import { BlobSource, UrlSource, type Source } from "mediabunny";
@@ -35,7 +38,11 @@ export function createMediaSource({
 }
 
 /** fetch, also stopped by `signal` on top of the signal each request brings. */
-function createAbortableFetch({ signal }: { signal: AbortSignal }): typeof fetch {
+function createAbortableFetch({
+	signal,
+}: {
+	signal: AbortSignal;
+}): typeof fetch {
 	trackAbortReason({ signal });
 	const abortableFetch = (...[input, init]: Parameters<typeof fetch>) =>
 		fetch(input, {
@@ -79,6 +86,17 @@ function isObject(value: unknown): value is object {
 	return typeof value === "object" && value !== null;
 }
 
+/** Give each render URL the version verified for that job. */
+export function versionedMediaUrl({
+	url,
+	version,
+}: {
+	url: string;
+	version: string;
+}): string {
+	return `${url}${url.includes("?") ? "&" : "?"}${MEDIA_VERSION_PARAM}=${encodeURIComponent(version)}`;
+}
+
 /**
  * Where a clip's audio is read from, and a key for caching what's decoded from
  * it. With noise reduction on, a disk item's audio comes from the WAV `splice`
@@ -95,10 +113,12 @@ export function clipAudioMedia({
 	const { file } = projectItem;
 	if (!isNoiseReduced({ clip }) || !isDiskMedia(file))
 		return { file, sourceKey: projectItem.id };
+	const url = denoisedAudioUrlForPath(file.path);
+	const version = file.expectedVersion;
 	return {
 		file: {
 			...file,
-			url: denoisedAudioUrlForPath(file.path),
+			url: version ? versionedMediaUrl({ url, version }) : url,
 			type: "audio/wav",
 		},
 		sourceKey: `${projectItem.id}:denoised`,
@@ -117,14 +137,25 @@ export function playableProjectItems(items: ProjectItem[]): ProjectItem[] {
 /** Looks up a file under Footage through `splice`, or returns null if it's gone. */
 export async function probeDiskMedia({
 	path,
+	signal,
+	includeContentHash = true,
 }: {
 	path: string;
+	signal?: AbortSignal;
+	includeContentHash?: boolean;
 }): Promise<DiskMedia | null> {
 	if (!isFootagePath(path)) {
 		return null;
 	}
 	const url = mediaUrlForPath(path);
-	const head = () => fetch(url, { method: "HEAD", credentials: "same-origin" });
+	const head = () =>
+		fetch(url, {
+			method: "HEAD",
+			credentials: "same-origin",
+			cache: "no-store",
+			signal,
+			...(includeContentHash && { headers: { [MEDIA_CONTENT_HEADER]: "1" } }),
+		});
 	let response = await head();
 	// The media cookie is missing (a new browser session): get one and try again.
 	if (response.status === 401 && (await ensureMediaSession())) {
@@ -142,5 +173,7 @@ export async function probeDiskMedia({
 		type: response.headers.get("content-type") ?? "application/octet-stream",
 		size: Number(response.headers.get("content-length") ?? 0),
 		lastModified: Number.isFinite(lastModified) ? lastModified : 0,
+		version: response.headers.get(MEDIA_VERSION_HEADER) ?? undefined,
+		contentHash: response.headers.get(MEDIA_CONTENT_HEADER) ?? undefined,
 	};
 }

@@ -59,7 +59,7 @@ export function ExportButton() {
 		readBridgeToken() !== null;
 
 	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
-		if (!open) {
+		if (!open && !deliversPair) {
 			editor.project.cancelExport();
 			editor.project.clearExportState();
 		}

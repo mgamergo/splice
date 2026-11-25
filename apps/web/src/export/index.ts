@@ -48,6 +48,8 @@ export interface ExportResult {
 	failedStep?: DeliveryStep;
 	/** The pair a Horizontal export published. */
 	record?: ExportRecord;
+	/** The sequence changed after this Horizontal export was requested. */
+	newerEdit?: boolean;
 }
 
 export interface ExportState {

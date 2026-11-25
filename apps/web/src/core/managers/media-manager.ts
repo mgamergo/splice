@@ -10,6 +10,7 @@ import { BatchCommand, RemoveProjectItemCommand } from "@/commands";
 export class MediaManager {
 	private projectItems: ProjectItem[] = [];
 	private isLoading = false;
+	private pendingSaves = new Map<string, Promise<void>>();
 	private listeners = new Set<() => void>();
 	/** Changes whenever the library is cleared (a project closes or another loads). */
 	private generation = 0;
@@ -28,11 +29,16 @@ export class MediaManager {
 			id: generateUUID(),
 		};
 
+		const save = storageService.saveProjectItem({
+			projectId,
+			projectItem: newProjectItem,
+		});
+		this.pendingSaves.set(newProjectItem.id, save);
 		this.projectItems = [...this.projectItems, newProjectItem];
 		this.notify();
 
 		try {
-			await storageService.saveProjectItem({ projectId, projectItem: newProjectItem });
+			await save;
 			// The save is async; don't change another project's frame rate.
 			if (this.editor.project.getActiveOrNull()?.metadata.id === projectId) {
 				this.editor.project.ratchetFpsForImportedMedia({
@@ -42,7 +48,9 @@ export class MediaManager {
 			return newProjectItem;
 		} catch (error) {
 			console.error("Failed to save project item:", error);
-			this.projectItems = this.projectItems.filter((projectItem) => projectItem.id !== newProjectItem.id);
+			this.projectItems = this.projectItems.filter(
+				(projectItem) => projectItem.id !== newProjectItem.id,
+			);
 			this.notify();
 
 			if (storageService.isQuotaExceededError({ error })) {
@@ -52,10 +60,26 @@ export class MediaManager {
 			}
 
 			return null;
+		} finally {
+			this.pendingSaves.delete(newProjectItem.id);
 		}
 	}
 
-	removeProjectItem({ projectId, id }: { projectId: string; id: string }): void {
+	async waitForProjectItemSaves({
+		items,
+	}: {
+		items: Iterable<string>;
+	}): Promise<void> {
+		await Promise.all([...items].map((id) => this.pendingSaves.get(id)));
+	}
+
+	removeProjectItem({
+		projectId,
+		id,
+	}: {
+		projectId: string;
+		id: string;
+	}): void {
 		this.removeProjectItems({ projectId, ids: [id] });
 	}
 
@@ -67,22 +91,28 @@ export class MediaManager {
 		ids: string[];
 	}): void {
 		const uniqueIds = [...new Set(ids)];
-		if (uniqueIds.length === 0) {
+		const removable = uniqueIds.filter(
+			(id) => !this.editor.project.isCheckpointMedia({ projectId, id }),
+		);
+		if (removable.length !== uniqueIds.length)
+			toast.error("Media used by an approved cut must stay in the library.");
+		if (removable.length === 0) {
 			return;
 		}
 
 		const command =
-			uniqueIds.length === 1
+			removable.length === 1
 				? new RemoveProjectItemCommand({
 						projectId,
-						projectItemId: uniqueIds[0],
+						projectItemId: removable[0],
 					})
 				: new BatchCommand(
-						uniqueIds.map((id) =>
-							new RemoveProjectItemCommand({
-								projectId,
-								projectItemId: id,
-							}),
+						removable.map(
+							(id) =>
+								new RemoveProjectItemCommand({
+									projectId,
+									projectItemId: id,
+								}),
 						),
 					);
 
@@ -117,7 +147,10 @@ export class MediaManager {
 	async clearProjectMedia({ projectId }: { projectId: string }): Promise<void> {
 		waveformCache.clearAll();
 
-		this.projectItems.forEach((projectItem) => {
+		const removable = this.projectItems.filter(
+			({ id }) => !this.editor.project.isCheckpointMedia({ projectId, id }),
+		);
+		removable.forEach((projectItem) => {
 			if (projectItem.url) {
 				URL.revokeObjectURL(projectItem.url);
 			}
@@ -126,13 +159,13 @@ export class MediaManager {
 			}
 		});
 
-		const mediaIds = this.projectItems.map((projectItem) => projectItem.id);
-		this.projectItems = [];
+		const mediaIds = new Set(removable.map(({ id }) => id));
+		this.projectItems = this.projectItems.filter(({ id }) => !mediaIds.has(id));
 		this.notify();
 
 		try {
 			await Promise.all(
-				mediaIds.map((id) =>
+				[...mediaIds].map((id) =>
 					storageService.deleteProjectItem({ projectId, id }),
 				),
 			);

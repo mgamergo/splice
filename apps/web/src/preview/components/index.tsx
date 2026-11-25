@@ -1,5 +1,6 @@
 "use client";
 
+import { useApprovalViewStore } from "@/approval/playback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useDeepCompareEffect from "use-deep-compare-effect";
 import { useEditor } from "@/editor/use-editor";
@@ -187,7 +188,7 @@ function PreviewCanvas({
 		// Export draws on the canvas the preview mounts; drawing here too would
 		// put preview frames into the export. A cancelled export holds the
 		// canvas until it has stopped, even after its dialog has closed.
-		if (editor.project.isExportRunning()) return;
+		if (editor.project.isExportRunning() || useApprovalViewStore.getState().preview) return;
 
 		const renderTime = Math.min(
 			editor.playback.getCurrentTime(),

@@ -531,23 +531,24 @@ export function saveMixLoudness({
 	});
 }
 
-/** Whether the saved mix gain was measured on the audio the sequence plays now. */
-export function isMixLoudnessStale({
+/** The current audio fingerprint if it differs from the saved measurement. */
+export function staleMixFingerprint({
 	sequence,
 	projectItems,
 	projectSources,
-}: Parameters<typeof tracksWithMusicDucking>[0]): boolean {
+}: Parameters<typeof tracksWithMusicDucking>[0]): string | undefined {
 	const loudness = sequence.mix?.loudness;
-	return (
-		!!loudness &&
-		loudness.fingerprint !==
-			mixFingerprint({
-				tracks: tracksWithMusicDucking({
-					sequence,
-					projectItems,
-					projectSources,
-				}),
-				projectItems,
-			})
-	);
+	if (!loudness) return;
+	const fingerprint = mixFingerprint({
+		tracks: tracksWithMusicDucking({ sequence, projectItems, projectSources }),
+		projectItems,
+	});
+	if (fingerprint !== loudness.fingerprint) return fingerprint;
+}
+
+/** Whether the saved mix gain was measured on the audio the sequence plays now. */
+export function isMixLoudnessStale(
+	input: Parameters<typeof tracksWithMusicDucking>[0],
+): boolean {
+	return staleMixFingerprint(input) !== undefined;
 }

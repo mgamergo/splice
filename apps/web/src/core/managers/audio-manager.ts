@@ -15,7 +15,7 @@ import {
 	hasAnimatedVolume,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
-import type { SequenceTracks } from "@/timeline/types";
+import type { SequenceTracks, TSequence } from "@/timeline/types";
 import { createMediaSource } from "@/media/media-data";
 import { getClipSourceRange, type SourceRange } from "@/media/source-range";
 import {
@@ -67,7 +67,22 @@ export class AudioManager {
 	private playbackLatencyCompensationSeconds = 0;
 	private unsubscribers: Array<() => void> = [];
 
-	constructor(private editor: EditorCore) {
+	constructor(
+		private editor: {
+			playback: EditorCore["playback"];
+			timeline: Pick<EditorCore["timeline"], "getTotalDuration" | "subscribe">;
+			media: Pick<EditorCore["media"], "getProjectItems" | "subscribe">;
+			project: Pick<EditorCore["project"], "getActiveOrNull">;
+			sequences: {
+				getActiveSequence: () => Pick<TSequence, "tracks" | "mix" | "captions">;
+				getActiveSequenceOrNull: () => Pick<
+					TSequence,
+					"tracks" | "mix" | "captions"
+				> | null;
+				subscribe: EditorCore["sequences"]["subscribe"];
+			};
+		},
+	) {
 		this.lastVolume = this.editor.playback.getVolume();
 
 		this.unsubscribers.push(
@@ -382,10 +397,20 @@ export class AudioManager {
 					sessionId: this.playbackSessionId,
 				});
 			} else {
+				const sessionId = this.playbackSessionId;
 				void this.runClipIterator({
 					clip,
 					startTime: currentTime,
-					sessionId: this.playbackSessionId,
+					sessionId,
+				}).catch((error: unknown) => {
+					// Closing the approved viewer disposes the input while it may
+					// still be waiting for another audio buffer.
+					if (
+						sessionId !== this.playbackSessionId ||
+						!this.editor.playback.getIsPlaying()
+					)
+						return;
+					console.error("Could not play clip audio:", error);
 				});
 			}
 		}
@@ -502,8 +527,9 @@ export class AudioManager {
 							this.playbackLatencyCompensationSeconds = nextCompensationSeconds;
 						}
 						const resyncStartTime = this.getPlaybackTime();
+						await iterator.return();
 						this.clipIterators.delete(clip.id);
-						void this.runClipIterator({
+						await this.runClipIterator({
 							clip,
 							startTime: resyncStartTime,
 							sessionId,

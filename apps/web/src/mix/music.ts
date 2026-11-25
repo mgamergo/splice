@@ -594,7 +594,7 @@ export function tracksWithMusicDucking({
 	projectItems,
 	projectSources = [],
 }: {
-	sequence: TSequence;
+	sequence: Pick<TSequence, "tracks" | "captions" | "mix">;
 	projectItems: ProjectItem[];
 	projectSources?: CaptionsRequest["sources"];
 }): SequenceTracks {

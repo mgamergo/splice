@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Download, FolderOpen, RotateCcw } from "lucide-react";
+import { Check, Copy, FolderOpen, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
 	Section,
@@ -16,11 +16,6 @@ import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useCaptionsStore } from "@/captions/store";
 import { useCaptionCues } from "@/captions/use-caption-cues";
-import {
-	isMixLoudnessStale,
-	measureMixLoudness,
-	saveMixLoudness,
-} from "@/mix/final-mix";
 import { useEditor } from "@/editor/use-editor";
 import {
 	DELIVERY_STEP_LABELS,
@@ -28,7 +23,9 @@ import {
 	type ExportQuality,
 } from "@/export";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
+import { ExportGate } from "@/approval/components/export-gate";
 import {
+	type DeliverySnapshot,
 	deliveryFingerprint,
 	type ListedExport,
 	listExports,
@@ -60,14 +57,6 @@ export function DeliveryPopover() {
 	const project = useEditor((e) => e.project.getActive());
 	const sequence = useEditor((e) => e.sequences.getActiveSequence());
 	const projectItems = useEditor((e) => e.media.getProjectItems());
-	const loudness = sequence.mix?.loudness;
-	const stale = isMixLoudnessStale({
-		sequence,
-		projectItems,
-		projectSources: project.captions?.sources,
-	});
-	const [measuring, setMeasuring] = useState(false);
-	const [approvalError, setApprovalError] = useState<string | null>(null);
 	const exportState = useEditor((e) => e.project.getExportState());
 	const revision = useEditor((e) => e.command.getRevision());
 	// Saved spellings change the SRT without a new revision.
@@ -114,39 +103,12 @@ export function DeliveryPopover() {
 		};
 	}, [editor, revision, spellings, sequence, projectItems, project.captions]);
 
-	const handleExport = async ({
-		acceptStaleGain,
-	}: {
-		acceptStaleGain: boolean;
-	}) => {
+	const handleExport = async (snapshot: DeliverySnapshot) => {
 		setFolderMessage(null);
-		setApprovalError(null);
-		const exported = await editor.project.deliver({ quality, acceptStaleGain });
+		const exported = await editor.project.deliver({ quality, snapshot });
 		if (exported.success) void refreshHistory();
 		else if (!exported.failedStep && !exported.cancelled)
-			setApprovalError(exported.error ?? "Couldn't export the edit.");
-	};
-
-	const handleRemeasure = async () => {
-		if (!loudness) return;
-		const revision = editor.command.getRevision();
-		setMeasuring(true);
-		setApprovalError(null);
-		try {
-			const measured = await measureMixLoudness({
-				editor,
-				sequenceId: sequence.id,
-				targetLufs: loudness.targetLufs,
-				ceilingDbtp: loudness.ceilingDbtp,
-			});
-			if (editor.command.getRevision() !== revision)
-				throw new Error("The edit changed while measuring. Measure it again.");
-			saveMixLoudness({ editor, sequenceId: sequence.id, loudness: measured });
-		} catch (error) {
-			setApprovalError(errorMessage(error));
-		} finally {
-			setMeasuring(false);
-		}
+			throw new Error(exported.error ?? "Couldn't export the edit.");
 	};
 
 	const handleRetry = async () => {
@@ -180,6 +142,7 @@ export function DeliveryPopover() {
 
 			{failed ? (
 				<ExportFailure
+					onStartOver={() => editor.project.clearExportState()}
 					step={
 						result.failedStep
 							? DELIVERY_STEP_LABELS[result.failedStep]
@@ -220,12 +183,14 @@ export function DeliveryPopover() {
 							<p className="text-muted-foreground text-xs break-all">
 								{record.stem}.mp4 and .srt, in the folder {record.stem}
 							</p>
-							{record.revision !== revision && (
-								<p className="text-muted-foreground text-xs">
-									The sequence changed after this export started. Export
-									again to include the newer edit.
-								</p>
-							)}
+							{(result?.newerEdit ||
+								(currentFingerprint && record.fingerprint !== currentFingerprint)) && (
+									<p className="text-muted-foreground text-xs">
+										A newer edit is available. This export holds the
+										approved revision; export again to deliver the newer
+										edit.
+									</p>
+								)}
 						</div>
 					)}
 					<Section collapsible defaultOpen={false} showTopBorder={false}>
@@ -256,33 +221,7 @@ export function DeliveryPopover() {
 								? `1080p30 MP4 without burned-in captions, and an SRT with ${cueCount} cues, written together to Exports.`
 								: "No captions yet, so the SRT will be empty. Load transcripts in Captions first."}
 						</p>
-						{approvalError && (
-							<p role="alert" className="text-destructive text-xs">
-								{approvalError}
-							</p>
-						)}
-						{stale && (
-							<>
-								<p className="text-muted-foreground text-xs">
-									The audio changed since the mix was measured.
-								</p>
-								<Button
-									variant="outline"
-									disabled={measuring}
-									onClick={handleRemeasure}
-								>
-									{measuring ? "Measuring…" : "Remeasure mix"}
-								</Button>
-							</>
-						)}
-						<Button
-							disabled={measuring}
-							onClick={() => void handleExport({ acceptStaleGain: stale })}
-							className="w-full gap-2"
-						>
-							<Download className="size-4" />
-							{stale ? "Export with saved gain" : "Export"}
-						</Button>
+						<ExportGate onExport={handleExport} />
 					</div>
 				</div>
 			)}
@@ -302,10 +241,12 @@ function ExportFailure({
 	step,
 	error,
 	onRetry,
+	onStartOver,
 }: {
 	step: string;
 	error: string;
 	onRetry: () => void;
+	onStartOver: () => void;
 }) {
 	const [copied, setCopied] = useState(false);
 	return (
@@ -344,6 +285,7 @@ function ExportFailure({
 					Retry
 				</Button>
 			</div>
+			<Button variant="text" size="sm" onClick={onStartOver}>Back to export options</Button>
 		</div>
 	);
 }
@@ -396,7 +338,7 @@ function ExportHistory({
 								<time dateTime={entry.exportedAt} className="font-medium">
 									{new Date(entry.exportedAt).toLocaleString()}
 								</time>
-								{entry.fingerprint === currentFingerprint && (
+								{!entry.checkpointId && entry.fingerprint === currentFingerprint && (
 									<Badge variant="secondary" className="px-1.5 py-0 text-[0.65rem]">
 										Current edit
 									</Badge>
@@ -412,7 +354,7 @@ function ExportHistory({
 							</span>
 							<span className="text-muted-foreground">
 								{entry.projectName} · {entry.sequenceName} · revision{" "}
-								{entry.fingerprint.slice(0, 8)}
+								{entry.revision}
 							</span>
 							<span className="text-muted-foreground break-all">
 								{entry.files.mp4}, {entry.files.srt}

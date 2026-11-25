@@ -1,9 +1,21 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	stat,
+	symlink,
+	utimes,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	BRIDGE_PATHS,
+	MEDIA_CONTENT_HEADER,
+	MEDIA_VERSION_HEADER,
+	MEDIA_VERSION_PARAM,
 	mediaUrlForPath,
 	sessionCookieName,
 } from "@splice/bridge";
@@ -79,6 +91,61 @@ describe("footage paths", () => {
 });
 
 describe("media route", () => {
+	test("identifies byte-identical relinks and rejects requests for a replaced version", async () => {
+		const dir = join(root, "Footage");
+		const original = join(dir, "before.mp4");
+		const moved = join(dir, "after.mp4");
+		await writeFile(original, bytes);
+		try {
+			const head = ({ path }: { path: string }) =>
+				fetch(`${server.origin}${mediaUrlForPath(path)}`, {
+					method: "HEAD",
+					headers: {
+						authorization: `Bearer ${TOKEN}`,
+						[MEDIA_CONTENT_HEADER]: "1",
+					},
+				});
+			const before = await head({ path: "before.mp4" });
+			const hash = before.headers.get(MEDIA_CONTENT_HEADER);
+			expect(hash).toHaveLength(64);
+
+			await rename(original, moved);
+			const after = await head({ path: "after.mp4" });
+			const version = after.headers.get(MEDIA_VERSION_HEADER);
+			expect(after.headers.get(MEDIA_CONTENT_HEADER)).toBe(hash);
+			expect(version).toHaveLength(64);
+			const pinned = () =>
+				fetch(
+					`${server.origin}${mediaUrlForPath("after.mp4")}?${MEDIA_VERSION_PARAM}=${version}`,
+					{
+						headers: { authorization: `Bearer ${TOKEN}`, range: "bytes=1-2" },
+					},
+				);
+			const part = await pinned();
+			expect(part.status).toBe(206);
+			expect(new Uint8Array(await part.arrayBuffer())).toEqual(
+				bytes.slice(1, 3),
+			);
+
+			const { atime, mtime } = await stat(moved);
+			await writeFile(original, bytes.slice().reverse());
+			await utimes(original, atime, mtime);
+			await rename(original, moved);
+			const replaced = await head({ path: "after.mp4" });
+			expect(replaced.headers.get("content-length")).toBe(
+				after.headers.get("content-length"),
+			);
+			expect(replaced.headers.get("last-modified")).toBe(
+				after.headers.get("last-modified"),
+			);
+			expect(replaced.headers.get(MEDIA_CONTENT_HEADER)).not.toBe(hash);
+			expect((await pinned()).status).toBe(412);
+		} finally {
+			await rm(original, { force: true });
+			await rm(moved, { force: true });
+		}
+	});
+
 	test("serves a file and byte ranges", async () => {
 		const full = await media({ path: "Day 1/take #1.mp4" });
 		expect(full.status).toBe(200);
