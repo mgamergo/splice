@@ -1,3 +1,5 @@
+import { BASE_STYLE } from "@splice/bridge/style";
+import { StyleUpdateApi } from "@/agent/style-update";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
 import { ApprovalApi } from "@/approval/api";
@@ -100,6 +102,50 @@ beforeEach(() => {
 });
 
 describe("Short styles", () => {
+	test("previews newer defaults, preserves direct and sequence-level caption edits, and applies in one undo step", async () => {
+		expect(api.addCaptions({ ...revision(), sources, style: { fontSize: 7 } })).toMatchObject({ ok: true });
+		const track = captionTrack();
+		const [clip] = track.clips;
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [{ trackId: track.id, clipId: clip.id, patch: {
+					params: { ...clip.params, color: "#abc123", content: "Manual", "transform.positionY": -150 },
+				} }],
+			}),
+		});
+		const defaults = {
+			...BASE_STYLE,
+			revision: 2,
+			values: {
+				...BASE_STYLE.values,
+				caption: { color: "#123abc", fontSize: 10, background: "none" },
+				explainer: { ...BASE_STYLE.values.explainer, captionAnchor: "bottom" as const },
+			},
+		};
+		const style = new StyleUpdateApi({ editor, readDefaults: async () => defaults });
+		const before = sequence().tracks;
+		const preview = await style.preview();
+		if (!preview) throw new Error("Missing preview");
+		expect(sequence().tracks).toBe(before);
+		expect(preview.sequences[0].changes).toEqual(expect.arrayContaining([
+			expect.objectContaining({ kind: "caption", properties: expect.arrayContaining(["color"]) }),
+		]));
+		const previewRequest = { previewId: preview.id, ...revision() };
+		expect(await style.apply({ request: previewRequest })).toMatchObject({ ok: true, styleRevision: 2 });
+		expect(captionTrack().clips[0]).toMatchObject({
+			id: clip.id, startTime: clip.startTime, duration: clip.duration,
+			params: { color: "#abc123", fontSize: 7, content: "Manual", "transform.positionY": -150, "background.enabled": false },
+		});
+		expect(captionTrack().clips[1].params).toMatchObject({ color: "#123abc", fontSize: 7 });
+		expect(captionYs()[1]).toBeGreaterThan(0);
+		editor.command.undo();
+		expect(sequence().tracks).toBe(before);
+		expect(editor.project.getActive().settings.styleDefaults).toBeUndefined();
+		editor.command.redo();
+		expect(captionTrack().clips[1].params.color).toBe("#123abc");
+		expect(await style.apply({ request: previewRequest })).toMatchObject({ code: "REVISION_CONFLICT" });
+	});
+
 	test("defaults old projects to Explainer and applies Raw placement as an undoable project setting", () => {
 		expect(projectShortStyle({ project: editor.project.getActive() })).toBe(
 			"explainer",

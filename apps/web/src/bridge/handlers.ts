@@ -1,3 +1,6 @@
+import { applyRequestSchema } from "@splice/bridge/ops";
+import { readFraming } from "@/agent/style-profile";
+import { StyleUpdateApi, summarizeStylePreview } from "@/agent/style-update";
 import type { EditorState, ItemSummary, TabMethod } from "@splice/bridge";
 import { mixLoudnessRequestSchema } from "@splice/bridge/mix";
 import { z } from "zod";
@@ -36,6 +39,7 @@ export function createTabHandlers({
 	isBlocked: () => boolean;
 }): TabHandlers {
 	const approval = new ApprovalApi({ editor, api });
+	const style = new StyleUpdateApi({ editor });
 	const checkAgentAllowed = () => {
 		if (isBlocked()) throw new AgentBlockedError();
 	};
@@ -56,11 +60,13 @@ export function createTabHandlers({
 				digest: api.getDigest(),
 			};
 		},
-		"editor.apply": (params) => {
-			if (isBlocked()) {
-				throw new AgentBlockedError();
-			}
-			return api.apply(params);
+		"editor.apply": async (params) => {
+			checkAgentAllowed();
+			const framing = applyRequestSchema.safeParse(params).data?.ops.some(({ op }) => op === "graphics_pass")
+				? await readFraming()
+				: undefined;
+			checkAgentAllowed();
+			return (framing ? api.withFraming(framing) : api).apply(params);
 		},
 		"editor.rawSequence": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
@@ -80,10 +86,14 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.correctCaption(params);
 		},
-		"editor.graphicsPlan": (params) => api.graphicsPlan(params),
-		"editor.graphicsApply": (params) => {
-			if (isBlocked()) throw new AgentBlockedError();
-			return api.graphicsApply(params);
+		"editor.styleUpdatePreview": async () => summarizeStylePreview(await style.preview()),
+		"editor.styleUpdateApply": (request) => style.apply({ request, beforeWrite: checkAgentAllowed }),
+		"editor.graphicsPlan": async (params) => api.withFraming(await readFraming()).graphicsPlan(params),
+		"editor.graphicsApply": async (params) => {
+			checkAgentAllowed();
+			const framing = await readFraming();
+			checkAgentAllowed();
+			return api.withFraming(framing).graphicsApply(params);
 		},
 		"editor.graphicsList": (params) => api.graphicsList(params),
 		"editor.shortStyle": (params) => {

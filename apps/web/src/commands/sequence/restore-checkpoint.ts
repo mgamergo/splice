@@ -1,3 +1,4 @@
+import { BASE_STYLE } from "@splice/bridge/style";
 import type { ApprovedCheckpoint } from "@/approval/types";
 import { Command, createClipSelectionResult } from "@/commands/base-command";
 import type { EditorCore } from "@/core";
@@ -56,6 +57,7 @@ export class RestoreCheckpointCommand extends Command {
 				sequenceId: checkpoint.sequenceId,
 				updates: {
 					tracks: structuredClone(checkpoint.tracks),
+					styleDefaults: structuredClone(checkpoint.styleDefaults ?? BASE_STYLE),
 					graphics: structuredClone(checkpoint.graphics),
 					markers: structuredClone(checkpoint.markers),
 					mix: structuredClone(checkpoint.mix),

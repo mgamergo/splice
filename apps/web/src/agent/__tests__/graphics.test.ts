@@ -1,3 +1,6 @@
+import { BASE_STYLE, type FramingPreference } from "@splice/bridge/style";
+import { framingEvidence } from "@/agent/style-profile";
+import { StyleUpdateApi } from "@/agent/style-update";
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { EditOp } from "@splice/bridge/ops";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
@@ -108,6 +111,74 @@ beforeEach(() => {
 });
 
 describe("graphics pass", () => {
+	test("uses the project style and previews new default fields around creator adjustments", async () => {
+		const project = editor.project.getActive();
+		const pinned = { ...BASE_STYLE, revision: 2, values: { ...BASE_STYLE.values,
+			card: { ...BASE_STYLE.values.card, color: "#223344" },
+		} };
+		editor.project.setActiveProject({ project: { ...project, settings: { ...project.settings, styleDefaults: pinned } } });
+		apply({ planned: [zoom, highlight, card] });
+		expect(clipOf(card.key).clip.params.color).toBe("#223344");
+		const { trackId, clip } = clipOf(card.key);
+		editor.command.execute({
+			command: new UpdateClipsCommand({
+				updates: [{ trackId, clipId: clip.id, patch: {
+					params: { ...clip.params, color: "#ff0000", content: "Creator card" },
+				} }],
+			}),
+		});
+		const defaults = { ...pinned, revision: 3, values: { ...pinned.values,
+			card: { ...pinned.values.card, color: "#445566", fontSize: 4 },
+			highlight: { ...pinned.values.highlight, stroke: "#aabbcc" },
+			zoom: { ...pinned.values.zoom, maxScale: 1.8, easing: "linear" as const },
+		} };
+		const style = new StyleUpdateApi({ editor, readDefaults: async () => defaults });
+		const preview = await style.preview();
+		if (!preview) throw new Error("Missing preview");
+		expect(preview.sequences[0].changes).toEqual(expect.arrayContaining([
+			expect.objectContaining({ kind: "card", properties: ["fontSize"] }),
+			expect.objectContaining({ kind: "highlight", properties: ["stroke"] }),
+			expect.objectContaining({ kind: "zoom", properties: expect.arrayContaining(["easing"]) }),
+		]));
+		expect(clipOf(highlight.key).clip.params.stroke).toBe("#ffd60a");
+		expect(await style.apply({
+			request: { previewId: preview.id, expectedRevision: api.getRevision() },
+		})).toMatchObject({ ok: true });
+		expect(clipOf(card.key).clip.params).toMatchObject({ color: "#ff0000", content: "Creator card", fontSize: 4 });
+		expect(clipOf(highlight.key).clip.params.stroke).toBe("#aabbcc");
+		expect(sequence().graphics?.records.find(({ key }) => key === zoom.key)?.placed?.scale).toBeCloseTo(1.8);
+		editor.command.undo();
+		expect(editor.project.getActive().settings.styleDefaults).toBe(pinned);
+		expect(clipOf(card.key).clip.params).toMatchObject({ color: "#ff0000", content: "Creator card", fontSize: 3.2 });
+	});
+
+	test("learns only repeated creator adjustments and uses the evidence on a new zoom", () => {
+		const evidence = () => framingEvidence({ project: editor.project.getActive(), sequences: [sequence()] });
+		const zooms = [0, 5, 10].map((offset) => ({
+			...zoom, key: `zoom:${offset}`, action: 11 + offset,
+			passage: { start: 10 + offset, end: 14 + offset },
+		}));
+		apply({ planned: zooms });
+		for (const [index, planned] of zooms.entries()) {
+			const { trackId, clip } = clipOf(planned.key);
+			editor.command.execute({
+				command: new UpdateClipsCommand({
+					updates: [{ trackId, clipId: clip.id, patch: { params: {
+						...clip.params,
+						"transform.scaleX": Number(clip.params["transform.scaleX"]) * 1.25,
+						"transform.scaleY": Number(clip.params["transform.scaleY"]) * 1.25,
+					} } }],
+				}),
+			});
+			expect(evidence()).toHaveLength(index < 2 ? 0 : 1);
+		}
+		const [group] = evidence();
+		const preference: FramingPreference = { ...group, id: crypto.randomUUID(), reverted: false };
+		const fresh = { ...zoom, key: "zoom:new", action: 26, passage: { start: 25, end: 29 } };
+		expect(api.withFraming([preference]).graphicsApply({ expectedRevision: api.getRevision(), graphics: [fresh] })).toMatchObject({ ok: true });
+		expect(sequence().graphics?.records.find(({ key }) => key === fresh.key)?.placed?.scale).toBeCloseTo(2);
+	});
+
 	test("applies zooms, highlights and cards as one undo step", () => {
 		const result = apply({ planned: [zoom, highlight, card] });
 		expect(result).toMatchObject({ ok: true, label: "Agent: graphics pass" });

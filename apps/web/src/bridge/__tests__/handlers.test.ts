@@ -31,9 +31,9 @@ describe("tab handlers", () => {
 		expect(JSON.stringify(state)).toContain("a");
 	});
 
-	test("apply runs through the editing API", () => {
+	test("apply runs through the editing API", async () => {
 		const { editor, handlers } = setUp();
-		const result = handlers["editor.apply"]({
+		const result = await handlers["editor.apply"]({
 			sequenceId: editor.sequences.getActiveSequence().id,
 			expectedRevision: 0,
 			label: "Mark",
@@ -43,16 +43,16 @@ describe("tab handlers", () => {
 		expect(editor.sequences.getActiveSequence().markers).toHaveLength(1);
 	});
 
-	test("apply is refused while the creator has stopped the agent", () => {
+	test("apply is refused while the creator has stopped the agent", async () => {
 		const { editor, handlers } = setUp({ blocked: true });
-		expect(() =>
+		await expect(
 			handlers["editor.apply"]({
 				sequenceId: editor.sequences.getActiveSequence().id,
 				expectedRevision: 0,
 				label: "Mark",
 				ops: [{ op: "add_marker", at: { seconds: 2 } }],
 			}),
-		).toThrow(AgentBlockedError);
+		).rejects.toThrow(AgentBlockedError);
 		expect(editor.sequences.getActiveSequence().markers).toHaveLength(0);
 		expect(editor.command.getRevision()).toBe(0);
 	});

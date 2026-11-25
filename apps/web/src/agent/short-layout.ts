@@ -1,3 +1,4 @@
+import { BASE_STYLE, type StyleDefaults } from "@splice/bridge/style";
 import { recoverCaptionLayouts } from "@/agent/captions";
 import type { ShortStyle } from "@splice/bridge";
 import { graphicActionRegions } from "@/agent/graphics";
@@ -15,12 +16,14 @@ export function layoutShort({
 	canvas,
 	projectItems,
 	updateHookVisibility = false,
+	defaults = BASE_STYLE.values,
 }: {
 	sequence: Pick<TSequence, "tracks" | "graphics" | "captions">;
 	style: ShortStyle;
 	canvas: TCanvasSize;
 	projectItems: ProjectItem[];
 	updateHookVisibility?: boolean;
+	defaults?: StyleDefaults["values"];
 }) {
 	const tracks = recoverCaptionLayouts({
 		tracks: syncShortHooks({ tracks: sequence.tracks }),
@@ -58,6 +61,7 @@ export function layoutShort({
 		canvas,
 		style,
 		position: sequence.captions?.style?.position,
+		preferred: defaults[style].captionAnchor,
 		regions: [
 			...graphicActionRegions({ sequence, projectItems, canvas }),
 			...textOverlays,

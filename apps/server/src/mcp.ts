@@ -1,4 +1,9 @@
 import {
+	applyStyleUpdateSchema,
+	revertFramingPreferenceSchema,
+	setStyleDefaultsSchema,
+} from "@splice/bridge/style";
+import {
 	addCaptionsRequestSchema,
 	type AudioSource,
 	applyRequestSchema,
@@ -917,6 +922,46 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		},
 		() =>
 			guard(async () => editorResult(await rpc({ method: "editor.shortSrt" }))),
+	);
+
+	server.registerTool(
+		"style_defaults_get",
+		{ description: "Read the creator's versioned style defaults for new projects." },
+		async () => guard(async () => text(await rpc({ method: "style.defaults" }))),
+	);
+	server.registerTool(
+		"style_defaults_set",
+		{
+			description: "Patch the creator's defaults for new projects. Use the revision from style_defaults_get. Set caption fontFamily to null to restore the built-in font.",
+			inputSchema: setStyleDefaultsSchema.shape,
+		},
+		async (params) => guard(async () => text(await rpc({ method: "style.setDefaults", params }))),
+	);
+	server.registerTool(
+		"style_update_preview",
+		{ description: "Preview newer defaults on the open project. Lists affected clips and properties by sequence, with frame times. The editor's Update style dialog shows the before and after frames." },
+		async () => guard(async () => editorResult(await rpc({ method: "editor.styleUpdatePreview" }))),
+	);
+	server.registerTool(
+		"style_update_apply",
+		{
+			description: "Apply newer defaults as one undoable edit. Use previewId and revision from style_update_preview after creator review. Creator-adjusted properties are preserved.",
+			inputSchema: applyStyleUpdateSchema.shape,
+		},
+		async (params) => guard(async () => editorResult(await rpc({ method: "editor.styleUpdateApply", params }))),
+	);
+	server.registerTool(
+		"framing_preferences_list",
+		{ description: "List learned zoom and card framing preferences, the corrections supporting each one, and whether it was reverted." },
+		async () => guard(async () => text(await rpc({ method: "framing.list" }))),
+	);
+	server.registerTool(
+		"framing_preference_revert",
+		{
+			description: "Revert a learned framing preference by id. Future graphics use the project style without that preference.",
+			inputSchema: revertFramingPreferenceSchema.shape,
+		},
+		async (params) => guard(async () => text(await rpc({ method: "framing.revert", params }))),
 	);
 
 	server.registerTool(

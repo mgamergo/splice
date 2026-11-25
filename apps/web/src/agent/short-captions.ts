@@ -12,6 +12,10 @@ import { mediaTimeToSeconds } from "@/wasm";
 
 export const CAPTION_TRACK_NAME = "Captions";
 
+export const CAPTION_APPEARANCE = [
+	"fontSize", "fontFamily", "color", "background.enabled", "background.color",
+] as const;
+
 const POSITION_X = "transform.positionX";
 const POSITION_Y = "transform.positionY";
 const PASSAGE_GAP_SECONDS = 0.5;
@@ -35,6 +39,21 @@ function manuallyPlaced(clip: TextClip) {
 	);
 }
 
+/** Track current appearance edits against the last applied values, including a reset to the old style. */
+export function captureCaptionAppearance(clip: TextClip): TextClip {
+	const layout = clip.captionLayout;
+	if (!layout?.appearance) return clip;
+	let overrides = layout.appearanceOverrides;
+	for (const key of CAPTION_APPEARANCE) {
+		const value = clip.params[key];
+		if (value !== undefined && value !== (overrides?.[key] ?? layout.appearance[key]))
+			overrides = { ...overrides, [key]: value };
+	}
+	return overrides === layout.appearanceOverrides
+		? clip
+		: { ...clip, captionLayout: { ...layout, appearanceOverrides: overrides } };
+}
+
 /** Keeps direct position edits even when caption grouping changes. */
 export function carryCaptionEdits({
 	clips,
@@ -43,7 +62,7 @@ export function carryCaptionEdits({
 	clips: TextClip[];
 	previous: TextClip[];
 }): TextClip[] {
-	const byStart = new Map(previous.map((clip) => [clip.startTime, clip]));
+	const byStart = new Map(previous.map((clip) => [clip.startTime, captureCaptionAppearance(clip)]));
 	const placed = previous
 		.filter((clip) => clip.captionLayout && manuallyPlaced(clip))
 		.sort((a, b) => a.startTime - b.startTime);
@@ -79,17 +98,24 @@ export function carryCaptionEdits({
 			!previousParts &&
 			exact &&
 			plainText(exact.params.content) !== plainText(exact.captionLayout?.text);
-		if (!manual && !(sameWords && exact?.hidden) && !legacyText) return clip;
+		const appearance = exact?.captionLayout?.appearanceOverrides;
+		if (!manual && !(sameWords && exact?.hidden) && !legacyText &&
+			!appearance && !exact?.animations) return clip;
 		return {
 			...clip,
-			...(manual &&
+			...((manual || appearance) &&
 				clip.captionLayout && {
-					captionLayout: { ...clip.captionLayout, manualPosition: true },
+					captionLayout: {
+						...clip.captionLayout,
+						...(manual && { manualPosition: true }),
+						...(appearance && { appearanceOverrides: appearance }),
+					},
 				}),
 			...(sameWords && exact?.hidden && { hidden: true }),
-			...(manual?.animations && { animations: manual.animations }),
+			...((manual?.animations ?? exact?.animations) && { animations: manual?.animations ?? exact?.animations }),
 			params: {
 				...clip.params,
+				...appearance,
 				...(manual && {
 					[POSITION_X]: manual.params[POSITION_X],
 					[POSITION_Y]: manual.params[POSITION_Y],
@@ -132,15 +158,16 @@ export function placeShortCaptions({
 	canvas,
 	style,
 	position,
+	preferred = style === "raw" ? "bottom" : "middle",
 	regions,
 }: {
 	tracks: SequenceTracks;
 	canvas: TCanvasSize;
 	style: ShortStyle;
 	position?: Position;
+	preferred?: Position;
 	regions: OverlayRegion[];
 }): SequenceTracks {
-	const preferred = style === "raw" ? "bottom" : "middle";
 	const order: CaptionAnchor[] =
 		style === "raw"
 			? ["bottom", "middle", "top", "lower", "upper"]
@@ -153,7 +180,8 @@ export function placeShortCaptions({
 			track.hidden
 		)
 			return track;
-		const ordered = track.clips.toSorted((a, b) => a.startTime - b.startTime);
+		const clips = track.clips.map(captureCaptionAppearance);
+		const ordered = clips.toSorted((a, b) => a.startTime - b.startTime);
 		const placements = new Map<string, TextClip>();
 		for (let first = 0; first < ordered.length; ) {
 			let last = first + 1;
@@ -216,11 +244,11 @@ export function placeShortCaptions({
 			}
 			first = last;
 		}
-		if (!placements.size) return track;
+		if (!placements.size && clips.every((clip, index) => clip === track.clips[index])) return track;
 		changed = true;
 		return {
 			...track,
-			clips: track.clips.map((clip) => placements.get(clip.id) ?? clip),
+			clips: clips.map((clip) => placements.get(clip.id) ?? clip),
 		};
 	});
 	return changed ? { ...tracks, overlay } : tracks;

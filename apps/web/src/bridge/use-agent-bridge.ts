@@ -1,5 +1,6 @@
 "use client";
 
+import { watchFramingCorrections } from "@/agent/style-profile";
 import { BRIDGE_PATHS } from "@splice/bridge";
 import { useEffect } from "react";
 import { EditorApi } from "@/agent/editor-api";
@@ -90,10 +91,12 @@ export function useAgentBridge(): void {
 			recordRevisionFloor(revision);
 			client.notifyRevision(revision);
 		});
+		const stopWatchingFraming = watchFramingCorrections(editor);
 		client.start();
 		client.notifyRevision(api.getRevision());
 
 		return () => {
+			stopWatchingFraming();
 			unsubscribe();
 			window.removeEventListener("storage", onStorage);
 			client.stop();

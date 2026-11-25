@@ -1,3 +1,5 @@
+import { projectStyle, sequenceStyle } from "@/agent/style-profile";
+import type { FramingPreference } from "@splice/bridge/style";
 import { fillExplainerPicture } from "@/agent/explainer-picture";
 import {
 	buildRawSequence,
@@ -9,6 +11,7 @@ import {
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
 import {
 	CaptionError,
+	captionStyleFor,
 	recoverCaptionLayouts,
 	saveCaptionCorrections,
 	uncaptionedItemIds as uncaptionedRecordings,
@@ -172,7 +175,15 @@ function allTracks({ tracks }: { tracks: SequenceTracks }) {
  * creator's command history as one undo step.
  */
 export class EditorApi {
+	private framing: FramingPreference[] = [];
+
 	constructor(private readonly editor: EditorCore) {}
+
+	withFraming(framing: FramingPreference[]) {
+		const api = new EditorApi(this.editor);
+		api.framing = framing;
+		return api;
+	}
 
 	getRevision(): number {
 		return this.editor.command.getRevision();
@@ -301,7 +312,7 @@ export class EditorApi {
 		if (conflict) return conflict;
 		const {
 			label = "Agent: rough cut",
-			captions,
+			captions: requestedCaptions,
 			plan,
 			sourceGains,
 			noiseReduction = false,
@@ -356,6 +367,11 @@ export class EditorApi {
 							projectItems,
 						})
 					: leveled;
+			const captions = requestedCaptions && {
+				...requestedCaptions,
+				explicitStyle: requestedCaptions.style ?? {},
+				style: captionStyleFor({ defaults: projectStyle(project).values, explicit: requestedCaptions.style }),
+			};
 			const captioned = captions
 				? withCaptionTrack({
 						tracks: gained,
@@ -423,7 +439,12 @@ export class EditorApi {
 			};
 		}
 		try {
-			const style = { ...sequence.captions?.style, ...parsed.data.style };
+			const explicitStyle = {
+				...(sequence.captions?.explicitStyle ?? sequence.captions?.style),
+				...parsed.data.style,
+			};
+			const defaults = sequenceStyle({ project, sequence }).values;
+			const style = captionStyleFor({ defaults, explicit: explicitStyle });
 			const canvas = project.settings.canvasSize;
 			const previousTracks = recoverCaptionLayouts({
 				tracks: sequence.tracks,
@@ -434,7 +455,7 @@ export class EditorApi {
 				tracks: previousTracks,
 				captions: sequence.captions,
 			});
-			const captions = { ...previous, sources, style };
+			const captions = { ...previous, sources, style, explicitStyle };
 			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
 				tracks: previousTracks,
 				captions,
@@ -445,6 +466,7 @@ export class EditorApi {
 				? layoutShort({
 						sequence: { ...sequence, tracks, captions },
 						style: shortStyle,
+						defaults,
 						canvas,
 						projectItems: this.editor.media.getProjectItems(),
 					})
@@ -513,6 +535,7 @@ export class EditorApi {
 					captions: {
 						...sequence.captions,
 						style: { ...sequence.captions.style, position },
+						explicitStyle: { ...(sequence.captions.explicitStyle ?? sequence.captions.style), position },
 					},
 				},
 				label: "Place Short captions",
@@ -714,8 +737,9 @@ export class EditorApi {
 		const project = this.editor.project.getActive();
 		const canvas = project.settings.canvasSize;
 		const shortStyle = projectShortStyle({ project });
+		const style = sequenceStyle({ project, sequence }).values;
 		const current =
-			syncGraphics({ sequence, projectItems, canvas, shortStyle }) ?? sequence;
+			syncGraphics({ sequence, projectItems, canvas, shortStyle, style }) ?? sequence;
 		const plan = planGraphicsPass({
 			sequence: current,
 			planned: graphics,
@@ -723,6 +747,8 @@ export class EditorApi {
 			projectItems,
 			canvas,
 			shortStyle,
+			style,
+			framing: this.framing,
 		});
 		const placed = syncGraphics({
 			sequence: {
@@ -735,6 +761,7 @@ export class EditorApi {
 			projectItems,
 			canvas,
 			shortStyle,
+			style,
 		});
 		if (!placed) throw new Error("Graphics placement needs a graphics state");
 		// Report where each graphic landed once placed, with any flags.
@@ -1638,6 +1665,7 @@ export class EditorApi {
  * the one the batch originally ran on.
  */
 class AgentBatchCommand extends BatchCommand {
+	readonly isAgentEdit = true;
 	readonly ignoresRippleToggle = true;
 	private readonly editor: EditorCore;
 	private sequencesAfter: TSequence[] | null = null;

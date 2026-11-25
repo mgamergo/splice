@@ -14,6 +14,7 @@ import { RenameProjectDialog } from "@/project/components/rename-project-dialog"
 import { DeleteProjectDialog } from "@/project/components/delete-project-dialog";
 import { useRouter } from "next/navigation";
 import { ExportButton } from "./export-button";
+import { StyleUpdateDialog } from "./style-update-dialog";
 import { ThemeToggle } from "../theme-toggle";
 import { DEFAULT_LOGO_URL } from "@/site/brand";
 import { toast } from "sonner";
@@ -34,6 +35,7 @@ export function EditorHeader() {
 			</div>
 			<nav className="flex items-center gap-2">
 				<AgentIndicator />
+				<StyleUpdateDialog />
 				<ExportButton />
 				<ThemeToggle />
 			</nav>

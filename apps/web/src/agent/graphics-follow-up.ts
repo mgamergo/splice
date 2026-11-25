@@ -1,3 +1,4 @@
+import { sequenceStyle } from "@/agent/style-profile";
 import { layoutShort } from "@/agent/short-layout";
 import { projectShortStyle } from "@/project/format";
 import { syncGraphics } from "@/agent/graphics";
@@ -12,8 +13,10 @@ import type { EditorCore } from "@/core";
  */
 export function graphicsFollowUp({
 	editor,
+	recordFraming,
 }: {
 	editor: EditorCore;
+	recordFraming: boolean;
 }): Command | null {
 	const project = editor.project.getActiveOrNull();
 	const sequence = editor.sequences.getActiveSequenceOrNull();
@@ -22,7 +25,15 @@ export function graphicsFollowUp({
 	if (!sequence.graphics && !shortStyle) return null;
 	const projectItems = editor.media.getProjectItems();
 	const canvas = project.settings.canvasSize;
-	const synced = syncGraphics({ sequence, projectItems, canvas, shortStyle });
+	const defaults = sequenceStyle({ project, sequence }).values;
+	const synced = syncGraphics({
+		sequence,
+		projectItems,
+		canvas,
+		shortStyle,
+		style: defaults,
+		recordFraming,
+	});
 	const current = { ...sequence, ...synced };
 	const tracks = shortStyle
 		? layoutShort({
@@ -30,6 +41,7 @@ export function graphicsFollowUp({
 				style: shortStyle,
 				projectItems,
 				canvas,
+				defaults,
 			})
 		: current.tracks;
 	if (
