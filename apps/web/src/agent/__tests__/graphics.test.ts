@@ -16,6 +16,10 @@ import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
 import { isLeafChannelData } from "@/animation/channel-data";
 import { isScalarChannel } from "@/animation/interpolation";
 import type { EditorCore } from "@/core";
+import { buildScene } from "@/services/renderer/scene-builder";
+import { GraphicNode } from "@/services/renderer/nodes/graphic-node";
+import { TextNode } from "@/services/renderer/nodes/text-node";
+import { VideoNode } from "@/services/renderer/nodes/video-node";
 import type { TimelineClip } from "@/timeline";
 import { mediaTimeToSeconds } from "@/wasm";
 
@@ -143,6 +147,31 @@ describe("graphics pass", () => {
 		expect(sequence().tracks.main.clips[0].animations).toBeUndefined();
 		editor.command.redo();
 		expect(graphics()).toHaveLength(3);
+	});
+
+	test("the export scene includes the picture keyframes, highlight and card", () => {
+		apply({ planned: [zoom, highlight, card] });
+		const { canvasSize, background } = editor.project.getActive().settings;
+		const scene = buildScene({
+			tracks: sequence().tracks,
+			projectItems: editor.media
+				.getProjectItems()
+				.map((item) => ({ ...item, url: "blob:recording" })),
+			canvasSize,
+			background,
+			isPreview: false,
+			duration: s(30),
+		});
+		const picture = scene.children.find((node) => node instanceof VideoNode);
+		const outline = scene.children
+			.filter((node) => node instanceof GraphicNode)
+			.find((node) => node.params.definitionId === "highlight");
+		const explanation = scene.children.find((node) => node instanceof TextNode);
+		expect(picture?.params.animations).toEqual(
+			sequence().tracks.main.clips[0].animations,
+		);
+		expect(outline?.params.timeOffset).toBe(s(20));
+		expect(explanation?.params.params.content).toContain("Why save first");
 	});
 
 	test("a graphics_pass participates in atomic sequence_apply", () => {
