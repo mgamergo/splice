@@ -1,6 +1,7 @@
 import type { EditorState, ItemSummary, TabMethod } from "@splice/bridge";
 import { z } from "zod";
 import type { EditorApi } from "@/agent/editor-api";
+import { ApprovalApi } from "@/approval/api";
 import type { EditorCore } from "@/core";
 import { importDiskItems, summarizeItem } from "@/media/import-disk";
 import { projectFormat } from "@/project/format";
@@ -33,6 +34,7 @@ export function createTabHandlers({
 	api: EditorApi;
 	isBlocked: () => boolean;
 }): TabHandlers {
+	const approval = new ApprovalApi({ editor, api });
 	return {
 		"editor.getState": (): EditorState => {
 			const project = editor.project.getActiveOrNull();
@@ -72,6 +74,17 @@ export function createTabHandlers({
 		"editor.correctCaption": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.correctCaption(params);
+		},
+		"editor.finalizeCut": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return approval.finalizeCut(params);
+		},
+		"editor.checkpointStatus": () => approval.checkpointStatus(),
+		"editor.checkpointCompare": (params) => approval.checkpointCompare(params),
+		"editor.issuesList": (params) => approval.issuesList(params),
+		"editor.dismissIssue": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return approval.dismissIssue(params);
 		},
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),

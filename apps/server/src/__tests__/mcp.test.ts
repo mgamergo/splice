@@ -52,10 +52,15 @@ describe("splice mcp tools", () => {
 			"captions_add",
 			"captions_correct",
 			"captions_list",
+			"checkpoint_compare",
+			"checkpoint_status",
+			"cut_finalize",
 			"detect_pauses",
 			"editor_status",
 			"exports_list",
 			"footage_list",
+			"issue_dismiss",
+			"issues_list",
 			"items_import",
 			"items_list",
 			"measure_loudness",
@@ -69,6 +74,35 @@ describe("splice mcp tools", () => {
 			"transcribe",
 			"transcribe_status",
 		]);
+	});
+
+	test("checkpoint status identifies the exported checkpoint even when SRT and MP4 match a later approval", async () => {
+		const client = await connect(async ({ method, params }) => {
+			if (method === "editor.checkpointStatus")
+				return {
+					ok: true, projectId: "project", sequenceId: "sequence",
+					matchesApproved: true, currentFingerprint: "same",
+					checkpoint: { id: "new" },
+				};
+			expect(method).toBe("exports.list");
+			expect(params).toEqual({ projectId: "project" });
+			return {
+				exports: [{
+					stem: "old-pair", exportedAt: "2026-11-25",
+					checkpointId: "old", sequenceId: "sequence", sequenceName: "Raw",
+					revision: 4, fingerprint: "same", present: true,
+				}],
+			};
+		});
+		try {
+			const response = await client.callTool({ name: "checkpoint_status" });
+			expect(response.isError).toBeFalsy();
+			expect(JSON.parse(textOf(response))).toMatchObject({
+				latestExport: { approvedCheckpointId: "old", revision: 4, matchesCurrentEdit: false },
+			});
+		} finally {
+			await client.close();
+		}
 	});
 
 	test("rough_cut fills in the tightening defaults and detect_pauses reaches splice", async () => {

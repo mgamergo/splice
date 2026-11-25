@@ -37,6 +37,11 @@ export const TAB_METHODS = [
 	"editor.addCaptions",
 	"editor.captionCues",
 	"editor.correctCaption",
+	"editor.finalizeCut",
+	"editor.checkpointStatus",
+	"editor.checkpointCompare",
+	"editor.issuesList",
+	"editor.dismissIssue",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 
