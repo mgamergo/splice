@@ -293,7 +293,7 @@ describe("tab connection", () => {
 		expect(server.bridge.isConnected()).toBe(false);
 	});
 
-	test("a newer tab takes over from the previous one", async () => {
+	test("routes commands to the newest authenticated tab and falls back when it closes", async () => {
 		const server = start();
 		const first = connectTab({ origin: server.origin, answer: () => "first" });
 		await first.authed;
@@ -302,7 +302,7 @@ describe("tab connection", () => {
 			answer: () => "second",
 		});
 		await second.authed;
-		expect(await first.closed).toBe(TAB_CLOSE_CODES.SUPERSEDED);
+		expect(first.socket.readyState).toBe(WebSocket.OPEN);
 		const response = await rpc({
 			origin: server.origin,
 			body: { jsonrpc: "2.0", id: 1, method: "editor.getState" },
@@ -312,6 +312,13 @@ describe("tab connection", () => {
 			id: 1,
 			result: "second",
 		});
+		second.socket.close();
+		await second.closed;
+		const fallback = await rpc({
+			origin: server.origin,
+			body: { jsonrpc: "2.0", id: 2, method: "editor.getState" },
+		});
+		expect(await fallback.json()).toMatchObject({ result: "first" });
 	});
 });
 

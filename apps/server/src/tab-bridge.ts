@@ -5,7 +5,6 @@ import {
 	parseRpcMessage,
 	RPC_ERRORS,
 	STATE_CHANGED,
-	TAB_CLOSE_CODES,
 	type RpcRequest,
 	type TabMethod,
 } from "@splice/bridge";
@@ -13,7 +12,6 @@ import {
 /** The part of a WebSocket the bridge needs; Bun's ServerWebSocket satisfies it. */
 export interface TabSocket {
 	send(data: string): unknown;
-	close(code?: number, reason?: string): void;
 }
 
 export class BridgeError extends Error {
@@ -44,14 +42,14 @@ interface PendingCall {
 export const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 
 /**
- * Holds the one editor tab the agent talks to and matches its replies to calls.
- * A newly connected tab takes over from the previous one.
+ * Tracks activity from every authenticated tab and routes agent calls to the
+ * newest connected tab.
  */
 export class TabBridge {
 	private tab: TabSocket | null = null;
 	private readonly pending = new Map<number, PendingCall>();
 	private nextId = 1;
-	private revision: number | null = null;
+	private readonly revisions = new Map<TabSocket, number | null>();
 
 	constructor(private readonly onActivity?: () => void) {}
 
@@ -61,7 +59,7 @@ export class TabBridge {
 
 	/** The last revision the tab reported, or null before it reported one. */
 	getRevision(): number | null {
-		return this.revision;
+		return this.tab ? (this.revisions.get(this.tab) ?? null) : null;
 	}
 
 	/** The attached tab, so a later call can check the same tab still answers. */
@@ -70,31 +68,27 @@ export class TabBridge {
 	}
 
 	attach(socket: TabSocket): void {
-		if (this.tab && this.tab !== socket) {
-			const previous = this.tab;
-			this.detach(previous);
-			previous.close(
-				TAB_CLOSE_CODES.SUPERSEDED,
-				"A newer editor tab connected",
-			);
-		}
+		this.rejectPending();
+		this.revisions.set(socket, null);
 		this.tab = socket;
 		this.onActivity?.();
 	}
 
 	detach(socket: TabSocket): void {
-		if (this.tab !== socket) {
-			return;
-		}
-		this.tab = null;
+		if (!this.revisions.delete(socket)) return;
 		this.onActivity?.();
-		this.revision = null;
+		if (this.tab !== socket) return;
+		this.tab = [...this.revisions.keys()].at(-1) ?? null;
+		this.rejectPending();
+	}
+
+	private rejectPending(): void {
 		for (const [id, call] of this.pending) {
 			clearTimeout(call.timer);
 			call.reject(
 				new BridgeError({
 					code: RPC_ERRORS.TAB_DISCONNECTED,
-					message: "The editor tab disconnected before answering",
+					message: "The editor command target changed before answering",
 				}),
 			);
 			this.pending.delete(id);
@@ -137,9 +131,9 @@ export class TabBridge {
 		});
 	}
 
-	/** Handles a message from the attached tab. */
+	/** Accepts activity from any attached tab and replies from the command target. */
 	handleMessage({ socket, text }: { socket: TabSocket; text: string }): void {
-		if (socket !== this.tab) {
+		if (!this.revisions.has(socket)) {
 			return;
 		}
 		const message = parseRpcMessage(text);
@@ -156,13 +150,18 @@ export class TabBridge {
 					"revision" in params &&
 					typeof params.revision === "number"
 				) {
-					if (this.revision !== params.revision) this.onActivity?.();
-					this.revision = params.revision;
+					if (this.revisions.get(socket) !== params.revision)
+						this.onActivity?.();
+					this.revisions.set(socket, params.revision);
 				}
 			}
 			return;
 		}
-		if (!isRpcResponse(message) || typeof message.id !== "number") {
+		if (
+			socket !== this.tab ||
+			!isRpcResponse(message) ||
+			typeof message.id !== "number"
+		) {
 			return;
 		}
 		const call = this.pending.get(message.id);
