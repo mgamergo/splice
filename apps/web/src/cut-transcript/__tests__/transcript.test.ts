@@ -101,7 +101,7 @@ describe("buildCutTranscript", () => {
 			sources: [{ projectItemId: "rec", words }],
 		});
 		expect(texts(sentences)).toEqual(["Open the settings.", long]);
-		expect(sentences[0]).toMatchObject({ id: "rec:0-2", start: 1 });
+		expect(sentences[0]).toMatchObject({ start: 1 });
 		expect(sentences[1].cueIds.length).toBeGreaterThan(1);
 		expect(sentences[1].start).toBeCloseTo(2.1, 5);
 		expect(paragraphs).toHaveLength(1);

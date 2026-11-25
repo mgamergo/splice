@@ -11,7 +11,7 @@ import type {
 	ProjectCaptions,
 	Replacement,
 } from "@splice/bridge/delivery";
-import { mapWordsToTimeline } from "@/agent/captions";
+import { type ClipWordCache, mapWordsToTimeline } from "@/agent/captions";
 import type { SequenceTracks } from "@/timeline/types";
 
 /** YouTube and broadcast guidance: two lines of at most 42 characters. */
@@ -57,9 +57,15 @@ const CONNECTIVES = new Set([
 	"unless",
 ]);
 
+type PlacedWord = CaptionWordRef & { clipId: string };
+
 /** A cue as the editor uses it: the summary plus the words it covers. */
 export interface CaptionCue extends CaptionCueSummary {
 	words: CaptionWordRef[];
+}
+
+export interface PlacedCaptionCue extends CaptionCue {
+	placedWords: PlacedWord[];
 }
 
 /** One word, or several words a correction joined, on the sequence. */
@@ -69,7 +75,7 @@ interface Token {
 	text: string;
 	/** The transcript's words. */
 	original: string;
-	words: CaptionWordRef[];
+	words: PlacedWord[];
 	correctedBy?: CaptionScope;
 	/** A cue the creator corrected stays a cue of its own. */
 	wholeCue?: boolean;
@@ -323,25 +329,31 @@ export function buildCaptionCues({
 	captions,
 	spellings = [],
 	sequenceEnd,
+	wordCache,
 }: {
 	tracks: SequenceTracks;
 	captions: ProjectCaptions | undefined;
 	spellings?: Replacement[];
 	/** Seconds; no cue runs past it. */
 	sequenceEnd: number;
-}): CaptionCue[] {
-	if (!captions?.sources.length) return [];
+	wordCache?: ClipWordCache;
+}): PlacedCaptionCue[] {
+	if (!captions?.sources.length) {
+		wordCache?.clear();
+		return [];
+	}
 	let tokens: Token[] = mapWordsToTimeline({
 		tracks,
 		sources: captions.sources,
+		wordCache,
 	})
 		.filter(({ start }) => start < sequenceEnd)
-		.map(({ start, end, text, ref }) => ({
+		.map(({ start, end, text, ref, clipId }) => ({
 			start,
 			end,
 			text,
 			original: text,
-			words: [ref],
+			words: [{ ...ref, clipId }],
 		}));
 	tokens = applyCueEdits({ tokens, edits: captions.cueEdits });
 	// The project's corrections win over reusable spellings, whether they name
@@ -377,6 +389,7 @@ export function buildCaptionCues({
 			group.find((token) => token.correctedBy === "cue")?.correctedBy ??
 			group.find((token) => token.correctedBy === "project")?.correctedBy ??
 			group.find((token) => token.correctedBy)?.correctedBy;
+		const placedWords = group.flatMap((token) => token.words);
 		return {
 			id: ids[index],
 			index: index + 1,
@@ -385,7 +398,11 @@ export function buildCaptionCues({
 			text,
 			...(text !== originalText && { originalText }),
 			...(correctedBy && { correctedBy }),
-			words: group.flatMap((token) => token.words),
+			words: placedWords.map(({ projectItemId, index }) => ({
+				projectItemId,
+				index,
+			})),
+			placedWords,
 		};
 	});
 }

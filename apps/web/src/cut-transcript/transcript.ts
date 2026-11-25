@@ -9,7 +9,7 @@ import type {
 	TranscriptSelectionSummary,
 	TranscriptSentenceSummary,
 } from "@splice/bridge/transcript";
-import { type CaptionCue, cueIds, SENTENCE_END } from "@/captions/cues";
+import { type PlacedCaptionCue, SENTENCE_END } from "@/captions/cues";
 import type { Marker, SequenceTracks } from "@/timeline/types";
 import { mediaTimeToSeconds } from "@/wasm";
 
@@ -75,7 +75,30 @@ function sectionRanges({
 }
 
 /** What a cue says aloud: its corrected text, or the transcript's if hidden. */
-const spoken = (cue: CaptionCue) => cue.text || cue.originalText || "";
+const spoken = (cue: PlacedCaptionCue) => cue.text || cue.originalText || "";
+
+/** Each run names a clip and the source words heard through it. */
+function sentenceId(cues: PlacedCaptionCue[]): string {
+	const runs: [
+		clipId: string,
+		projectItemId: string,
+		first: number,
+		last: number,
+	][] = [];
+	for (const cue of cues)
+		for (const { clipId, projectItemId, index } of cue.placedWords) {
+			const run = runs.at(-1);
+			if (
+				run &&
+				run[0] === clipId &&
+				run[1] === projectItemId &&
+				run[3] + 1 === index
+			)
+				run[3] = index;
+			else runs.push([clipId, projectItemId, index, index]);
+		}
+	return JSON.stringify(runs);
+}
 
 /**
  * Reads a sequence's SRT cues as sentences, breaking at sentence punctuation,
@@ -87,12 +110,12 @@ export function buildCutTranscript({
 	tracks,
 	markers,
 }: {
-	cues: CaptionCue[];
+	cues: PlacedCaptionCue[];
 	tracks: SequenceTracks;
 	markers: Marker[];
 }): CutTranscript {
-	const groups: CaptionCue[][] = [];
-	let current: CaptionCue[] = [];
+	const groups: PlacedCaptionCue[][] = [];
+	let current: PlacedCaptionCue[] = [];
 	for (const cue of cues) {
 		if (!spoken(cue)) continue;
 		const previous = current.at(-1);
@@ -111,11 +134,8 @@ export function buildCutTranscript({
 	}
 	if (current.length) groups.push(current);
 
-	const ids = cueIds(
-		groups.map((group) => ({ words: group.flatMap((cue) => cue.words) })),
-	);
-	const sentences: TranscriptSentence[] = groups.map((group, index) => ({
-		id: ids[index],
+	const sentences: TranscriptSentence[] = groups.map((group) => ({
+		id: sentenceId(group),
 		start: group[0].start,
 		end: Math.max(...group.map((cue) => cue.end)),
 		text: group.map(spoken).join(" "),

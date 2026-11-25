@@ -494,6 +494,7 @@ export class EditorApi {
 	async cutTranscript(request: unknown) {
 		const parsed = cutTranscriptRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const spellings = await useCaptionsStore.getState().loadSpellings();
 		const project = this.editor.project.getActiveOrNull();
 		if (!project) return this.noProject();
 		const { sequenceId } = parsed.data;
@@ -504,12 +505,12 @@ export class EditorApi {
 			return this.invalidOp(
 				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
 			);
-		const spellings = await useCaptionsStore.getState().loadSpellings();
+		const revision = this.getRevision();
 		const { paragraphs } = sequenceTranscript({ project, sequence, spellings });
 		return {
 			ok: true as const,
 			sequenceId: sequence.id,
-			revision: this.getRevision(),
+			revision,
 			paragraphs: paragraphs.map(({ section, sentences }) => ({
 				...(section && { section }),
 				sentences: sentences.map(summarizeSentence),
@@ -527,6 +528,7 @@ export class EditorApi {
 	async transcriptSelection(request: unknown) {
 		const parsed = transcriptSelectionRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const spellings = await useCaptionsStore.getState().loadSpellings();
 		const project = this.editor.project.getActiveOrNull();
 		if (!project) return this.noProject();
 		const revision = this.getRevision();
@@ -543,7 +545,6 @@ export class EditorApi {
 				selection: null,
 				hint: "Nothing is selected. Ask the creator to select sentences in Splice's Transcript panel, or read cut_transcript.",
 			};
-		const spellings = await useCaptionsStore.getState().loadSpellings();
 		const sentences = selectedSentences({
 			sentences: sequenceTranscript({ project, sequence, spellings }).sentences,
 			...selection,

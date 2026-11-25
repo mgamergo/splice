@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Replacement } from "@splice/bridge/delivery";
 import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { useCaptionsStore } from "@/captions/store";
@@ -31,11 +32,13 @@ const sources = [
 	},
 ];
 
-function horizontalEditor(): { editor: EditorCore; api: EditorApi } {
+function horizontalEditor(
+	clips = [videoClip({ id: "a", start: 0, duration: 10 })],
+): { editor: EditorCore; api: EditorApi } {
 	const { main } = buildDefaultSequence({ name: "S", isMain: true }).tracks;
 	const editor = setUpEditor({
 		tracks: {
-			main: { ...main, clips: [videoClip({ id: "a", start: 0, duration: 10 })] },
+			main: { ...main, clips },
 		},
 	});
 	const api = new EditorApi(editor);
@@ -43,24 +46,6 @@ function horizontalEditor(): { editor: EditorCore; api: EditorApi } {
 	useCaptionsStore.setState({ spellingsLoaded: true });
 	return { editor, api };
 }
-
-type Sentence = { id: string; start: number; end: number; text: string };
-type Transcript = {
-	ok: true;
-	sequenceId: string;
-	paragraphs: Array<{ sentences: Sentence[] }>;
-};
-type Selection = {
-	ok: true;
-	selection: {
-		sequenceId: string;
-		start: number;
-		end: number;
-		text: string;
-		sentences: Sentence[];
-	} | null;
-	hint?: string;
-};
 
 afterEach(() => {
 	useCaptionsStore.setState(initialCaptionsState, true);
@@ -70,7 +55,8 @@ afterEach(() => {
 describe("Cut transcript through the editor API", () => {
 	test("cut_transcript reads the sentences with their sequence times", async () => {
 		const { editor, api } = horizontalEditor();
-		const result = (await api.cutTranscript({})) as Transcript;
+		const result = await api.cutTranscript({});
+		if (!result.ok) throw new Error(result.message);
 		expect(result.sequenceId).toBe(editor.sequences.getActiveSequence().id);
 		const sentences = result.paragraphs.flatMap(({ sentences }) => sentences);
 		expect(sentences.map(({ text }) => text)).toEqual([
@@ -87,19 +73,20 @@ describe("Cut transcript through the editor API", () => {
 
 	test("transcript_selection returns the creator's passage, and lapses when an edit removes it", async () => {
 		const { editor, api } = horizontalEditor();
-		expect((await api.transcriptSelection({})) as Selection).toMatchObject({
+		expect(await api.transcriptSelection({})).toMatchObject({
 			ok: true,
 			selection: null,
 		});
 
-		const { paragraphs, sequenceId } = (await api.cutTranscript(
-			{},
-		)) as Transcript;
+		const transcript = await api.cutTranscript({});
+		if (!transcript.ok) throw new Error(transcript.message);
+		const { paragraphs, sequenceId } = transcript;
 		const [first, second] = paragraphs.flatMap(({ sentences }) => sentences);
 		const store = useTranscriptStore.getState();
 		store.select({ sequenceId, sentenceId: second.id });
 		store.select({ sequenceId, sentenceId: first.id, extend: true });
-		const selected = (await api.transcriptSelection({})) as Selection;
+		const selected = await api.transcriptSelection({});
+		if (!selected.ok) throw new Error(selected.message);
 		expect(selected.selection).toMatchObject({
 			sequenceId,
 			start: 1,
@@ -120,8 +107,113 @@ describe("Cut transcript through the editor API", () => {
 			],
 		});
 		expect(result).toMatchObject({ ok: true });
-		const lapsed = (await api.transcriptSelection({})) as Selection;
-		expect(lapsed.selection).toBeNull();
-		expect(lapsed.hint).toContain("select it again");
+		expect(await api.transcriptSelection({})).toMatchObject({
+			ok: true,
+			selection: null,
+			hint: expect.stringContaining("select it again"),
+		});
+	});
+
+	test("deleting a repeated passage does not select the surviving copy", async () => {
+		const { api } = horizontalEditor([
+			videoClip({ id: "first", start: 0, duration: 3 }),
+			videoClip({ id: "repeat", start: 10, duration: 3 }),
+		]);
+		const before = await api.cutTranscript({});
+		if (!before.ok) throw new Error(before.message);
+		const [first, repeat] = before.paragraphs.flatMap(
+			({ sentences }) => sentences,
+		);
+		expect(first.text).toBe(repeat.text);
+		useTranscriptStore.getState().select({
+			sequenceId: before.sequenceId,
+			sentenceId: first.id,
+		});
+		expect(await api.transcriptSelection({})).toMatchObject({
+			ok: true,
+			selection: { start: 1 },
+		});
+
+		expect(
+			api.apply({
+				expectedRevision: api.getRevision(),
+				sequenceId: before.sequenceId,
+				label: "Cut the first copy",
+				ops: [
+					{
+						op: "ripple_delete",
+						ranges: [{ start: { seconds: 0 }, end: { seconds: 3 } }],
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+
+		const after = await api.cutTranscript({});
+		if (!after.ok) throw new Error(after.message);
+		expect(after.paragraphs.flatMap(({ sentences }) => sentences)).toEqual([
+			{ ...repeat, start: 8, end: repeat.end - 3 },
+		]);
+		expect(await api.transcriptSelection({})).toMatchObject({
+			ok: true,
+			selection: null,
+			hint: expect.stringContaining("select it again"),
+		});
+	});
+
+	test("both transcript reads use the revision, times and selection after spellings load", async () => {
+		const { api } = horizontalEditor([
+			{
+				...videoClip({ id: "lead-in", start: 0, duration: 5 }),
+				mediaId: "silent",
+			},
+			videoClip({ id: "speech", start: 5, duration: 10 }),
+		]);
+		const before = await api.cutTranscript({});
+		if (!before.ok) throw new Error(before.message);
+		const { paragraphs, sequenceId } = before;
+		const [first, second] = paragraphs.flatMap(({ sentences }) => sentences);
+		const store = useTranscriptStore.getState();
+		store.select({ sequenceId, sentenceId: first.id });
+
+		const spellings = Promise.withResolvers<Replacement[]>();
+		useCaptionsStore.setState({ loadSpellings: () => spellings.promise });
+		const transcriptRead = api.cutTranscript({});
+		const selectionRead = api.transcriptSelection({});
+
+		expect(
+			api.apply({
+				expectedRevision: api.getRevision(),
+				sequenceId,
+				label: "Cut the lead-in",
+				ops: [
+					{
+						op: "ripple_delete",
+						ranges: [{ start: { seconds: 0 }, end: { seconds: 5 } }],
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		store.select({ sequenceId, sentenceId: second.id });
+		spellings.resolve([]);
+
+		const transcript = await transcriptRead;
+		const selection = await selectionRead;
+		const revision = api.getRevision();
+		expect(transcript).toMatchObject({
+			ok: true,
+			revision,
+		});
+		if (!transcript.ok) throw new Error(transcript.message);
+		expect(transcript.paragraphs[0].sentences[0]).toMatchObject({
+			id: first.id,
+			start: 1,
+		});
+		expect(selection).toMatchObject({
+			ok: true,
+			revision,
+			selection: { start: 4, sentences: [{ id: second.id }] },
+		});
+		expect(await api.cutTranscript({})).toEqual(transcript);
+		expect(selection).toEqual(await api.transcriptSelection({}));
 	});
 });

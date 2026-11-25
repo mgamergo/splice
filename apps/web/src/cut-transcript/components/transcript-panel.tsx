@@ -62,9 +62,9 @@ function usePlayheadSentenceId(sentences: TranscriptSentence[]): string | null {
  */
 export function TranscriptPanel() {
 	const editor = useEditor();
-	const { paragraphs, sentences } = useCutTranscript();
 	const sequence = useEditor((e) => e.sequences.getActiveSequenceOrNull());
 	const project = useEditor((e) => e.project.getActiveOrNull());
+	const { paragraphs, sentences, isUpdating } = useCutTranscript({ project, sequence });
 	const isHorizontal = !!project && projectFormat({ project }) === "horizontal";
 	const hasWords =
 		!!project && !!sequence && hasTranscriptWords({ project, sequence });
@@ -138,7 +138,7 @@ export function TranscriptPanel() {
 		sentence: TranscriptSentence;
 		extend: boolean;
 	}) => {
-		if (!sequence) return;
+		if (!sequence || isUpdating) return;
 		select({ sequenceId: sequence.id, sentenceId: sentence.id, extend });
 		if (!extend) playCue({ editor, cue: sentence });
 	};
@@ -176,6 +176,10 @@ export function TranscriptPanel() {
 						</Button>
 					)}
 				</div>
+			) : isUpdating && sentences.length === 0 ? (
+				<p role="status" className="text-muted-foreground px-1 text-sm">
+					Loading transcript…
+				</p>
 			) : sentences.length === 0 ? (
 				<p className="text-muted-foreground px-1 text-sm">
 					No narration is heard on this sequence.
@@ -185,6 +189,7 @@ export function TranscriptPanel() {
 					<SelectionBar
 						count={selected?.length ?? 0}
 						isStale={!!selectionOnSequence && !selected}
+						isUpdating={isUpdating}
 						start={selectedStart}
 						end={selectedEnd}
 						onPlay={() =>
@@ -194,6 +199,7 @@ export function TranscriptPanel() {
 					/>
 					<div
 						ref={textRef}
+						aria-busy={isUpdating}
 						className="flex flex-col gap-3 px-1 text-sm leading-relaxed"
 					>
 						{paragraphs.map((paragraph, index) => {
@@ -215,6 +221,7 @@ export function TranscriptPanel() {
 													sentence={sentence}
 													isCurrent={sentence.id === playheadId}
 													isSelected={selectedIds.has(sentence.id)}
+													isUpdating={isUpdating}
 													onClick={(extend) =>
 														handleSentence({ sentence, extend })
 													}
@@ -236,11 +243,13 @@ function SentenceButton({
 	sentence,
 	isCurrent,
 	isSelected,
+	isUpdating,
 	onClick,
 }: {
 	sentence: TranscriptSentence;
 	isCurrent: boolean;
 	isSelected: boolean;
+	isUpdating: boolean;
 	onClick: (extend: boolean) => void;
 }) {
 	// A span, not a <button>, so a sentence wraps with the paragraph's text.
@@ -248,6 +257,7 @@ function SentenceButton({
 		<span
 			role="button"
 			tabIndex={0}
+			aria-disabled={isUpdating}
 			data-sentence-id={sentence.id}
 			aria-pressed={isSelected}
 			aria-current={isCurrent ? "time" : undefined}
@@ -273,6 +283,7 @@ function SentenceButton({
 function SelectionBar({
 	count,
 	isStale,
+	isUpdating,
 	start,
 	end,
 	onPlay,
@@ -280,6 +291,7 @@ function SelectionBar({
 }: {
 	count: number;
 	isStale: boolean;
+	isUpdating: boolean;
 	start: number;
 	end: number;
 	onPlay: () => void;
@@ -325,6 +337,7 @@ function SelectionBar({
 				variant="ghost"
 				size="icon"
 				aria-label="Play the selection"
+				disabled={isUpdating}
 				onClick={onPlay}
 			>
 				<Play />

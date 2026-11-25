@@ -1,21 +1,77 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ClipWordCache } from "@/agent/captions";
 import { useCaptionsStore } from "@/captions/store";
-import { useEditor } from "@/editor/use-editor";
-import { sequenceTranscript } from "./sequence-transcript";
+import { projectFormat } from "@/project/format";
+import type { TProject } from "@/project/types";
+import type { TSequence } from "@/timeline/types";
+import { deriveTranscript } from "./sequence-transcript";
 import type { CutTranscript } from "./transcript";
 
 const EMPTY: CutTranscript = { paragraphs: [], sentences: [] };
 
-/** The active sequence's cut transcript, rebuilt whenever the sequence changes. */
-export function useCutTranscript(): CutTranscript {
-	const sequence = useEditor((e) => e.sequences.getActiveSequenceOrNull());
-	const project = useEditor((e) => e.project.getActiveOrNull());
-	const spellings = useCaptionsStore((state) => state.spellings);
-	return useMemo(
-		() =>
-			sequence && project
-				? sequenceTranscript({ project, sequence, spellings })
-				: EMPTY,
-		[sequence, project, spellings],
+/** Rebuilds the active cut transcript during idle time while the tab is open. */
+export function useCutTranscript({
+	project,
+	sequence,
+}: {
+	project: TProject | null;
+	sequence: TSequence | null;
+}) {
+	const [wordCache] = useState<ClipWordCache>(() => new Map());
+	const isHorizontal = project && projectFormat({ project }) === "horizontal";
+	const projectCaptions = isHorizontal ? project.captions : undefined;
+	const shortSources =
+		project && !isHorizontal ? sequence?.captions?.sources : undefined;
+	const spellings = useCaptionsStore((state) =>
+		isHorizontal ? state.spellings : undefined,
 	);
+	const tracks = sequence?.tracks;
+	const markers = sequence?.markers;
+	const inputs = useMemo(
+		() => ({
+			sequenceId: sequence?.id,
+			tracks,
+			markers,
+			captions:
+				projectCaptions ??
+				(shortSources && {
+					sources: shortSources,
+					cueEdits: [],
+					replacements: [],
+				}),
+			spellings,
+		}),
+		[sequence?.id, tracks, markers, projectCaptions, shortSources, spellings],
+	);
+	const [derived, setDerived] = useState<{
+		inputs: typeof inputs;
+		transcript: CutTranscript;
+	}>();
+
+	useEffect(() => {
+		const { tracks, markers, captions, spellings } = inputs;
+		if (!tracks || !markers || !captions?.sources.length) return;
+		const rebuild = () =>
+			setDerived({
+				inputs,
+				transcript: deriveTranscript({
+					sequence: { tracks, markers },
+					captions,
+					spellings,
+					wordCache,
+				}),
+			});
+		if (typeof window.requestIdleCallback === "function") {
+			const id = window.requestIdleCallback(rebuild, { timeout: 500 });
+			return () => window.cancelIdleCallback(id);
+		}
+		const id = window.setTimeout(rebuild, 0);
+		return () => window.clearTimeout(id);
+	}, [inputs, wordCache]);
+
+	const transcript =
+		derived && derived.inputs.sequenceId === inputs.sequenceId
+			? derived.transcript
+			: EMPTY;
+	return { ...transcript, isUpdating: derived?.inputs !== inputs };
 }

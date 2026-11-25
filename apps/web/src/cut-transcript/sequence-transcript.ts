@@ -1,4 +1,5 @@
 import type { ProjectCaptions, Replacement } from "@splice/bridge/delivery";
+import type { ClipWordCache } from "@/agent/captions";
 import { buildCaptionCues } from "@/captions/cues";
 import { sequenceEndSeconds } from "@/captions/project-captions";
 import { projectFormat } from "@/project/format";
@@ -38,19 +39,37 @@ export function hasTranscriptWords({
 export function sequenceTranscript({
 	project,
 	sequence,
-	spellings = [],
+	spellings,
 }: {
 	project: TProject;
 	sequence: TSequence;
 	/** Horizontal projects only; Shorts burn in their captions uncorrected. */
 	spellings?: Replacement[];
 }): CutTranscript {
-	const isHorizontal = projectFormat({ project }) === "horizontal";
+	return deriveTranscript({
+		sequence,
+		captions: transcriptCaptions({ project, sequence }),
+		spellings: projectFormat({ project }) === "horizontal" ? spellings : [],
+	});
+}
+
+export function deriveTranscript({
+	sequence,
+	captions,
+	spellings,
+	wordCache,
+}: {
+	sequence: Pick<TSequence, "tracks" | "markers">;
+	captions: ProjectCaptions | undefined;
+	spellings?: Replacement[];
+	wordCache?: ClipWordCache;
+}): CutTranscript {
 	const cues = buildCaptionCues({
 		tracks: sequence.tracks,
-		captions: transcriptCaptions({ project, sequence }),
-		spellings: isHorizontal ? spellings : [],
+		captions,
+		spellings,
 		sequenceEnd: sequenceEndSeconds({ sequence }),
+		wordCache,
 	});
 	return buildCutTranscript({
 		cues,
