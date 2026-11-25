@@ -50,6 +50,8 @@ const openFolderWithDesktop: OpenFolder = (folder) =>
 					? "open"
 					: "xdg-open",
 		args: [folder],
+		// The file manager is the point: never start it hidden.
+		hidden: false,
 	});
 
 /** A file name stem that is valid on Windows, from the project name and time. */

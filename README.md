@@ -8,7 +8,7 @@ Splice is a browser video editor where an agent makes the rough cut from raw rec
 
 ## Develop
 
-Requires Bun 1.2.18.
+Requires Bun 1.4.2 or later (`bun upgrade`).
 
 ```sh
 bun install
@@ -17,6 +17,27 @@ bun run typecheck
 bun run lint
 bun test
 ```
+
+### Performance
+
+`bun run bench` times a Horizontal export and the final mix's loudness measure
+in Chrome against a real `splice`, on a camera-like 1080p30 fixture it encodes
+with FFmpeg. It prints the encoder Chrome chose, the WebGPU adapter, the
+longest main-thread stall and the published file's codecs, and appends the run
+to `bench/results.jsonl`. Run `bun run build:web` first.
+
+```sh
+bun run bench --minutes 5 --headed       # export and mix
+bun run bench --seconds 60 --scrub       # far seeks: first and exact frame
+bun run bench --profile                  # adds main-thread CPU profiles
+```
+
+On Windows, pass `--chrome "C:/Program Files/Google/Chrome/Application/chrome.exe"`
+if Chrome is elsewhere.
+
+The compositor core is Rust in `packages/opencut-wasm` (from OpenCut, with
+Splice's changes); its built WebAssembly is committed, and
+`packages/opencut-wasm/build.sh` rebuilds it after a change to `rust/`.
 
 ## Run
 
