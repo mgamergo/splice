@@ -86,13 +86,15 @@ describe("the export store", () => {
 		const root = await tempRoot();
 		const store = createExportStore({ root });
 		const begun = await begin({ store });
-		const write = (offset: number, text: string) =>
+		const write = ({ offset, text }: { offset: number; text: string }) =>
 			store.write({ ...begun, kind: "mp4", offset, patch: true, body: body(text) });
-		await write(0, "ftyp........");
-		await write(12, "mdat-frames");
+		await write({ offset: 0, text: "ftyp........" });
+		await write({ offset: 12, text: "mdat-frames" });
 		// The muxer goes back to fill in the index it reserved space for.
-		expect(await write(4, "MOOV")).toEqual({ bytes: 23 });
-		await expect(write(30, "gap")).rejects.toThrow("continues at byte 23");
+		expect(await write({ offset: 4, text: "MOOV" })).toEqual({ bytes: 23 });
+		await expect(write({ offset: 30, text: "gap" })).rejects.toThrow(
+			"continues at byte 23",
+		);
 		await store.write({ ...begun, kind: "srt", offset: 0, body: body("1\n") });
 		const record = await store.publish(begun);
 		expect(record.bytes.mp4).toBe(23);

@@ -10,7 +10,14 @@
  * and append to bench/results.jsonl, so runs on different machines compare.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, appendFileSync, copyFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	appendFileSync,
+	copyFileSync,
+	readdirSync,
+	readFileSync,
+} from "node:fs";
 import { tmpdir, cpus, totalmem, hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -338,7 +345,10 @@ try {
 	results.webgpu = gpu;
 } finally {
 	await browser.close();
-	server.kill("SIGINT");
+	// splice's web host is its child; Windows doesn't end children with it.
+	if (process.platform === "win32")
+		spawnSync("taskkill", ["/pid", String(server.pid), "/T", "/F"]);
+	else server.kill("SIGINT");
 }
 
 console.log(JSON.stringify(results, null, 2));
@@ -353,9 +363,11 @@ process.exit(0);
  * at the front, and whether a frame from the middle shows the picture.
  */
 function checkOutput() {
-	const find = spawnSync("find", [join(root, "Exports"), "-name", "*.mp4"]);
-	const file = find.stdout?.toString().trim().split("\n")[0];
-	if (!file) return { found: false };
+	const name = readdirSync(join(root, "Exports"), { recursive: true })
+		.map(String)
+		.find((entry) => entry.endsWith(".mp4"));
+	if (!name) return { found: false };
+	const file = join(root, "Exports", name);
 	const probe = JSON.parse(
 		spawnSync("ffprobe", [
 			"-v",
@@ -367,7 +379,7 @@ function checkOutput() {
 			file,
 		]).stdout.toString(),
 	);
-	const head = spawnSync("head", ["-c", "4096", file]).stdout.toString("latin1");
+	const head = readFileSync(file).subarray(0, 4096).toString("latin1");
 	const stats = spawnSync("ffmpeg", [
 		"-v",
 		"info",

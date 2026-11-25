@@ -60,7 +60,9 @@ describe("--launch-env", () => {
 		delete process.env.SPLICE_LAUNCH_TEST;
 		try {
 			const env: Record<string, string | undefined> = {};
-			expect(await applyLaunchEnv(["serve", "--launch-env", file, "--dev"], env)).toEqual([
+			expect(
+				await applyLaunchEnv({ argv: ["serve", "--launch-env", file, "--dev"], env }),
+			).toEqual([
 				"serve",
 				"--dev",
 			]);

@@ -58,7 +58,7 @@ async function main(input: string[]) {
 		);
 		process.exit(1);
 	}
-	const argv = await applyLaunchEnv(input);
+	const argv = await applyLaunchEnv({ argv: input });
 	// A relaunch below repeats the arguments; the file is gone by then.
 	process.argv = [...process.argv.slice(0, 2), ...argv];
 	if (await relaunchWithoutProxyForLoopback()) {

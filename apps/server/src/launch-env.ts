@@ -20,10 +20,13 @@ export async function writeLaunchEnv(): Promise<string> {
  * Applies and deletes the environment file `--launch-env` names, and returns
  * the arguments without the option.
  */
-export async function applyLaunchEnv(
-	argv: string[],
-	env: Record<string, string | undefined> = process.env,
-): Promise<string[]> {
+export async function applyLaunchEnv({
+	argv,
+	env = process.env,
+}: {
+	argv: string[];
+	env?: Record<string, string | undefined>;
+}): Promise<string[]> {
 	const index = argv.indexOf("--launch-env");
 	if (index === -1) return argv;
 	const path = argv[index + 1];
