@@ -79,6 +79,8 @@ export function createTabHandlers({
 			return api.graphicsApply(params);
 		},
 		"editor.graphicsList": (params) => api.graphicsList(params),
+		"editor.cutTranscript": (params) => api.cutTranscript(params),
+		"editor.transcriptSelection": (params) => api.transcriptSelection(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>

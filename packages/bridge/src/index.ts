@@ -40,6 +40,8 @@ export const TAB_METHODS = [
 	"editor.graphicsPlan",
 	"editor.graphicsApply",
 	"editor.graphicsList",
+	"editor.cutTranscript",
+	"editor.transcriptSelection",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 

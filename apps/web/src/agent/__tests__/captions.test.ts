@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildCaptionCues,
 	CAPTION_TRACK_NAME,
+	type ClipWordCache,
 	mapWordsToTimeline,
 	rebuildCaptions,
 	withCaptionTrack,
@@ -65,6 +66,44 @@ describe("mapWordsToTimeline", () => {
 			[10, 10.3, "edge"],
 			[10.2, 10.6, "inside"],
 		]);
+	});
+
+	test("reuses a moved clip's mapping and invalidates it after a trim or source change", () => {
+		const tracks = tracksWith({});
+		const clip = videoClip({ id: "a", start: 0, duration: 2 });
+		const sources = [{
+			projectItemId: "rec",
+			words: [word(0.5, 0.75, "first"), word(2.25, 2.5, "second")],
+		}];
+		const wordCache: ClipWordCache = new Map();
+		tracks.main.clips = [clip];
+		mapWordsToTimeline({ tracks, sources, wordCache });
+		const cached = wordCache.get(clip.id);
+		expect(cached).toBeDefined();
+
+		tracks.main.clips = [{ ...clip, startTime: s(10) }];
+		expect(rounded(mapWordsToTimeline({ tracks, sources, wordCache }))).toEqual([
+			[10.5, 10.75, "first"],
+		]);
+		expect(wordCache.get(clip.id)).toBe(cached);
+
+		tracks.main.clips = [{ ...clip, startTime: s(10), trimStart: s(2) }];
+		expect(rounded(mapWordsToTimeline({ tracks, sources, wordCache }))).toEqual([
+			[10.25, 10.5, "second"],
+		]);
+		expect(wordCache.get(clip.id)).not.toBe(cached);
+
+		const replacements = [{
+			projectItemId: "rec",
+			words: [word(2.25, 2.5, "replacement")],
+		}];
+		expect(rounded(mapWordsToTimeline({ tracks, sources: replacements, wordCache }))).toEqual([
+			[10.25, 10.5, "replacement"],
+		]);
+
+		tracks.main.clips = [];
+		expect(mapWordsToTimeline({ tracks, sources, wordCache })).toEqual([]);
+		expect(wordCache.size).toBe(0);
 	});
 
 	test("keeps words whisper.cpp gave no duration", () => {
