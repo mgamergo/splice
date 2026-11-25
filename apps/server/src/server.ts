@@ -50,6 +50,7 @@ import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
 import { createExportStore, type OpenFolder } from "./exports";
+import { createProfileStore } from "./profile";
 import { createSpellingStore } from "./spellings";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
@@ -188,10 +189,12 @@ export function startServer({
 	const loudness = createLoudnessMeter({ root, noiseReduction });
 	const exportStore = createExportStore({ root, openFolder });
 	const spellings = createSpellingStore({ root });
+	const profile = createProfileStore({ root });
 	/** What the editor tab may ask of `splice` itself. */
 	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
 		"footage.list": () => listFootage({ root }),
 		"transcript.words": (params) => transcription.words(params),
+		"profile.capture": (params) => profile.capture(params),
 		"spellings.list": () => spellings.list(),
 		"spellings.save": (params) => spellings.save(params),
 		"spellings.remove": (params) => spellings.remove(params),
@@ -213,6 +216,9 @@ export function startServer({
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
 		["noiseReduction.render", (request) => noiseReduction.render(request)],
+		["profile.read", () => profile.read()],
+		["profile.pending", ({ params }) => profile.pending(params)],
+		["profile.apply", ({ params }) => profile.apply(params)],
 		["exports.list", ({ params }) => exportStore.list(params)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
@@ -842,6 +848,10 @@ export function startServer({
 		},
 	});
 
+	void profile.initialize().catch((error) => {
+		console.error("Couldn't initialize the editing profile:", error);
+	});
+
 	return {
 		server,
 		bridge,
@@ -853,6 +863,7 @@ export function startServer({
 				pauses.stop(),
 				transcription.stop(),
 				exportStore.stop(),
+				profile.stop(),
 				loudness.stop(),
 				noiseReduction.stop(),
 			]);
