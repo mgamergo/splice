@@ -1,3 +1,5 @@
+import type { Correction } from "@splice/bridge/profile";
+import { generateUUID } from "@/utils/id";
 import type { EditorCore } from "@/core";
 import {
 	type Command,
@@ -25,11 +27,18 @@ export class CommandManager {
 	private followUpProducers: Array<() => Command | null> = [];
 	/** Increments on every execute, undo and redo, so readers can detect change. */
 	private revision = 0;
+	private correctionListeners = new Set<(corrections: Correction[]) => void>();
 	private revisionListeners = new Set<(revision: number) => void>();
 
 	constructor(private editor: EditorCore) {}
 
-	execute({ command }: { command: Command }): Command {
+	execute({
+		command,
+		origin = "creator",
+	}: {
+		command: Command;
+		origin?: "creator" | "agent";
+	}): Command {
 		const sequenceId = this.editor.sequences.getActiveSequenceOrNull()?.id;
 		const beforeTracks = this.shouldRipple({ command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
@@ -49,6 +58,28 @@ export class CommandManager {
 		});
 		this.redoStack = [];
 		this.bumpRevision();
+		if (
+			origin === "creator" &&
+			sequenceId &&
+			result?.corrections?.length &&
+			this.correctionListeners.size
+		) {
+			const projectId = this.editor.project.getActiveOrNull()?.metadata.id;
+			if (projectId) {
+				const timestamp = new Date().toISOString();
+				const corrections = result.corrections.map(
+					(correction): Correction => ({
+						...correction,
+						id: generateUUID(),
+						projectId,
+						sequenceId,
+						revision: this.revision,
+						timestamp,
+					}),
+				);
+				for (const listener of this.correctionListeners) listener(corrections);
+			}
+		}
 		return command;
 	}
 
@@ -64,6 +95,13 @@ export class CommandManager {
 		this.redoStack = [];
 		// The change was already applied (e.g. a committed drag preview), but it's still an edit.
 		this.bumpRevision();
+	}
+
+	subscribeCorrections(
+		listener: (corrections: Correction[]) => void,
+	): () => void {
+		this.correctionListeners.add(listener);
+		return () => this.correctionListeners.delete(listener);
 	}
 
 	registerReactor(reactor: () => void): void {

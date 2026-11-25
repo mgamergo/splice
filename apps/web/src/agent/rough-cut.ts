@@ -1,3 +1,4 @@
+import { tagTighteningEdges } from "@/agent/corrections";
 import type { RoughCutPlan, ItemRange } from "@splice/bridge/ops";
 import { audibleClips, heardClips } from "@/agent/loudness";
 import {
@@ -656,6 +657,17 @@ export function buildRoughCut({
 		markers,
 		ranges: cuts,
 		generateId: generateUUID,
+		mapPiece: tagTighteningEdges({
+			cuts,
+			takeCuts,
+			falseStarts: falseStarts.flat(),
+			fillerWords: fillerWords.flat(),
+			pauses: pauses.map((windows, index) => ({
+				windows,
+				pauseSeconds:
+					clamped.pauses[index].sourceOut - clamped.pauses[index].sourceIn,
+			})),
+		}),
 	});
 	const sequence: TSequence = {
 		...source,

@@ -1339,7 +1339,7 @@ export class EditorApi {
 		const batch = new AgentBatchCommand({ editor: this.editor, commands });
 
 		try {
-			this.editor.command.execute({ command: batch });
+			this.editor.command.execute({ command: batch, origin: "agent" });
 		} catch (error) {
 			// BatchCommand has already undone the ops that ran before the failure.
 			const revision = this.getRevision();

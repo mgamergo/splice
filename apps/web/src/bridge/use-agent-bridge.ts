@@ -11,6 +11,7 @@ import {
 	useAgentBridgeStore,
 } from "./bridge-store";
 import { createTabHandlers } from "./handlers";
+import { flushCorrections, reportCorrections } from "./report-corrections";
 import { ensureMediaSession } from "./media-session";
 import { captureBridgeToken, readBridgeToken } from "./token";
 
@@ -60,7 +61,10 @@ export function useAgentBridge(): void {
 			onStatus: (status) => {
 				store.setStatus(status);
 				// A restarted splice has a new media key.
-				if (status === "connected") void ensureMediaSession();
+				if (status === "connected") {
+					void ensureMediaSession();
+					void flushCorrections();
+				}
 			},
 			onRequest: (method) => {
 				if (
@@ -90,11 +94,14 @@ export function useAgentBridge(): void {
 			recordRevisionFloor(revision);
 			client.notifyRevision(revision);
 		});
+		const stopReporting =
+			editor.command.subscribeCorrections(reportCorrections);
 		client.start();
 		client.notifyRevision(api.getRevision());
 
 		return () => {
 			unsubscribe();
+			stopReporting();
 			window.removeEventListener("storage", onStorage);
 			client.stop();
 			store.setStatus("unavailable");
