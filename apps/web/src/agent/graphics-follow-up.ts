@@ -1,3 +1,5 @@
+import { layoutShort } from "@/agent/short-layout";
+import { projectShortStyle } from "@/project/format";
 import { syncGraphics } from "@/agent/graphics";
 import type { Command } from "@/commands/base-command";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
@@ -15,23 +17,32 @@ export function graphicsFollowUp({
 }): Command | null {
 	const project = editor.project.getActiveOrNull();
 	const sequence = editor.sequences.getActiveSequenceOrNull();
-	if (!project || !sequence?.graphics) return null;
-	const synced = syncGraphics({
-		sequence,
-		projectItems: editor.media.getProjectItems(),
-		canvas: project.settings.canvasSize,
-	});
+	if (!project || !sequence) return null;
+	const shortStyle = projectShortStyle({ project });
+	if (!sequence.graphics && !shortStyle) return null;
+	const projectItems = editor.media.getProjectItems();
+	const canvas = project.settings.canvasSize;
+	const synced = syncGraphics({ sequence, projectItems, canvas, shortStyle });
+	const current = { ...sequence, ...synced };
+	const tracks = shortStyle
+		? layoutShort({
+				sequence: current,
+				style: shortStyle,
+				projectItems,
+				canvas,
+			})
+		: current.tracks;
 	if (
-		!synced ||
-		(JSON.stringify(synced.graphics) === JSON.stringify(sequence.graphics) &&
-			JSON.stringify(synced.tracks) === JSON.stringify(sequence.tracks))
+		JSON.stringify(current.graphics) === JSON.stringify(sequence.graphics) &&
+		(tracks === sequence.tracks ||
+			JSON.stringify(tracks) === JSON.stringify(sequence.tracks))
 	)
 		return null;
 	return new UpdateSequenceCommand({
 		editor,
 		sequenceId: sequence.id,
-		updates: synced,
-		label: "Graphics follow the edit",
+		updates: { ...synced, tracks },
+		label: "Graphics and captions follow the edit",
 		keepSelection: true,
 	});
 }

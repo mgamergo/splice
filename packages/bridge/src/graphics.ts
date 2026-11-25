@@ -105,6 +105,12 @@ export const plannedGraphicSchema = z
 			.describe(
 				"A card's explanation. Ground it in the recording or the creator's notes.",
 			),
+		creatorDirected: z
+			.boolean()
+			.optional()
+			.describe(
+				"Set for a Raw explanatory card only when the creator explicitly requested the card.",
+			),
 		maxZoom: z
 			.number()
 			.min(1)
@@ -229,6 +235,7 @@ export const GRAPHIC_FLAG_CODES = [
 	"passage_changed",
 	"zoom_conflict",
 	"timing_outside_picture",
+	"action_obscured",
 ] as const;
 export type GraphicFlagCode = (typeof GRAPHIC_FLAG_CODES)[number];
 
@@ -241,6 +248,7 @@ export const graphicRecordSchema = z.strictObject({
 	id: z.string().min(1),
 	key: z.string().min(1),
 	kind: z.enum(GRAPHIC_KINDS),
+	creatorDirected: z.boolean().optional(),
 	/** The narration it illustrates. */
 	passage: z.strictObject({
 		projectItemId: z.string().min(1),

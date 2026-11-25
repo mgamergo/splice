@@ -1,3 +1,10 @@
+import type { ShortStyle } from "@splice/bridge";
+import {
+	coversAction,
+	textBounds,
+	type CanvasRect,
+	type OverlayRegion,
+} from "@/agent/overlay-bounds";
 import { GRAPHIC_PROPERTIES } from "@splice/bridge/graphics";
 import type {
 	GraphicFlag,
@@ -61,6 +68,7 @@ const TIME_EPSILON = 1 / 240;
 const POSITION_EPSILON = 0.5;
 const SCALE_EPSILON = 1e-3;
 const CARD_LINE_LENGTH = 42;
+const SHORT_CARD_LINE_LENGTH = 22;
 const CARD_FONT_SIZE = 3.2;
 
 const ZOOM_CHANNELS = [
@@ -78,13 +86,6 @@ export interface CanvasSize {
 interface Point {
 	x: number;
 	y: number;
-}
-
-/** A rectangle on the canvas, in pixels from the canvas center. */
-interface CanvasRect {
-	center: Point;
-	width: number;
-	height: number;
 }
 
 /** A zoom's view: the canvas point it centers and how much it magnifies. */
@@ -376,7 +377,13 @@ export function screenSignature(tracks: SequenceTracks): string {
 
 const trackKind = (kind: GraphicKind) => (kind === "card" ? "text" : "graphic");
 
-function wrapCardText(text: string): string {
+function wrapCardText({
+	text,
+	lineLength,
+}: {
+	text: string;
+	lineLength: number;
+}): string {
 	return text
 		.split("\n")
 		.flatMap((paragraph) => {
@@ -384,8 +391,10 @@ function wrapCardText(text: string): string {
 			let line = "";
 			for (const word of paragraph
 				.split(/\s+/)
-				.flatMap((word) => word.match(/.{1,42}/gu) ?? [])) {
-				if (line && line.length + word.length + 1 > CARD_LINE_LENGTH) {
+				.flatMap(
+					(word) => word.match(new RegExp(`.{1,${lineLength}}`, "gu")) ?? [],
+				)) {
+				if (line && line.length + word.length + 1 > lineLength) {
 					lines.push(line);
 					line = word;
 				} else line = line ? `${line} ${word}` : word;
@@ -395,8 +404,19 @@ function wrapCardText(text: string): string {
 		.join("\n");
 }
 
-export function cardText({ title, text }: { title?: string; text?: string }) {
-	return [title && wrapCardText(title), text && wrapCardText(text)]
+export function cardText({
+	title,
+	text,
+	lineLength = CARD_LINE_LENGTH,
+}: {
+	title?: string;
+	text?: string;
+	lineLength?: number;
+}) {
+	return [
+		title && wrapCardText({ text: title, lineLength }),
+		text && wrapCardText({ text, lineLength }),
+	]
 		.filter(Boolean)
 		.join("\n");
 }
@@ -908,10 +928,12 @@ export function syncGraphics({
 	sequence,
 	projectItems,
 	canvas,
+	shortStyle,
 }: {
 	sequence: Pick<TSequence, "tracks" | "graphics">;
 	projectItems: ProjectItem[];
 	canvas: CanvasSize;
+	shortStyle?: ShortStyle;
 }): { tracks: SequenceTracks; graphics: SequenceGraphics } | null {
 	const graphics = sequence.graphics;
 	if (!graphics) return null;
@@ -1016,10 +1038,14 @@ export function syncGraphics({
 			);
 
 		const values = effectiveValues(adjusted);
-		const hidden = overrides.hidden ?? false;
-		const start = Math.max(0, anchor.time + values.start);
+		const hidden =
+			overrides.hidden ??
+			(shortStyle === "raw" &&
+				record.kind === "card" &&
+				!record.creatorDirected);
+		let start = Math.max(0, anchor.time + values.start);
 		// Clip against the end of the picture so a graphic cannot extend the export.
-		const duration = Math.min(
+		let duration = Math.min(
 			pictureEnd - start,
 			values.duration + Math.min(0, anchor.time + values.start),
 		);
@@ -1072,6 +1098,136 @@ export function syncGraphics({
 			);
 			values.position = overrides.position ?? box.center;
 			values.scale = overrides.scale ?? paddedSide / handleSide(canvas);
+		}
+
+		if (
+			record.kind === "card" &&
+			shortStyle &&
+			overrides.scale === undefined &&
+			overrides.scaleY === undefined
+		) {
+			const draft = newGraphicClip({
+				record,
+				params: graphicClipParams({ record, values, canvas, sizes }),
+				start,
+				duration,
+				canvas,
+			});
+			if (draft.type === "text") {
+				const bounds = textBounds({ clip: draft, canvas });
+				const scale = Math.min(
+					1,
+					(canvas.width * 0.9) / bounds.width,
+					(canvas.height * 0.42) / bounds.height,
+				);
+				values.scale = (values.scale ?? 1) * scale;
+			}
+		}
+		if (
+			record.kind === "card" &&
+			shortStyle === "explainer" &&
+			!overrides.position &&
+			!hidden
+		) {
+			const region = actionTargetRegion({
+				record,
+				anchor,
+				sizes,
+				canvas,
+				start,
+				end: start + duration,
+			});
+			const actions = [
+				...graphicActionRegions({
+					sequence: { tracks, graphics: { ...graphics, records } },
+					projectItems,
+					canvas,
+				}),
+				...(region ? [region] : []),
+			];
+			const previousCard = records.findLast(
+				({ kind, placed }) =>
+					kind === "card" &&
+					placed &&
+					!placed.hidden &&
+					placed.anchor + placed.start + placed.duration <= start &&
+					placed.anchor + placed.start + placed.duration > start - 1,
+			)?.placed?.position;
+			const top = { x: 0, y: -canvas.height * 0.25 };
+			const bottom = { x: 0, y: canvas.height * 0.25 };
+			const positions =
+				previousCard && previousCard.y > 0 ? [bottom, top] : [top, bottom];
+			const draft = newGraphicClip({
+				record,
+				params: graphicClipParams({ record, values, canvas, sizes }),
+				start,
+				duration,
+				canvas,
+			});
+			const choices = positions.map((position) => {
+				const bounds = textBounds({
+					clip: {
+						...draft,
+						type: "text",
+						params: {
+							...draft.params,
+							"transform.positionX": position.x,
+							"transform.positionY": position.y,
+						},
+					},
+					canvas,
+				});
+				const blockers = actions.filter((action) =>
+					coversAction({ overlay: bounds, action }),
+				);
+				let at = start;
+				if (overrides.start === undefined && overrides.duration === undefined) {
+					for (const action of blockers.toSorted((a, b) => a.start - b.start)) {
+						if (action.end > at && action.start < at + duration)
+							at = action.end;
+					}
+				}
+				return {
+					position,
+					at,
+					clear: !blockers.some(
+						({ start, end }) => end > at && start < at + duration,
+					),
+				};
+			});
+			const choice = choices
+				.filter(
+					({ at, clear }) =>
+						clear && at + duration <= pictureEnd + TIME_EPSILON,
+				)
+				.sort((a, b) => a.at - b.at)[0];
+			if (choice) {
+				values.position = choice.position;
+				start = choice.at;
+				duration = Math.min(duration, pictureEnd - start);
+			} else if (
+				overrides.start === undefined &&
+				overrides.duration === undefined
+			) {
+				if (current)
+					tracks = filterGraphicTracks({
+						tracks,
+						keep: ({ id }) => id !== current.clip.id,
+					});
+				records.push({
+					...adjusted,
+					placed: undefined,
+					flags: [
+						...flags,
+						flag({
+							code: "action_obscured",
+							message:
+								"There is no clear room for this card during its passage. Move it or replan its timing.",
+						}),
+					],
+				});
+				continue;
+			}
 		}
 
 		const params = graphicClipParams({ record, values, canvas, sizes });
@@ -1190,7 +1346,8 @@ export type GraphicPlanStatus =
 	| "skip_deleted"
 	| "skip_left_wide"
 	| "skip_duplicate"
-	| "skip_not_in_cut";
+	| "skip_not_in_cut"
+	| "skip_needs_direction";
 
 export interface GraphicPlanEntry {
 	key: string;
@@ -1259,12 +1416,14 @@ export function planGraphicsPass({
 	prune,
 	projectItems,
 	canvas,
+	shortStyle,
 }: {
 	sequence: Pick<TSequence, "tracks" | "graphics">;
 	planned: PlannedGraphic[];
 	prune: boolean;
 	projectItems: ProjectItem[];
 	canvas: CanvasSize;
+	shortStyle?: ShortStyle;
 }): {
 	graphics: SequenceGraphics;
 	entries: GraphicPlanEntry[];
@@ -1321,6 +1480,18 @@ export function planGraphicsPass({
 					b: identity,
 				}),
 			);
+		if (
+			shortStyle === "raw" &&
+			graphic.kind === "card" &&
+			!graphic.creatorDirected
+		) {
+			if (match) matched.add(match.id);
+			report({
+				status: "skip_needs_direction",
+				reason: "Raw explanatory cards require creator direction.",
+			});
+			continue;
+		}
 		if (match && (matched.has(match.id) || match.kind !== graphic.kind)) {
 			report({
 				status: "skip_duplicate",
@@ -1393,9 +1564,15 @@ export function planGraphicsPass({
 			values.scale = view.scale;
 		}
 		if (graphic.kind === "card") {
-			values.position = cardPosition({ target, canvas });
+			values.position =
+				shortStyle === "explainer"
+					? { x: 0, y: -canvas.height * 0.25 }
+					: cardPosition({ target, canvas });
 			values.scale = 1;
-			values.text = cardText(graphic);
+			values.text = cardText({
+				...graphic,
+				lineLength: shortStyle ? SHORT_CARD_LINE_LENGTH : CARD_LINE_LENGTH,
+			});
 		}
 		const passage = {
 			projectItemId: graphic.passage.projectItemId ?? graphic.projectItemId,
@@ -1407,6 +1584,7 @@ export function planGraphicsPass({
 			// A graphic matched by its action keeps the key it was planned with.
 			key: graphic.key ?? match?.key ?? key,
 			kind: graphic.kind,
+			...(graphic.creatorDirected && { creatorDirected: true }),
 			passage,
 			action: { projectItemId: graphic.projectItemId, time: action },
 			...(graphic.target && { target: graphic.target }),
@@ -1446,6 +1624,121 @@ export function planGraphicsPass({
 		entries,
 		removedIds,
 	};
+}
+
+/** Conservatively covers the target through the zoom ramp and its action. */
+function actionTargetRegion({
+	record,
+	anchor,
+	sizes,
+	canvas,
+	start,
+	end,
+}: {
+	record: GraphicRecord;
+	anchor: NonNullable<ReturnType<typeof locateSourceTime>>;
+	sizes: ProjectItemSizes;
+	canvas: CanvasSize;
+	start: number;
+	end: number;
+}): OverlayRegion | undefined {
+	const target = record.target;
+	if (!target) return;
+	const size = sizes.get(record.action.projectItemId);
+	const clipStart = seconds(anchor.clip.startTime);
+	const clipEnd = clipStart + seconds(anchor.clip.duration);
+	const boxes = [start, anchor.time, (start + end) / 2, end].map((at) =>
+		targetOnCanvas({
+			frame: screenFrame({
+				clip: anchor.clip,
+				size,
+				canvas,
+				time: Math.max(clipStart, Math.min(clipEnd, at)),
+			}),
+			target,
+		}),
+	);
+	const left = Math.min(
+		...boxes.map(({ center, width }) => center.x - width / 2),
+	);
+	const right = Math.max(
+		...boxes.map(({ center, width }) => center.x + width / 2),
+	);
+	const top = Math.min(
+		...boxes.map(({ center, height }) => center.y - height / 2),
+	);
+	const bottom = Math.max(
+		...boxes.map(({ center, height }) => center.y + height / 2),
+	);
+	return {
+		center: { x: (left + right) / 2, y: (top + bottom) / 2 },
+		width: right - left,
+		height: bottom - top,
+		start,
+		end,
+	};
+}
+
+/** Visible highlights and source targets on the current sequence. */
+export function graphicActionRegions({
+	sequence,
+	projectItems,
+	canvas,
+}: {
+	sequence: Pick<TSequence, "tracks" | "graphics">;
+	projectItems: ProjectItem[];
+	canvas: CanvasSize;
+}): OverlayRegion[] {
+	const sizes = itemSizes(projectItems);
+	const highlights = new Map(
+		sequence.tracks.overlay.flatMap((track) =>
+			track.type === "graphic" && !track.hidden
+				? track.clips.flatMap((clip) =>
+						clip.type === "graphic" && clip.graphicId && !clip.hidden
+							? [[clip.graphicId, clip] as const]
+							: [],
+					)
+				: [],
+		),
+	);
+	return (sequence.graphics?.records ?? []).flatMap((record) => {
+		const placed = record.placed;
+		if (!placed || placed.hidden) return [];
+		const start = placed.anchor + placed.start;
+		const end = start + placed.duration;
+		if (record.kind === "highlight") {
+			const clip = highlights.get(record.id);
+			if (!clip) return [];
+			const {
+				position: center,
+				scaleX,
+				scaleY,
+			} = buildTransformFromParams({ params: clip.params });
+			const box = highlightBoxSize({
+				aspect: Number(clip.params.aspect ?? 1),
+				size: handleSide(canvas),
+			});
+			return [
+				{
+					center,
+					width: box.width * Math.abs(scaleX),
+					height: box.height * Math.abs(scaleY),
+					start,
+					end,
+				},
+			];
+		}
+		const anchor = locateSourceTime({
+			tracks: sequence.tracks,
+			projectItemId: record.action.projectItemId,
+			sourceTime: record.action.time,
+			near: placed.anchor,
+		});
+		const region =
+			anchor &&
+			actionTargetRegion({ record, anchor, sizes, canvas, start, end });
+		return region ? [region] : [];
+	});
 }
 
 /** Removes the clips that show the given graphics. */

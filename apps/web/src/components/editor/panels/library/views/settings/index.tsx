@@ -1,5 +1,7 @@
 "use client";
 
+import { SHORT_STYLES, SHORT_STYLE_LABELS } from "@splice/bridge";
+import { projectShortStyle } from "@/project/format";
 import { useState } from "react";
 import { PanelView } from "@/components/editor/panels/library/views/base-panel";
 import {
@@ -101,6 +103,7 @@ export function SettingsView() {
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActive());
 	const { canvasPresets } = useEditorStore();
+	const shortStyle = projectShortStyle({ project: activeProject });
 	const currentCanvasSize = activeProject.settings.canvasSize;
 	const canvasSizeMode = activeProject.settings.canvasSizeMode ?? "preset";
 	const lastCustomCanvasSize =
@@ -241,12 +244,14 @@ export function SettingsView() {
 					<Section showTopBorder={false}>
 						<SectionHeader className="justify-between">
 							<SectionTitle className="flex-1">Frame rate</SectionTitle>
-					<Select
-							value={String(Math.round(frameRateToFloat(activeProject.settings.fps)))}
-							onValueChange={(value) => {
-								const fps = floatToFrameRate(parseFloat(value));
-								editor.project.updateSettings({ settings: { fps } });
-							}}
+							<Select
+								value={String(
+									Math.round(frameRateToFloat(activeProject.settings.fps)),
+								)}
+								onValueChange={(value) => {
+									const fps = floatToFrameRate(parseFloat(value));
+									editor.project.updateSettings({ settings: { fps } });
+								}}
 							>
 								<SelectTrigger className="bg-transparent border-none p-1 h-auto">
 									<SelectValue placeholder="Select a frame rate" />
@@ -261,59 +266,91 @@ export function SettingsView() {
 							</Select>
 						</SectionHeader>
 					</Section>
-					<Section
-						showTopBorder={false}
-						collapsible
-						sectionKey="settings:aspect-ratio"
-					>
-						<SectionHeader>
-							<SectionTitle className="flex-1">Aspect ratio</SectionTitle>
-						</SectionHeader>
-						<SectionContent className="px-2 flex flex-col gap-1 pb-2">
-							{presetItems.map((preset) => (
-								<AspectRatioItem
-									key={preset.id}
-									label={preset.label}
-									previewIcon={<AspectRatioPreview ratio={preset.ratio} />}
-									isSelected={selectedPresetId === preset.id}
-									onClick={() => {
-										selectPresetCanvasSize({
-											canvasSize: preset.canvasSize,
-										});
+					{shortStyle && (
+						<Section showTopBorder={false}>
+							<SectionHeader>
+								<SectionTitle className="flex-1">Video style</SectionTitle>
+								<Select
+									value={shortStyle}
+									onValueChange={(value) => {
+										const style = SHORT_STYLES.find(
+											(candidate) => candidate === value,
+										);
+										if (style) editor.project.setShortStyle({ style });
 									}}
-								/>
-							))}
-							<div className="pb-2">
-								<AspectRatioItem
-									key="custom"
-									label="Custom"
-									previewIcon={<OcSquarePlusIcon />}
-									isSelected={isCustomSelected}
-									onClick={selectCustomCanvasSize}
-									uiOptions={
-										<div className=" flex items-center gap-2 text-foreground">
-											<NumberField
-												value={widthDraft.displayValue}
-												className="w-full"
-												aria-label="Canvas width"
-												onFocus={widthDraft.onFocus}
-												onChange={widthDraft.onChange}
-												onBlur={widthDraft.onBlur}
-											/>
-											<NumberField
-												value={heightDraft.displayValue}
-												className="w-full"
-												aria-label="Canvas height"
-												onFocus={heightDraft.onFocus}
-												onChange={heightDraft.onChange}
-												onBlur={heightDraft.onBlur}
-											/>
-										</div>
-									}
-								/>
-							</div>
-						</SectionContent>
-					</Section>
+								>
+									<SelectTrigger
+										aria-label="Video style"
+										className="bg-transparent border-none p-1 h-auto"
+									>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{SHORT_STYLES.map((style) => (
+											<SelectItem key={style} value={style}>
+												{SHORT_STYLE_LABELS[style]}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</SectionHeader>
+						</Section>
+					)}
+					{!shortStyle && (
+						<Section
+							showTopBorder={false}
+							collapsible
+							sectionKey="settings:aspect-ratio"
+						>
+							<SectionHeader>
+								<SectionTitle className="flex-1">Aspect ratio</SectionTitle>
+							</SectionHeader>
+							<SectionContent className="px-2 flex flex-col gap-1 pb-2">
+								{presetItems.map((preset) => (
+									<AspectRatioItem
+										key={preset.id}
+										label={preset.label}
+										previewIcon={<AspectRatioPreview ratio={preset.ratio} />}
+										isSelected={selectedPresetId === preset.id}
+										onClick={() => {
+											selectPresetCanvasSize({
+												canvasSize: preset.canvasSize,
+											});
+										}}
+									/>
+								))}
+								<div className="pb-2">
+									<AspectRatioItem
+										key="custom"
+										label="Custom"
+										previewIcon={<OcSquarePlusIcon />}
+										isSelected={isCustomSelected}
+										onClick={selectCustomCanvasSize}
+										uiOptions={
+											<div className=" flex items-center gap-2 text-foreground">
+												<NumberField
+													value={widthDraft.displayValue}
+													className="w-full"
+													aria-label="Canvas width"
+													onFocus={widthDraft.onFocus}
+													onChange={widthDraft.onChange}
+													onBlur={widthDraft.onBlur}
+												/>
+												<NumberField
+													value={heightDraft.displayValue}
+													className="w-full"
+													aria-label="Canvas height"
+													onFocus={heightDraft.onFocus}
+													onChange={heightDraft.onChange}
+													onBlur={heightDraft.onBlur}
+												/>
+											</div>
+										}
+									/>
+								</div>
+							</SectionContent>
+						</Section>
+					)}
 				</div>
 			)}
 			{view === "background" && <BackgroundContent />}

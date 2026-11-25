@@ -160,6 +160,8 @@ export interface ImageClip extends BaseTimelineClip {
 
 export interface TextClip extends BaseTimelineClip {
 	type: "text";
+	/** Last generated caption values, used to detect direct clip edits. */
+	captionLayout?: { y: number; text: string; manualPosition?: true };
 	hidden?: boolean;
 	effects?: Effect[];
 }

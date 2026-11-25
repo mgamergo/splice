@@ -1,6 +1,6 @@
 import { formatGain } from "@/agent/loudness";
 import { formatSeconds } from "@/agent/time";
-import { projectFormat } from "@/project/format";
+import { projectFormat, projectShortStyle } from "@/project/format";
 import type { TProject } from "@/project/types";
 import { getSourceSpanAtClipTime } from "@/retime";
 import { canClipHaveAudio, isRetimableClip } from "@/timeline";
@@ -47,8 +47,9 @@ export function buildSequenceDigest({
 	revision: number;
 }): string {
 	const { canvasSize, fps } = project.settings;
+	const style = projectShortStyle({ project });
 	const lines = [
-		`project "${project.metadata.name}" ${projectFormat({ project })} ${canvasSize.width}x${canvasSize.height} @${fps.numerator / fps.denominator}fps, revision ${revision}`,
+		`project "${project.metadata.name}" ${projectFormat({ project })}${style ? ` (${style})` : ""} ${canvasSize.width}x${canvasSize.height} @${fps.numerator / fps.denominator}fps, revision ${revision}`,
 		`sequence "${sequence.name}" (${sequence.id})`,
 	];
 	const videoTracks = [

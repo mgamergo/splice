@@ -1,3 +1,4 @@
+import { CAPTION_TRACK_NAME, carryCaptionEdits } from "@/agent/short-captions";
 import type { CaptionStyle, CaptionsRequest } from "@splice/bridge/ops";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import {
@@ -22,8 +23,7 @@ import {
 	roundMediaTime,
 } from "@/wasm";
 
-/** The text track that holds burned-in captions. Adding captions replaces it. */
-export const CAPTION_TRACK_NAME = "Captions";
+export { CAPTION_TRACK_NAME } from "@/agent/short-captions";
 
 const DEFAULT_WORDS_PER_CAPTION = 3;
 const DEFAULT_FONT_SIZE = 8;
@@ -317,8 +317,8 @@ function captionClips({
 	const ctx = createMeasurementContext();
 	return buildCaptionCues({ words, style: captions.style })
 		.filter((cue) => cue.startTime < end)
-		.map((cue, index) => ({
-			...buildSubtitleTextClip({
+		.map((cue, index) => {
+			const clip = buildSubtitleTextClip({
 				index,
 				caption: {
 					...cue,
@@ -326,9 +326,54 @@ function captionClips({
 				},
 				canvasSize,
 				ctx,
-			}),
-			id: generateUUID(),
-		}));
+			});
+			return {
+				...clip,
+				id: generateUUID(),
+				captionLayout: {
+					y: Number(clip.params["transform.positionY"]),
+					text: String(clip.params.content),
+				},
+			};
+		});
+}
+
+/** Recover the generated positions of older caption clips without changing their edits. */
+export function recoverCaptionLayouts({
+	tracks,
+	captions,
+	canvasSize,
+}: {
+	tracks: SequenceTracks;
+	captions?: CaptionsRequest;
+	canvasSize: { width: number; height: number };
+}): SequenceTracks {
+	const track = tracks.overlay.find(isCaptionTrack);
+	if (!captions || !track?.clips.some((clip) => !clip.captionLayout))
+		return tracks;
+	const original = captionClips({
+		content: withoutCaptionTrack({ tracks }),
+		captions,
+		canvasSize,
+	});
+	const byStart = new Map(original.map((clip) => [clip.startTime, clip]));
+	const clips = track.clips.map((clip) => {
+		if (clip.captionLayout) return clip;
+		const generated = byStart.get(clip.startTime);
+		if (!generated || generated.duration !== clip.duration) return clip;
+		return {
+			...clip,
+			captionLayout: generated.captionLayout,
+		};
+	});
+	return clips.some((clip, index) => clip !== track.clips[index])
+		? {
+				...tracks,
+				overlay: tracks.overlay.map((candidate) =>
+					candidate === track ? { ...track, clips } : candidate,
+				),
+			}
+		: tracks;
 }
 
 /** Recordings on the timeline whose words weren't given, so got no captions. */
@@ -363,7 +408,11 @@ export function withCaptionTrack({
 	uncaptionedItemIds: string[];
 } {
 	const content = withoutCaptionTrack({ tracks });
-	const clips = captionClips({ content, captions, canvasSize });
+	const previous = tracks.overlay.find(isCaptionTrack);
+	const clips = carryCaptionEdits({
+		clips: captionClips({ content, captions, canvasSize }),
+		previous: previous?.clips ?? [],
+	});
 	if (!clips.length)
 		throw new CaptionError(
 			"No transcript words fall inside the sequence's clips. Transcribe the recordings on this sequence first.",
