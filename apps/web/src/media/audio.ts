@@ -8,6 +8,8 @@ import type {
 import { shouldMaintainPitch } from "@/retime/rate";
 import type { MediaData, ProjectItem } from "@/media/types";
 import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
+import type { MixLoudness } from "@splice/bridge/mix";
+import { applyMixGain } from "@/mix/loudness-meter";
 import type { AudioCapableClip } from "@/timeline/audio-state";
 import {
 	hasAnimatedVolume,
@@ -157,7 +159,7 @@ async function* collectAudioClips({
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
-	audioContext: AudioContext;
+	audioContext: BaseAudioContext;
 	signal?: AbortSignal;
 }): AsyncGenerator<CollectedAudioClip> {
 	const mediaMap = new Map<string, ProjectItem>(
@@ -232,7 +234,7 @@ async function resolveAudioBufferForClip({
 }: {
 	clip: AudioClip;
 	mediaMap: Map<string, ProjectItem>;
-	audioContext: AudioContext;
+	audioContext: BaseAudioContext;
 	signal?: AbortSignal;
 }): Promise<DecodedClipAudio | null> {
 	try {
@@ -284,7 +286,7 @@ async function resolveAudioBufferForProjectItem({
 	/** The item's file, or what `clipAudioMedia` reads the clip's audio from. */
 	file: MediaData;
 	range: SourceRange;
-	audioContext: AudioContext;
+	audioContext: BaseAudioContext;
 	signal?: AbortSignal;
 }): Promise<DecodedClipAudio | null> {
 	// An uploaded audio file is already in memory, so it decodes in one go.
@@ -677,7 +679,11 @@ export async function collectAudioClipSources({
 	return clips;
 }
 
-/** Mixes the sequence's audio for export; rejects with `signal`'s reason once it aborts. */
+/**
+ * Mixes the sequence's audio for export; rejects with `signal`'s reason once
+ * it aborts. When the final mix has been measured, its gain and true-peak
+ * ceiling apply. `master: false` returns the unmastered sum for measurement.
+ */
 export async function createTimelineAudioBuffer({
 	tracks,
 	projectItems,
@@ -685,16 +691,18 @@ export async function createTimelineAudioBuffer({
 	sampleRate = EXPORT_SAMPLE_RATE,
 	audioContext,
 	signal,
+	master,
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	duration: number;
 	sampleRate?: number;
-	audioContext?: AudioContext;
+	audioContext?: BaseAudioContext;
 	signal?: AbortSignal;
+	master?: Pick<MixLoudness, "gainDb" | "ceilingDbtp"> | false;
 }): Promise<AudioBuffer | null> {
 	signal?.throwIfAborted();
-	const context = audioContext ?? createAudioContext({ sampleRate });
+	const context = audioContext ?? new OfflineAudioContext(2, 1, sampleRate);
 
 	const outputChannels = 2;
 	const durationSeconds = duration / TICKS_PER_SECOND;
@@ -740,7 +748,21 @@ export async function createTimelineAudioBuffer({
 
 	signal?.throwIfAborted();
 	if (!outputBuffer) return null;
-	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
+	if (master === false) return outputBuffer;
+	if (!master) return applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
+	const mixed = outputBuffer;
+	await applyMixGain({
+		audio: {
+			channels: Array.from({ length: mixed.numberOfChannels }, (_, channel) =>
+				mixed.getChannelData(channel),
+			),
+			sampleRate,
+		},
+		gainDb: master.gainDb,
+		ceilingDbtp: master.ceilingDbtp,
+		signal,
+	});
+	return outputBuffer;
 }
 
 function collectPeakRange({

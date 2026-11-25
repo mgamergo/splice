@@ -1,3 +1,4 @@
+import type { MixLoudness } from "@splice/bridge/mix";
 import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import type { ExportOptions, ExportResult } from "@/export";
@@ -19,6 +20,7 @@ export interface ExportScene {
 	projectItems: ProjectItem[];
 	canvasSize: TCanvasSize;
 	background: TBackground;
+	master?: Pick<MixLoudness, "gainDb" | "ceilingDbtp">;
 }
 
 type SnapshotResult =
@@ -176,17 +178,17 @@ export class RendererManager {
 				return { success: false, error: "No active project" };
 			}
 
-			const {
-				tracks,
-				projectItems,
-				canvasSize,
-				background,
-			}: ExportScene = scene ?? {
-				tracks: this.editor.sequences.getActiveSequence().tracks,
-				projectItems: this.editor.media.getProjectItems(),
-				canvasSize: activeProject.settings.canvasSize,
-				background: activeProject.settings.background,
-			};
+			if (!scene) {
+				const sequence = this.editor.sequences.getActiveSequence();
+				scene = {
+					tracks: sequence.tracks,
+					projectItems: this.editor.media.getProjectItems(),
+					canvasSize: activeProject.settings.canvasSize,
+					background: activeProject.settings.background,
+					master: sequence.mix?.loudness,
+				};
+			}
+			const { tracks, projectItems, canvasSize, background, master } = scene;
 
 			const duration = calculateTotalDuration({ tracks });
 			if (duration === 0) {
@@ -203,6 +205,7 @@ export class RendererManager {
 					projectItems,
 					duration,
 					signal,
+					master,
 				});
 			}
 			signal.throwIfAborted();

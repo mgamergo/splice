@@ -54,6 +54,7 @@ export function captureDelivery({
 }): DeliveryInput {
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
+	const loudness = sequence.mix?.loudness;
 	return {
 		deliveryId: generateUUID(),
 		scene: {
@@ -61,6 +62,9 @@ export function captureDelivery({
 			projectItems: [...editor.media.getProjectItems()],
 			canvasSize: DELIVERY_FORMAT.canvasSize,
 			background: project.settings.background,
+			...(loudness && {
+				master: { gainDb: loudness.gainDb, ceilingDbtp: loudness.ceilingDbtp },
+			}),
 		},
 		fps: DELIVERY_FORMAT.fps,
 		captions: project.captions,
@@ -159,6 +163,7 @@ export async function deliveryFingerprint({
 		background: scene.background,
 		fps,
 		media: usedMedia(scene),
+		master: scene.master,
 	};
 	const text = `${JSON.stringify(scene.tracks, withoutBuffers)}\n${JSON.stringify(render)}\n${srt}`;
 	const digest = await crypto.subtle.digest(

@@ -7,6 +7,7 @@ import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { ExportOptions, ExportResult } from "@/export";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import { buildDefaultSequence } from "@/timeline/sequences";
 
 const initialCaptionsState = useCaptionsStore.getState();
@@ -203,6 +204,31 @@ describe("Horizontal delivery", () => {
 	test("renders 1920×1080 at 30 fps, and Retry renders the approved edit, not a later one", async () => {
 		const editor = horizontalEditor();
 		useCaptionsStore.setState({ spellingsLoaded: true });
+		const sequenceId = editor.sequences.getActiveSequence().id;
+		const setGain = (gainDb: number) => {
+			editor.command.execute({ command: new UpdateSequenceCommand({
+				editor,
+				sequenceId,
+				label: "Adjust mix",
+				updates: { mix: { loudness: {
+					gainDb,
+					targetLufs: -14,
+					ceilingDbtp: -1,
+					measuredLufs: -17,
+					measuredTruePeakDbtp: -5,
+					expectedLufs: -14,
+					expectedTruePeakDbtp: -2,
+					fingerprint: "mix",
+				} } },
+			}) });
+		};
+		setGain(3);
+		const approved = takeDeliverySnapshot({ editor });
+		setGain(2);
+		expect(await deliveryFingerprint(takeDeliverySnapshot({ editor })))
+			.not.toBe(await deliveryFingerprint(approved));
+		setGain(3);
+
 		const renders = recordRenders(editor);
 		// The first render fails, so Retry renders again.
 		let failRender = true;
@@ -221,6 +247,7 @@ describe("Horizontal delivery", () => {
 			failedStep: "render",
 		});
 		// The creator keeps editing before retrying.
+		setGain(6);
 		const project = editor.project.getActive();
 		editor.project.setActiveProject({
 			project: {
@@ -242,6 +269,7 @@ describe("Horizontal delivery", () => {
 		expect(renders).toHaveLength(2);
 		for (const { options, scene } of renders) {
 			expect(options.fps).toEqual({ numerator: 30, denominator: 1 });
+			expect(scene?.master).toEqual({ gainDb: 3, ceilingDbtp: -1 });
 			expect(scene?.canvasSize).toEqual({ width: 1920, height: 1080 });
 			expect(scene?.background).toEqual({ type: "color", color: "#000000" });
 			expect(scene?.tracks.main.clips.map(({ id }) => id)).toEqual(["a"]);

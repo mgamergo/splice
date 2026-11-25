@@ -4,6 +4,7 @@ import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
 import type { AudioClipSource } from "@/media/audio";
 import {
 	createAudioContext,
+	createTimelineAudioBuffer,
 	collectAudioClipSources,
 	decodeAudioRange,
 } from "@/media/audio";
@@ -12,6 +13,9 @@ import {
 	hasAnimatedVolume,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
+import type { MixLoudness } from "@splice/bridge/mix";
+import type { ProjectItem } from "@/media/types";
+import type { SequenceTracks } from "@/timeline/types";
 import { createMediaSource } from "@/media/media-data";
 import { getClipSourceRange, type SourceRange } from "@/media/source-range";
 import {
@@ -29,6 +33,15 @@ import {
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
+	private previewGain: GainNode | null = null;
+	private finalPreview: {
+		tracks: SequenceTracks;
+		loudness: MixLoudness;
+		projectItems: ProjectItem[];
+		buffer: AudioBuffer | null;
+	} | null = null;
+	private lastTracks: SequenceTracks | undefined;
+	private lastLoudness: MixLoudness | undefined;
 	private playbackStartTime = 0;
 	private playbackStartContextTime = 0;
 	private scheduleTimer: number | null = null;
@@ -60,6 +73,7 @@ export class AudioManager {
 			this.editor.timeline.subscribe(this.handleTimelineChange),
 			this.editor.media.subscribe(this.handleTimelineChange),
 			this.editor.playback.onSeek(this.handleSeek),
+			this.editor.sequences.subscribe(this.handleSequenceChange),
 		);
 	}
 
@@ -75,6 +89,8 @@ export class AudioManager {
 			void this.audioContext.close();
 			this.audioContext = null;
 			this.masterGain = null;
+			this.previewGain = null;
+			this.finalPreview = null;
 		}
 	}
 
@@ -113,7 +129,30 @@ export class AudioManager {
 		this.stopPlayback();
 	};
 
+	private handleSequenceChange = (): void => {
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		const tracks = sequence?.tracks;
+		const loudness = sequence?.mix?.loudness;
+		if (loudness !== this.lastLoudness) {
+			this.lastLoudness = loudness;
+			this.editor.playback.pause();
+		}
+		if (
+			tracks !== this.lastTracks ||
+			(this.finalPreview && !this.getFinalPreview())
+		) {
+			this.lastTracks = tracks;
+			this.handleTimelineChange();
+		}
+	};
+
 	private handleTimelineChange = (): void => {
+		if (this.editor.playback.getIsPreparingPreview())
+			this.editor.playback.pause();
+		if (this.finalPreview && !this.getFinalPreview()) {
+			this.finalPreview = null;
+			if (this.editor.playback.getIsPlaying()) this.editor.playback.pause();
+		}
 		this.disposeSinks();
 		this.preparedClipBuffers.clear();
 
@@ -134,13 +173,63 @@ export class AudioManager {
 			destination: this.audioContext.destination,
 		});
 		this.masterGain = input;
-		this.masterGain.gain.value = this.lastVolume;
+		this.previewGain = this.audioContext.createGain();
+		this.previewGain.connect(this.audioContext.destination);
+		this.updateGain();
 		return this.audioContext;
 	}
 
 	private updateGain(): void {
-		if (!this.masterGain) return;
-		this.masterGain.gain.value = this.lastVolume;
+		if (this.masterGain) this.masterGain.gain.value = this.lastVolume;
+		if (this.previewGain) this.previewGain.gain.value = this.lastVolume;
+	}
+
+	private getFinalPreview() {
+		const preview = this.finalPreview;
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		return preview &&
+			preview.tracks === sequence?.tracks &&
+			preview.loudness === sequence.mix?.loudness &&
+			preview.projectItems === this.editor.media.getProjectItems()
+			? preview
+			: null;
+	}
+
+	/** Prepare the same mastered PCM that goes to the export encoder. */
+	prepareFinalPreview({
+		signal,
+	}: {
+		signal: AbortSignal;
+	}): Promise<void> | undefined {
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		const loudness = sequence?.mix?.loudness;
+		if (!sequence || !loudness || this.getFinalPreview()) return;
+		const audioContext = this.ensureAudioContext();
+		if (!audioContext) return;
+		const { tracks } = sequence;
+		const projectItems = this.editor.media.getProjectItems();
+		return (async () => {
+			if (audioContext.state === "suspended") await audioContext.resume();
+			const buffer = await createTimelineAudioBuffer({
+				tracks,
+				projectItems,
+				duration: this.editor.timeline.getTotalDuration(),
+				master: loudness,
+				signal,
+			});
+			signal.throwIfAborted();
+			const current = this.editor.sequences.getActiveSequenceOrNull();
+			if (
+				current?.tracks !== tracks ||
+				current.mix?.loudness !== loudness ||
+				this.editor.media.getProjectItems() !== projectItems
+			) {
+				throw new Error(
+					"The mix changed while preparing playback. Play again to hear the new mix.",
+				);
+			}
+			this.finalPreview = { tracks, loudness, projectItems, buffer };
+		})();
 	}
 
 	private getPlaybackTime(): number {
@@ -155,8 +244,29 @@ export class AudioManager {
 		if (!audioContext) return;
 
 		this.stopPlayback();
-		this.playbackSessionId++;
+		const sessionId = this.playbackSessionId;
 		this.playbackLatencyCompensationSeconds = 0;
+		if (audioContext.state === "suspended") await audioContext.resume();
+		if (
+			sessionId !== this.playbackSessionId ||
+			!this.editor.playback.getIsPlaying()
+		)
+			return;
+
+		const preview = this.getFinalPreview();
+		if (preview && this.previewGain) {
+			if (!preview.buffer) return;
+			const source = audioContext.createBufferSource();
+			source.buffer = preview.buffer;
+			source.connect(this.previewGain);
+			source.start(0, time);
+			this.queuedSources.add(source);
+			source.addEventListener("ended", () => {
+				source.disconnect();
+				this.queuedSources.delete(source);
+			});
+			return;
+		}
 
 		const tracks = this.editor.sequences.getActiveSequence().tracks;
 		const projectItems = this.editor.media.getProjectItems();
@@ -164,12 +274,13 @@ export class AudioManager {
 
 		if (duration <= 0) return;
 
-		if (audioContext.state === "suspended") {
-			await audioContext.resume();
-		}
-
-		this.clips = await collectAudioClipSources({ tracks, projectItems });
-		if (!this.editor.playback.getIsPlaying()) return;
+		const clips = await collectAudioClipSources({ tracks, projectItems });
+		if (
+			sessionId !== this.playbackSessionId ||
+			!this.editor.playback.getIsPlaying()
+		)
+			return;
+		this.clips = clips;
 
 		this.playbackStartTime = time;
 		this.playbackStartContextTime = audioContext.currentTime;
@@ -215,6 +326,7 @@ export class AudioManager {
 	}
 
 	private stopPlayback(): void {
+		this.playbackSessionId++;
 		if (this.scheduleTimer && typeof window !== "undefined") {
 			window.clearInterval(this.scheduleTimer);
 		}
@@ -599,7 +711,12 @@ export class AudioManager {
 		range: SourceRange;
 		sampleRate: number;
 	}): Promise<AudioBuffer | null> {
-		const key = JSON.stringify([clip.sourceKey, range.start, range.end, sampleRate]);
+		const key = JSON.stringify([
+			clip.sourceKey,
+			range.start,
+			range.end,
+			sampleRate,
+		]);
 		const pending = this.pendingRangeDecodes.get(key);
 		if (pending) return pending;
 
