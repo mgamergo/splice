@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createProfileAgent } from "../profile-agent";
+import type { ProfileProvider } from "../profile-provider";
 import { createProfileStore } from "../profile";
 
 let root: string;
@@ -262,7 +264,9 @@ test("keeps undo and redo in the raw log and reactivates the original pending ID
 		corrections: [],
 		nextCursor: null,
 	});
-	expect(await restarted.read()).toMatchObject({ text: "# Applied preference" });
+	expect(await restarted.read()).toMatchObject({
+		text: "# Applied preference",
+	});
 });
 
 test("recovers a partial append through a UTF-8 recording name without duplicating any rows", async () => {
@@ -324,4 +328,254 @@ test("finishes a restarted apply whose history row and profile were already writ
 		nextCursor: null,
 	});
 	expect(await read("updates.jsonl")).toBe(line(update));
+});
+
+test("reverts the latest text change by writing an idempotent update", async () => {
+	const store = createProfileStore({ root });
+	const original = await store.read();
+	const first = correction(1);
+	const second = correction(2);
+	const third = correction(3);
+	await store.capture({ corrections: [first, second, third] });
+	const older = await store.apply({
+		text: "Keep a breath between sentences.",
+		correctionIds: [first.id],
+		expectedVersion: original.version,
+		operationId: randomUUID(),
+	});
+	const latest = await store.apply({
+		text: "Tighten pauses in fast passages.",
+		correctionIds: [second.id],
+		expectedVersion: older.version,
+		operationId: randomUUID(),
+	});
+	// An evidence-only update should leave the latest text change revertible.
+	await store.apply({
+		text: "Tighten pauses in fast passages.",
+		correctionIds: [third.id],
+		expectedVersion: latest.version,
+		operationId: randomUUID(),
+	});
+	await expect(
+		store.revert({ id: older.updateId, operationId: randomUUID() }),
+	).rejects.toThrow("Only the latest change");
+	const params = { id: latest.updateId, operationId: randomUUID() };
+	const result = await store.revert(params);
+	const restarted = createProfileStore({ root });
+	expect(await restarted.revert(params)).toEqual(result);
+	expect(await restarted.read()).toEqual({
+		text: "Keep a breath between sentences.",
+		version: older.version,
+	});
+	expect((await restarted.panel()).updates).toHaveLength(4);
+	expect((await restarted.panel()).updates[0]).toMatchObject({
+		reverts: latest.updateId,
+		canRevert: true,
+		correctionCount: 0,
+	});
+	expect((await restarted.pending({})).corrections).toEqual([]);
+});
+
+function agentHarness({
+	provider,
+	timeoutMs,
+}: {
+	provider: ProfileProvider | null;
+	timeoutMs?: number;
+}) {
+	const store = createProfileStore({ root });
+	let time = 0;
+	let connected = false;
+	const failures: number[] = [];
+	const agent = createProfileAgent({
+		store,
+		getProvider: async () => provider,
+		isConnected: () => connected,
+		now: () => time,
+		timeoutMs,
+		onFailure: () => failures.push(time),
+	});
+	return {
+		store,
+		agent,
+		failures,
+		connect() {
+			connected = true;
+			agent.activity();
+		},
+		async advance(ms: number) {
+			time += ms;
+			await agent.tick();
+		},
+	};
+}
+
+test("waits for thirty seconds without editor activity and preserves corrections with the provider off", async () => {
+	const prompts: string[] = [];
+	const h = agentHarness({
+		provider: async ({ prompt }) => {
+			prompts.push(prompt);
+			return { text: "Keep longer breaths.", question: null };
+		},
+	});
+	await h.store.capture({ corrections: [correction(1)] });
+	await h.advance(35_000);
+	expect(prompts).toHaveLength(0);
+	h.connect();
+	await h.advance(29_999);
+	h.agent.activity();
+	await h.advance(29_999);
+	expect(prompts).toHaveLength(0);
+	await h.advance(1);
+	expect(prompts).toHaveLength(1);
+	expect(await h.store.read()).toMatchObject({ text: "Keep longer breaths." });
+	expect((await h.store.pending({})).corrections).toEqual([]);
+	const off = agentHarness({ provider: null });
+	const pending = correction(2);
+	await off.store.capture({ corrections: [pending] });
+	off.connect();
+	await off.advance(30_000);
+	expect((await off.store.pending({})).corrections).toEqual([pending]);
+});
+
+test("bounds correction batches and stores one question and its answer across restart", async () => {
+	const prompts: string[] = [];
+	const h = agentHarness({
+		provider: async ({ prompt }) => {
+			prompts.push(prompt);
+			return {
+				text: "Keep longer breaths.",
+				question: "How much breath do you leave?",
+			};
+		},
+	});
+	await h.store.capture({
+		corrections: Array.from({ length: 13 }, (_, index) => correction(index)),
+	});
+	h.connect();
+	await h.advance(30_000);
+	const question = await h.store.question();
+	expect(question?.text).toBe("How much breath do you leave?");
+	expect((await h.store.pending({})).corrections).toHaveLength(1);
+	await h.advance(2_000);
+	expect(await h.store.question()).toEqual(question);
+	expect(await readLines("updates.jsonl")).toHaveLength(2);
+	const restarted = createProfileStore({ root });
+	expect(await restarted.question()).toEqual(question);
+	if (!question) throw new Error("Expected a profile question");
+	const response = {
+		kind: "answer",
+		id: question.id,
+		answer: "Usually half a second.",
+	};
+	await restarted.respond(response);
+	await restarted.respond(response);
+	const next = agentHarness({
+		provider: async ({ prompt }) => {
+			expect(prompt).toContain(response.answer);
+			expect(prompt).toContain(question.text);
+			return {
+				text: "Leave half a second for breath.",
+				question: "An answer-only batch cannot ask this.",
+			};
+		},
+	});
+	next.connect();
+	await next.advance(30_000);
+	expect(await next.store.question()).toBeNull();
+	expect((await next.store.panel()).updates[0]).toMatchObject({
+		correctionCount: 0,
+		answerCount: 1,
+	});
+	expect(await next.store.read()).toMatchObject({
+		text: "Leave half a second for breath.",
+	});
+	expect(prompts[0]).not.toContain("Footage/voix-é.wav");
+	expect(prompts[1]).toContain("Set question to null.");
+});
+
+test("persists a dismissal without creating answer evidence", async () => {
+	const h = agentHarness({
+		provider: async () => ({ text: "Keep some space.", question: "How much?" }),
+	});
+	await h.store.capture({ corrections: [correction(1)] });
+	h.connect();
+	await h.advance(30_000);
+	const question = await h.store.question();
+	if (!question) throw new Error("Expected a profile question");
+	await h.store.respond({ kind: "dismiss", id: question.id });
+	expect(await createProfileStore({ root }).question()).toBeNull();
+	await h.advance(2_000);
+	expect((await h.store.panel()).updates).toHaveLength(1);
+});
+
+test("leaves evidence pending on malformed output, timeout, or failure and retries after backoff", async () => {
+	let attempts = 0;
+	const h = agentHarness({
+		timeoutMs: 30,
+		provider: async ({ signal }) => {
+			attempts++;
+			switch (attempts) {
+				case 1:
+					return { text: "Invalid question list", question: ["One?", "Two?"] };
+				case 2:
+					await Bun.sleep(50);
+					signal.throwIfAborted();
+					return null;
+				case 3:
+					throw new Error("Provider rejected the request");
+				default:
+					return { text: "Keep more silence.", question: null };
+			}
+		},
+	});
+	const pending = correction(1);
+	await h.store.capture({ corrections: [pending] });
+	h.connect();
+	await h.advance(30_000);
+	await h.advance(59_999);
+	expect(attempts).toBe(1);
+	await h.advance(1);
+	await h.advance(60_000);
+	expect(h.failures).toHaveLength(3);
+	expect((await h.store.panel()).updates).toHaveLength(0);
+	expect((await h.store.pending({})).corrections).toEqual([pending]);
+	await h.advance(60_000);
+	expect((await h.store.pending({})).corrections).toEqual([]);
+});
+
+test("holds MCP apply until analysis ends and cancels analysis when editing resumes", async () => {
+	const entered = Promise.withResolvers<void>();
+	const leave = Promise.withResolvers<void>();
+	const h = agentHarness({
+		provider: async () => {
+			entered.resolve();
+			await leave.promise;
+			return { text: "Stale analysis", question: "Stale question?" };
+		},
+	});
+	const pending = correction(1);
+	await h.store.capture({ corrections: [pending] });
+	const profile = await h.store.read();
+	h.connect();
+	const analysis = h.advance(30_000);
+	await entered.promise;
+	let applied = false;
+	const mcp = h.store
+		.apply({
+			text: "MCP update",
+			correctionIds: [pending.id],
+			expectedVersion: profile.version,
+			operationId: randomUUID(),
+		})
+		.then(() => {
+			applied = true;
+		});
+	expect(await h.store.read()).toEqual(profile);
+	expect(applied).toBe(false);
+	h.agent.activity();
+	leave.resolve();
+	await Promise.all([analysis, mcp]);
+	expect(await h.store.question()).toBeNull();
+	expect(await h.store.read()).toMatchObject({ text: "MCP update" });
 });

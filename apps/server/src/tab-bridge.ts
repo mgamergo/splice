@@ -1,4 +1,5 @@
 import {
+	EDITOR_ACTIVITY,
 	isRpcNotification,
 	isRpcResponse,
 	parseRpcMessage,
@@ -52,6 +53,8 @@ export class TabBridge {
 	private nextId = 1;
 	private revision: number | null = null;
 
+	constructor(private readonly onActivity?: () => void) {}
+
 	isConnected(): boolean {
 		return this.tab !== null;
 	}
@@ -76,6 +79,7 @@ export class TabBridge {
 			);
 		}
 		this.tab = socket;
+		this.onActivity?.();
 	}
 
 	detach(socket: TabSocket): void {
@@ -83,6 +87,7 @@ export class TabBridge {
 			return;
 		}
 		this.tab = null;
+		this.onActivity?.();
 		this.revision = null;
 		for (const [id, call] of this.pending) {
 			clearTimeout(call.timer);
@@ -142,6 +147,7 @@ export class TabBridge {
 			return;
 		}
 		if (isRpcNotification(message)) {
+			if (message.method === EDITOR_ACTIVITY) this.onActivity?.();
 			if (message.method === STATE_CHANGED) {
 				const params = message.params;
 				if (
@@ -150,6 +156,7 @@ export class TabBridge {
 					"revision" in params &&
 					typeof params.revision === "number"
 				) {
+					if (this.revision !== params.revision) this.onActivity?.();
 					this.revision = params.revision;
 				}
 			}
