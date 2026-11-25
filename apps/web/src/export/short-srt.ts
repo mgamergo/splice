@@ -1,5 +1,5 @@
 import { CAPTION_TRACK_NAME } from "@/agent/short-captions";
-import { cuesToSrt } from "@/captions/cues";
+import { serializeCuesToSrt } from "@/captions/cues";
 import type { SequenceTracks } from "@/timeline/types";
 import { mediaTimeToSeconds } from "@/wasm";
 
@@ -25,5 +25,5 @@ export function shortSrt({ tracks }: { tracks: SequenceTracks }): string {
 				: [],
 		)
 		.sort((a, b) => a.start - b.start);
-	return cuesToSrt(cues, { preserveOverlaps: true });
+	return serializeCuesToSrt({ cues, preserveOverlaps: true });
 }
