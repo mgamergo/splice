@@ -52,10 +52,13 @@ export function hasAnimatedVolume({
 }: {
 	clip: AudioCapableClip;
 }): boolean {
-	return hasKeyframesForPath({
-		animations: clip.animations,
-		propertyPath: "volume",
-	});
+	return (
+		(clip.type === "audio" && !!clip.musicDucking?.keys.length) ||
+		hasKeyframesForPath({
+			animations: clip.animations,
+			propertyPath: "volume",
+		})
+	);
 }
 
 import { TICKS_PER_SECOND } from "@/wasm";
@@ -80,7 +83,16 @@ export function resolveEffectiveAudioGain({
 		localTime: Math.round(localTime * TICKS_PER_SECOND),
 	});
 
-	return dBToLinear(resolvedDb);
+	const duckDb =
+		clip.type === "audio" && clip.musicDucking
+			? resolveNumberAtTime({
+					baseValue: 0,
+					animations: { volume: clip.musicDucking },
+					propertyPath: "volume",
+					localTime: Math.round(localTime * TICKS_PER_SECOND),
+				})
+			: 0;
+	return dBToLinear(resolvedDb + duckDb);
 }
 
 export function buildWaveformGainSamples({

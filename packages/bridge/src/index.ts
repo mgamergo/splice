@@ -44,6 +44,11 @@ export const TAB_METHODS = [
 	"editor.shortHook",
 	"editor.shortCaptionPlacement",
 	"editor.shortSrt",
+	"editor.addMusic",
+	"editor.updateMusic",
+	"editor.removeMusic",
+	"editor.mixLoudness",
+	"editor.mixStatus",
 	"editor.cutTranscript",
 	"editor.transcriptSelection",
 ] as const;

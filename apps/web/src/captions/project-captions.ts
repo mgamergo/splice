@@ -101,14 +101,14 @@ function recordings({ editor }: { editor: EditorCore }): ItemSummary[] {
 }
 
 /**
- * Loads the cached transcripts of the project's recordings from `splice` as
- * caption words. Returns the recordings that have no transcript yet.
+ * The cached transcripts of the project's recordings, as caption words, and
+ * the names of the recordings `splice` has no transcript for yet.
  */
-export async function loadCaptionWords({
+export async function fetchTranscriptSources({
 	editor,
 }: {
 	editor: EditorCore;
-}): Promise<{ loaded: number; withoutTranscript: string[] }> {
+}): Promise<{ sources: CaptionsRequest["sources"]; withoutTranscript: string[] }> {
 	const items = recordings({ editor });
 	const paths = [...new Set(items.flatMap(({ path }) => (path ? [path] : [])))];
 	const wordsByPath = new Map<string, CaptionsRequest["sources"][number]["words"]>();
@@ -129,6 +129,19 @@ export async function loadCaptionWords({
 	const withoutTranscript = items
 		.filter(({ path }) => !path || !wordsByPath.get(path)?.length)
 		.map(({ name }) => name);
+	return { sources, withoutTranscript };
+}
+
+/**
+ * Loads the cached transcripts of the project's recordings from `splice` as
+ * caption words. Returns the recordings that have no transcript yet.
+ */
+export async function loadCaptionWords({
+	editor,
+}: {
+	editor: EditorCore;
+}): Promise<{ loaded: number; withoutTranscript: string[] }> {
+	const { sources, withoutTranscript } = await fetchTranscriptSources({ editor });
 	if (sources.length) setCaptionSources({ editor, sources });
 	return { loaded: sources.length, withoutTranscript };
 }
@@ -204,15 +217,20 @@ export function playCue({
 		editor.playback.pause();
 		editor.playback.seek({ time: end });
 	};
-	// Frames can come slowly, so a timer ends the passage on time too.
-	const timer = setTimeout(finish, (cue.end - cue.start) * 1000);
+	// Count from playback, which may wait for the final mix to render.
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const followPlayback = () => {
+		if (editor.playback.getIsPlaying()) {
+			timer ??= setTimeout(finish, (cue.end - cue.start) * 1000);
+		} else if (!editor.playback.getIsPreparingPreview()) {
+			stop();
+		}
+	};
 	const unsubscribeUpdate = editor.playback.onUpdate((time) => {
 		if (time >= end) finish();
 	});
 	const unsubscribeSeek = editor.playback.onSeek(() => stop());
-	const unsubscribePause = editor.playback.subscribe(() => {
-		if (!editor.playback.getIsPlaying()) stop();
-	});
+	const unsubscribePause = editor.playback.subscribe(followPlayback);
 	function stop() {
 		clearTimeout(timer);
 		unsubscribeUpdate();
@@ -221,4 +239,5 @@ export function playCue({
 		if (stopPassage === stop) stopPassage = null;
 	}
 	stopPassage = stop;
+	followPlayback();
 }

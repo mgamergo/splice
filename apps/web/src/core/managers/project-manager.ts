@@ -50,6 +50,7 @@ import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import { syncGraphics } from "@/agent/graphics";
 import { fillExplainerPicture } from "@/agent/explainer-picture";
 import { layoutShort } from "@/agent/short-layout";
+import { tracksWithMusicDucking } from "@/mix/music";
 import { shortSrt } from "@/export/short-srt";
 import { useCaptionsStore } from "@/captions/store";
 
@@ -260,17 +261,23 @@ export class ProjectManager {
 			project && projectShortStyle({ project })
 				? this.editor.sequences.getActiveSequenceOrNull()
 				: null;
+		const projectItems = sequence ? [...this.editor.media.getProjectItems()] : [];
 		const scene =
 			project && sequence
 				? {
-						tracks: sequence.tracks,
-						projectItems: [...this.editor.media.getProjectItems()],
+						tracks: tracksWithMusicDucking({
+							sequence,
+							projectItems,
+							projectSources: project.captions?.sources,
+						}),
+						projectItems,
 						canvasSize: project.settings.canvasSize,
 						outputSize: {
 							width: PROJECT_FORMATS.short.width,
 							height: PROJECT_FORMATS.short.height,
 						},
 						background: project.settings.background,
+						master: sequence.mix?.loudness,
 					}
 				: undefined;
 		const srt =
@@ -318,9 +325,27 @@ export class ProjectManager {
 	 * Captures the approved Horizontal edit, then loads the saved spellings,
 	 * renders the MP4 at 1080p30 and publishes it with the SRT under Exports.
 	 */
-	deliver({ quality }: { quality: ExportQuality }): Promise<ExportResult> {
+	async deliver({
+		quality,
+		acceptStaleGain = false,
+	}: {
+		quality: ExportQuality;
+		acceptStaleGain?: boolean;
+	}): Promise<ExportResult> {
+		let input: DeliveryInput;
+		try {
+			input = captureDelivery({
+				editor: this.editor,
+				approval: { acceptStaleGain },
+			});
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
 		this.delivery = {
-			input: captureDelivery({ editor: this.editor }),
+			input,
 			snapshot: null,
 			quality,
 			video: null,

@@ -14,6 +14,7 @@ import {
 } from "mediabunny";
 import type { FrameRate } from "opencut-wasm";
 import { mediaTimeToSeconds } from "opencut-wasm";
+import { EXPORT_SAMPLE_RATE } from "@/media/audio";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
@@ -33,6 +34,7 @@ type ExportParams = {
 	quality: ExportQuality;
 	shouldIncludeAudio?: boolean;
 	audioBuffer?: AudioBuffer;
+	audioBlocks?: AsyncIterable<{ buffer: AudioBuffer; time: number }>;
 	/** Cancels the export, along with any video read it is waiting on. */
 	signal: AbortSignal;
 };
@@ -58,6 +60,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
+	private audioBlocks?: ExportParams["audioBlocks"];
 	private signal: AbortSignal;
 
 	constructor({
@@ -69,6 +72,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		quality,
 		shouldIncludeAudio,
 		audioBuffer,
+		audioBlocks,
 		signal,
 	}: ExportParams) {
 		super();
@@ -90,6 +94,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		this.quality = quality;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBuffer = audioBuffer;
+		this.audioBlocks = audioBlocks;
 		this.signal = signal;
 	}
 
@@ -144,14 +149,14 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		output.addVideoTrack(videoSource, { frameRate: fpsFloat });
 
 		let audioSource: AudioBufferSource | null = null;
-		if (this.shouldIncludeAudio && this.audioBuffer) {
+		if (this.shouldIncludeAudio && (this.audioBuffer || this.audioBlocks)) {
 			let audioCodec: "aac" | "opus" = this.format === "webm" ? "opus" : "aac";
 
 			if (audioCodec === "aac" && typeof AudioEncoder !== "undefined") {
 				const { supported } = await AudioEncoder.isConfigSupported({
 					codec: "mp4a.40.2",
-					sampleRate: this.audioBuffer.sampleRate,
-					numberOfChannels: this.audioBuffer.numberOfChannels,
+					sampleRate: this.audioBuffer?.sampleRate ?? EXPORT_SAMPLE_RATE,
+					numberOfChannels: this.audioBuffer?.numberOfChannels ?? 2,
 					bitrate: 192000,
 				});
 				if (!supported) audioCodec = "opus";
@@ -173,51 +178,76 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 					await audioSource.add(this.audioBuffer);
 					audioSource.close();
 				}
+				const blocks = this.audioBlocks?.[Symbol.asyncIterator]();
+				let audioUntil = 0;
+				try {
+					for (let i = 0; i < frameCount; i++) {
+						if (this.signal.aborted) {
+							await output.cancel();
+							this.emit("cancelled");
+							return null;
+						}
 
-				for (let i = 0; i < frameCount; i++) {
+						const timeTicks = i * ticksPerFrame;
+						const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
+						if (blocks && audioSource && timeSeconds >= audioUntil) {
+							const block = await blocks.next();
+							if (!block.done) {
+								await audioSource.add(block.value.buffer);
+								audioUntil = block.value.time + block.value.buffer.duration;
+							} else {
+								audioSource.close();
+								audioUntil = Infinity;
+							}
+						}
+						await this.renderer.render({ node: rootNode, time: timeTicks });
+						if (scaled) {
+							const { canvas, context } = scaled;
+							context.fillRect(0, 0, canvas.width, canvas.height);
+							context.drawImage(
+								outputCanvas,
+								(canvas.width - width) / 2,
+								(canvas.height - height) / 2,
+								width,
+								height,
+							);
+						}
+						await videoSource.add(timeSeconds, 1 / fpsFloat);
+
+						this.emit("progress", i / frameCount);
+					}
+
 					if (this.signal.aborted) {
 						await output.cancel();
 						this.emit("cancelled");
 						return null;
 					}
 
-					const timeTicks = i * ticksPerFrame;
-					const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
-					await this.renderer.render({ node: rootNode, time: timeTicks });
-					if (scaled) {
-						const { canvas, context } = scaled;
-						context.fillRect(0, 0, canvas.width, canvas.height);
-						context.drawImage(
-							outputCanvas,
-							(canvas.width - width) / 2,
-							(canvas.height - height) / 2,
-							width,
-							height,
-						);
+					if (blocks && audioSource && audioUntil !== Infinity) {
+						for (
+							let next = await blocks.next();
+							!next.done;
+							next = await blocks.next()
+						) {
+							await audioSource.add(next.value.buffer);
+						}
+						audioSource.close();
 					}
-					await videoSource.add(timeSeconds, 1 / fpsFloat);
+					videoSource.close();
+					await output.finalize();
+					this.emit("progress", 1);
 
-					this.emit("progress", i / frameCount);
+					const buffer = output.target.buffer;
+					if (!buffer) {
+						this.emit("error", new Error("Failed to export video"));
+						return null;
+					}
+
+					this.emit("complete", buffer);
+					return buffer;
+				} finally {
+					await blocks?.return?.();
 				}
-
-				if (this.signal.aborted) {
-					await output.cancel();
-					this.emit("cancelled");
-					return null;
-				}
-
-				videoSource.close();
-				await output.finalize();
-				this.emit("progress", 1);
-
-				const buffer = output.target.buffer;
-				if (!buffer) {
-					this.emit("error", new Error("Failed to export video"));
-					return null;
-				}
-
-				this.emit("complete", buffer);
-				return buffer;
 			},
 		});
 	}

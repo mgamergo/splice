@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { mixFingerprint } from "@/mix/final-mix";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import { type ExportRecord, exportRecordSchema } from "@splice/bridge/delivery";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { setCaptionSources } from "@/captions/project-captions";
@@ -7,6 +16,7 @@ import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { ExportOptions, ExportResult } from "@/export";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import { buildDefaultSequence } from "@/timeline/sequences";
 
 const initialCaptionsState = useCaptionsStore.getState();
@@ -203,6 +213,75 @@ describe("Horizontal delivery", () => {
 	test("renders 1920×1080 at 30 fps, and Retry renders the approved edit, not a later one", async () => {
 		const editor = horizontalEditor();
 		useCaptionsStore.setState({ spellingsLoaded: true });
+		const sequenceId = editor.sequences.getActiveSequence().id;
+		const setGain = (gainDb: number) => {
+			editor.command.execute({ command: new UpdateSequenceCommand({
+				editor,
+				sequenceId,
+				label: "Adjust mix",
+				updates: { mix: { loudness: {
+					gainDb,
+					targetLufs: -14,
+					ceilingDbtp: -1,
+					measuredLufs: -17,
+					measuredTruePeakDbtp: -5,
+					expectedLufs: -14,
+					expectedTruePeakDbtp: -2,
+					fingerprint: "mix",
+				} } },
+			}) });
+		};
+		setGain(3);
+		const approved = takeDeliverySnapshot({ editor });
+		setGain(2);
+		expect(await deliveryFingerprint(takeDeliverySnapshot({ editor })))
+			.not.toBe(await deliveryFingerprint(approved));
+		setGain(3);
+		const projectItems = [
+			{
+				id: "rec",
+				type: "video" as const,
+				hasAudio: true,
+				name: "rec",
+				file: new File([], "rec.mp4"),
+			},
+		];
+		editor.media.setProjectItems({ projectItems });
+		const sequence = editor.sequences.getActiveSequence();
+		const loudness = sequence.mix?.loudness;
+		if (!loudness) throw new Error("Expected a saved gain");
+		editor.command.execute({
+			command: new UpdateSequenceCommand({
+				editor,
+				sequenceId: sequence.id,
+				label: "Measure",
+				updates: {
+					mix: {
+						loudness: {
+							...loudness,
+							fingerprint: mixFingerprint({
+								tracks: sequence.tracks,
+								projectItems,
+							}),
+						},
+					},
+				},
+			}),
+		});
+		const { tracks: measuredTracks } = sequence;
+		editor.sequences.updateSequenceTracks({
+			tracks: {
+				...measuredTracks,
+				main: {
+					...measuredTracks.main,
+					clips: measuredTracks.main.clips.map((clip) => ({
+						...clip,
+						params: { ...clip.params, volume: -6 },
+					})),
+				},
+			},
+		});
+
 		const renders = recordRenders(editor);
 		// The first render fails, so Retry renders again.
 		let failRender = true;
@@ -218,9 +297,17 @@ describe("Horizontal delivery", () => {
 
 		expect(await editor.project.deliver({ quality: "high" })).toMatchObject({
 			success: false,
+			error: expect.stringContaining("changed since it was measured"),
+		});
+		expect(renders).toHaveLength(0);
+		expect(
+			await editor.project.deliver({ quality: "high", acceptStaleGain: true }),
+		).toMatchObject({
+			success: false,
 			failedStep: "render",
 		});
 		// The creator keeps editing before retrying.
+		setGain(6);
 		const project = editor.project.getActive();
 		editor.project.setActiveProject({
 			project: {
@@ -242,6 +329,7 @@ describe("Horizontal delivery", () => {
 		expect(renders).toHaveLength(2);
 		for (const { options, scene } of renders) {
 			expect(options.fps).toEqual({ numerator: 30, denominator: 1 });
+			expect(scene?.master).toEqual({ gainDb: 3, ceilingDbtp: -1 });
 			expect(scene?.canvasSize).toEqual({ width: 1920, height: 1080 });
 			expect(scene?.background).toEqual({ type: "color", color: "#000000" });
 			expect(scene?.tracks.main.clips.map(({ id }) => id)).toEqual(["a"]);
