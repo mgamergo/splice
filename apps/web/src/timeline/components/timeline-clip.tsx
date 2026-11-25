@@ -906,10 +906,18 @@ function TextClipContent({
 }: {
 	clip: Extract<TimelineClipType, { type: "text" }>;
 }) {
+	const content = clip.shortHook?.unavailable
+		? "Hook source unavailable"
+		: typeof clip.params.content === "string"
+			? clip.params.content
+			: "";
 	return (
 		<div className="flex size-full items-center justify-start pl-2">
-			<span className="truncate text-xs text-white">
-				{typeof clip.params.content === "string" ? clip.params.content : ""}
+			<span
+				className="truncate text-xs text-white"
+				title={clip.shortHook?.unavailable ? content : undefined}
+			>
+				{content}
 			</span>
 		</div>
 	);

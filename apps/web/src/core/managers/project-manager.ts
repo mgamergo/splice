@@ -48,6 +48,7 @@ import { projectFormat, projectShortStyle } from "@/project/format";
 import { BatchCommand } from "@/commands/batch-command";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import { syncGraphics } from "@/agent/graphics";
+import { fillExplainerPicture } from "@/agent/explainer-picture";
 import { layoutShort } from "@/agent/short-layout";
 import { shortSrt } from "@/export/short-srt";
 import { useCaptionsStore } from "@/captions/store";
@@ -264,7 +265,8 @@ export class ProjectManager {
 				? {
 						tracks: sequence.tracks,
 						projectItems: [...this.editor.media.getProjectItems()],
-						canvasSize: {
+						canvasSize: project.settings.canvasSize,
+						outputSize: {
 							width: PROJECT_FORMATS.short.width,
 							height: PROJECT_FORMATS.short.height,
 						},
@@ -705,14 +707,19 @@ export class ProjectManager {
 		const commands = this.editor.sequences
 			.getSequences()
 			.flatMap((sequence) => {
+				const framed =
+					style === "explainer"
+						? fillExplainerPicture({ tracks: sequence.tracks, canvas, projectItems })
+						: sequence.tracks;
+				const reframed = { ...sequence, tracks: framed };
 				const synced = syncGraphics({
-					sequence,
+					sequence: reframed,
 					projectItems,
 					canvas,
 					shortStyle: style,
 				});
 				const tracks = layoutShort({
-					sequence: { ...sequence, ...synced },
+					sequence: { ...reframed, ...synced },
 					style,
 					canvas,
 					projectItems,

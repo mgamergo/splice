@@ -25,5 +25,5 @@ export function shortSrt({ tracks }: { tracks: SequenceTracks }): string {
 				: [],
 		)
 		.sort((a, b) => a.start - b.start);
-	return cuesToSrt(cues);
+	return cuesToSrt(cues, { preserveOverlaps: true });
 }

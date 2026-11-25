@@ -108,7 +108,7 @@ function buildTrackNodes({
 				}
 			}
 
-			if (clip.type === "text") {
+			if (clip.type === "text" && !clip.shortHook?.unavailable) {
 				nodes.push(
 					new TextNode({
 						...clip,

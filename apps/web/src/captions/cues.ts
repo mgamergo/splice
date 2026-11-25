@@ -562,12 +562,13 @@ export function formatSrtTime(milliseconds: number): string {
 /** SRT for the cues with text, numbered from 1, in whole milliseconds. */
 export function cuesToSrt(
 	cues: Array<Pick<CaptionCue, "start" | "end" | "text">>,
+	{ preserveOverlaps = false } = {},
 ): string {
 	const blocks: string[] = [];
 	let previousEnd = 0;
 	for (const cue of cues) {
 		if (!cue.text) continue;
-		const start = Math.max(previousEnd, Math.round(cue.start * 1000));
+		const start = Math.max(preserveOverlaps ? 0 : previousEnd, Math.round(cue.start * 1000));
 		const end = Math.max(start + 1, Math.round(cue.end * 1000));
 		previousEnd = end;
 		blocks.push(

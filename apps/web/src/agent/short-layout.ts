@@ -2,7 +2,7 @@ import { recoverCaptionLayouts } from "@/agent/captions";
 import type { ShortStyle } from "@splice/bridge";
 import { graphicActionRegions } from "@/agent/graphics";
 import { placeShortCaptions } from "@/agent/short-captions";
-import { isHookTrack } from "@/agent/short-hook";
+import { isHookTrack, syncShortHooks } from "@/agent/short-hook";
 import { textBounds } from "@/agent/overlay-bounds";
 import type { ProjectItem } from "@/media/types";
 import type { TCanvasSize } from "@/project/types";
@@ -23,7 +23,7 @@ export function layoutShort({
 	updateHookVisibility?: boolean;
 }) {
 	const tracks = recoverCaptionLayouts({
-		tracks: sequence.tracks,
+		tracks: syncShortHooks({ tracks: sequence.tracks }),
 		captions: sequence.captions,
 		canvasSize: canvas,
 	});
@@ -37,7 +37,12 @@ export function layoutShort({
 	const textOverlays = overlay.flatMap((track) => {
 		if (track.type !== "text" || track.hidden) return [];
 		return track.clips
-			.filter((clip) => !clip.hidden && (isHookTrack(track) || clip.graphicId))
+			.filter(
+				(clip) =>
+					!clip.hidden &&
+					!clip.shortHook?.unavailable &&
+					(isHookTrack(track) || clip.graphicId),
+			)
 			.map((clip) => ({
 				...textBounds({ clip, canvas }),
 				start: mediaTimeToSeconds({ time: clip.startTime }),

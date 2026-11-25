@@ -295,11 +295,13 @@ export function locateSourceTime({
 	projectItemId,
 	sourceTime,
 	near,
+	preferredClipId,
 }: {
 	tracks: SequenceTracks;
 	projectItemId: string;
 	sourceTime: number;
 	near?: number;
+	preferredClipId?: string;
 }): Anchor | null {
 	const found: Anchor[] = [];
 	for (const track of videoTracks(tracks)) {
@@ -321,6 +323,8 @@ export function locateSourceTime({
 		}
 	}
 	if (found.length === 0) return null;
+	const preferred = found.find(({ clip }) => clip.id === preferredClipId);
+	if (preferred) return preferred;
 	const distance = (anchor: Anchor) =>
 		near === undefined ? anchor.time : Math.abs(anchor.time - near);
 	return found.reduce((best, anchor) =>

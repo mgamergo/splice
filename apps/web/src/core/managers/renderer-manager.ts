@@ -18,6 +18,8 @@ export interface ExportScene {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	canvasSize: TCanvasSize;
+	/** Delivery size when it differs from the saved composition. */
+	outputSize?: TCanvasSize;
 	background: TBackground;
 }
 
@@ -180,6 +182,7 @@ export class RendererManager {
 				tracks,
 				projectItems,
 				canvasSize,
+				outputSize,
 				background,
 			}: ExportScene = scene ?? {
 				tracks: this.editor.sequences.getActiveSequence().tracks,
@@ -218,6 +221,7 @@ export class RendererManager {
 			const exporter = new SequenceExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
+				outputSize,
 				fps: exportFps,
 				format,
 				quality,

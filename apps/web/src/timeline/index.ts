@@ -22,6 +22,7 @@ export function calculateTotalDuration({
 	let maxEnd: MediaTime = ZERO_MEDIA_TIME;
 	for (const track of orderedTracks) {
 		for (const clip of track.clips) {
+			if (clip.type === "text" && clip.shortHook?.unavailable) continue;
 			const clipEnd = addMediaTime({
 				a: clip.startTime,
 				b: clip.duration,
