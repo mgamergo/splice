@@ -25,10 +25,13 @@ export function createCacheUse() {
 
 	return {
 		acquire,
-		async use<T>(
-			cache: AnalysisCache,
-			operation: () => Promise<T>,
-		): Promise<T> {
+		async use<T>({
+			cache,
+			operation,
+		}: {
+			cache: AnalysisCache;
+			operation: () => Promise<T>;
+		}): Promise<T> {
 			const release = await acquire(cache);
 			try {
 				return await operation();
@@ -36,10 +39,13 @@ export function createCacheUse() {
 				release();
 			}
 		},
-		async inspect(
-			cache: AnalysisCache,
-			operation: (busy: boolean) => Promise<void>,
-		) {
+		async inspect({
+			cache,
+			operation,
+		}: {
+			cache: AnalysisCache;
+			operation: (busy: boolean) => Promise<void>;
+		}) {
 			if (users.has(cache)) return operation(true);
 			const { promise, resolve } = Promise.withResolvers<void>();
 			cleaning.set(cache, promise);

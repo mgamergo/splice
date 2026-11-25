@@ -176,7 +176,13 @@ export function serveFile({
 		"x-content-type-options": "nosniff",
 		"last-modified": new Date(file.lastModified).toUTCString(),
 	});
-	function respond(status: number, blob: Blob | null): Response {
+	function respond({
+		status,
+		blob,
+	}: {
+		status: number;
+		blob: Blob | null;
+	}): Response {
 		if (!onClose) return new Response(blob, { status, headers });
 		if (!blob) {
 			onClose();
@@ -219,7 +225,7 @@ export function serveFile({
 	const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
 	if (range && !match) {
 		headers.set("content-range", `bytes */${size}`);
-		return respond(416, null);
+		return respond({ status: 416, blob: null });
 	}
 	if (match) {
 		const [, startText, endText] = match;
@@ -236,12 +242,18 @@ export function serveFile({
 		}
 		if (!Number.isFinite(start) || start > end || start >= size) {
 			headers.set("content-range", `bytes */${size}`);
-			return respond(416, null);
+			return respond({ status: 416, blob: null });
 		}
 		headers.set("content-range", `bytes ${start}-${end}/${size}`);
 		headers.set("content-length", String(end - start + 1));
-		return respond(206, request.method === "HEAD" ? null : file.slice(start, end + 1));
+		return respond({
+			status: 206,
+			blob: request.method === "HEAD" ? null : file.slice(start, end + 1),
+		});
 	}
 	headers.set("content-length", String(size));
-	return respond(200, request.method === "HEAD" ? null : file);
+	return respond({
+		status: 200,
+		blob: request.method === "HEAD" ? null : file,
+	});
 }

@@ -35,10 +35,10 @@ async function setup() {
 	const cacheUse = createCacheUse();
 	const exportStore = createExportStore({ root });
 	const storage = createStorage({ root, cacheUse, exportStore });
-	async function save(path: string, content = "1234") {
+	async function save(path: string) {
 		const file = join(root, path);
 		await mkdir(dirname(file), { recursive: true });
-		await writeFile(file, content);
+		await writeFile(file, "1234");
 		return file;
 	}
 	return { root, storage, cacheUse, exportStore, save };
@@ -241,7 +241,7 @@ test("holds one runtime lock per root and releases it for a restart", async () =
 		expect(() => lockRoot({ root })).toThrow("Splice is already using");
 		expect(await storage.cleanup({ dryRun: false })).toMatchObject({
 			freedBytes: 0,
-			kept: [{ category: "Cache", reason: "Splice runtime state", items: 1 }],
+			kept: [{ category: "Cache", reason: "Splice runtime state" }],
 		});
 	} finally {
 		release();

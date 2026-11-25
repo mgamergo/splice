@@ -50,7 +50,13 @@ type Summary = {
 	containsProtected: boolean;
 };
 
-function isWithin(parent: string, child: string): boolean {
+function isWithin({
+	parent,
+	child,
+}: {
+	parent: string;
+	child: string;
+}): boolean {
 	const path = relative(parent, child);
 	return !isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`);
 }
@@ -86,6 +92,7 @@ export function createStorage({
 		olderThanDays,
 	}: ReturnType<typeof storageCleanupSchema.parse>): Promise<StorageReport> {
 		const canonicalRoot = await realpath(root);
+		const rootInfo = await lstat(canonicalRoot);
 		const errors: StorageReport["errors"] = [];
 		const kept = new Map<string, StorageReport["kept"][number]>();
 		const reclaimable = STORAGE_CATEGORIES.map((category) => ({
@@ -99,7 +106,7 @@ export function createStorage({
 				? Infinity
 				: Date.now() - olderThanDays * 86_400_000;
 
-		function issue(path: string, message: string) {
+		function issue({ path, message }: { path: string; message: string }) {
 			errors.push({
 				path: relative(canonicalRoot, path).split(sep).join("/"),
 				message,
@@ -108,7 +115,8 @@ export function createStorage({
 
 		async function children(path: string): Promise<Entry[]> {
 			const names = await readdir(path).catch((error: unknown) => {
-				if (!isMissing(error)) issue(path, "Couldn't read directory.");
+				if (!isMissing(error))
+					issue({ path, message: "Couldn't read directory." });
 				return [];
 			});
 			const entries: Entry[] = [];
@@ -118,7 +126,7 @@ export function createStorage({
 					entries.push({ path: child, info: await lstat(child) });
 				} catch (error) {
 					if (!isMissing(error))
-						issue(child, "Couldn't read file information.");
+						issue({ path: child, message: "Couldn't read file information." });
 				}
 			}
 			return entries;
@@ -133,19 +141,16 @@ export function createStorage({
 					protectedTargets.push(await realpath(path));
 			} catch (error) {
 				if (!isMissing(error))
-					issue(
-						join(canonicalRoot, folder),
-						"Couldn't resolve the protected folder.",
-					);
+					issue({
+						path: join(canonicalRoot, folder),
+						message: "Couldn't resolve the protected folder.",
+					});
 			}
 		}
 
-		async function summarize(
-			{ path, info }: Entry,
-			device = info.dev,
-		): Promise<Summary> {
+		async function summarize({ path, info }: Entry): Promise<Summary> {
 			const containsProtected =
-				info.dev !== device ||
+				info.dev !== rootInfo.dev ||
 				(info.isFile() ? info.nlink > 1 : !info.isDirectory());
 			const total: Summary = {
 				bytes: info.isFile() ? info.size : 0,
@@ -156,7 +161,7 @@ export function createStorage({
 			if (!info.isDirectory() || containsProtected) return total;
 			const before = errors.length;
 			for (const child of await children(path)) {
-				const part = await summarize(child, device);
+				const part = await summarize(child);
 				total.bytes += part.bytes;
 				total.items += part.items;
 				total.newest = Math.max(total.newest, part.newest);
@@ -166,7 +171,12 @@ export function createStorage({
 			return total;
 		}
 
-		function keep(category: string, reason: string, { bytes, items }: Summary) {
+		function keep({
+			category,
+			reason,
+			bytes,
+			items,
+		}: StorageReport["kept"][number]) {
 			const key = JSON.stringify([category, reason]);
 			const row = kept.get(key) ?? { category, reason, bytes: 0, items: 0 };
 			row.bytes += bytes;
@@ -178,17 +188,17 @@ export function createStorage({
 			entry,
 			category,
 			busy,
-			device,
 		}: {
 			entry: Entry;
 			category: StorageCategory;
 			busy: boolean;
-			device: number;
 		}) {
 			const { path, info } = entry;
-			const total = await summarize(entry, device);
+			const total = await summarize(entry);
 			const linked = protectedTargets.some(
-				(target) => isWithin(target, path) || isWithin(path, target),
+				(target) =>
+					isWithin({ parent: target, child: path }) ||
+					isWithin({ parent: path, child: target }),
 			);
 			const reason = busy
 				? "In use by a running job"
@@ -200,7 +210,7 @@ export function createStorage({
 							? "Newer than the age threshold"
 							: null;
 			if (reason) {
-				keep(category, reason, total);
+				keep({ category, reason, ...total });
 				return;
 			}
 
@@ -214,7 +224,10 @@ export function createStorage({
 					relative(path, await realpath(path)) ||
 					!sameFileIdentity({ a: info, b: await lstat(path) })
 				) {
-					issue(path, "Item changed during cleanup. Refresh and try again.");
+					issue({
+						path,
+						message: "Item changed during cleanup. Refresh and try again.",
+					});
 					return;
 				}
 				if (info.isDirectory()) {
@@ -239,7 +252,10 @@ export function createStorage({
 				row.freedBytes += total.bytes;
 			} catch (error) {
 				if (isMissing(error)) return;
-				issue(path, "Couldn't remove item. A later cleanup can retry.");
+				issue({
+					path,
+					message: "Couldn't remove item. A later cleanup can retry.",
+				});
 			}
 		}
 
@@ -252,74 +268,77 @@ export function createStorage({
 					directory.info.dev !== entry.info.dev
 				) {
 					const reason =
-						name === "session.json" || name === ROOT_LOCK_FILE
+						name === "session.json" ||
+						name === ROOT_LOCK_FILE ||
+						name === `${ROOT_LOCK_FILE}-journal`
 							? "Splice runtime state"
 							: "Unrecognized cache data";
-					keep("Cache", reason, await summarize(directory, entry.info.dev));
+					keep({ category: "Cache", reason, ...(await summarize(directory)) });
 					continue;
 				}
 
-				await cacheUse.inspect(name, async (busy) => {
-					const { temporary } = ANALYSIS_FOLDERS[name];
-					for (const file of await children(directory.path)) {
-						const leaf = basename(file.path);
-						if (
-							file.info.isDirectory() &&
-							(temporary.test(leaf) || CLEANUP_FOLDER.test(leaf))
-						) {
-							await candidate({
-								entry: file,
-								category: "temporary-renders",
-								busy,
-								device: entry.info.dev,
-							});
-						} else if (
-							name !== "transcripts" &&
-							ANALYSIS_FOLDERS[name].file.test(leaf)
-						) {
-							await candidate({
-								entry: file,
-								category: name,
-								busy,
-								device: entry.info.dev,
-							});
-						} else {
-							const reason =
-								name === "transcripts"
-									? "Word timings and identities used by captions and corrections"
-									: "Unrecognized cache data";
-							keep(name, reason, await summarize(file, entry.info.dev));
+				await cacheUse.inspect({
+					cache: name,
+					operation: async (busy) => {
+						const { temporary } = ANALYSIS_FOLDERS[name];
+						for (const file of await children(directory.path)) {
+							const leaf = basename(file.path);
+							if (
+								file.info.isDirectory() &&
+								(temporary.test(leaf) || CLEANUP_FOLDER.test(leaf))
+							) {
+								await candidate({
+									entry: file,
+									category: "temporary-renders",
+									busy,
+								});
+							} else if (
+								name !== "transcripts" &&
+								ANALYSIS_FOLDERS[name].file.test(leaf)
+							) {
+								await candidate({
+									entry: file,
+									category: name,
+									busy,
+								});
+							} else {
+								const reason =
+									name === "transcripts"
+										? "Word timings and identities used by captions and corrections"
+										: "Unrecognized cache data";
+								keep({ category: name, reason, ...(await summarize(file)) });
+							}
 						}
-					}
+					},
 				});
 			}
 		}
 
-		const rootInfo = await lstat(canonicalRoot);
 		for (const entry of await children(canonicalRoot)) {
 			const name = storageName(entry.path);
 			if (!entry.info.isDirectory() || entry.info.dev !== rootInfo.dev) {
-				keep(
-					name,
-					"Outside managed cleanup folders or linked",
-					await summarize(entry, rootInfo.dev),
-				);
+				keep({
+					category: name,
+					reason: "Outside managed cleanup folders or linked",
+					...(await summarize(entry)),
+				});
 			} else if (name === "Cache") {
 				await walkCache(entry);
 			} else if (name === "Exports") {
 				await exportStore.withStagingInventory(async (isPending) => {
 					const path = join(entry.path, EXPORT_STAGING_FOLDER);
 					const info = await lstat(path).catch((error: unknown) => {
-						if (!isMissing(error)) issue(path, "Couldn't read export staging.");
+						if (!isMissing(error))
+							issue({ path, message: "Couldn't read export staging." });
 						return null;
 					});
 					if (!info) return;
 					if (!info.isDirectory() || info.dev !== rootInfo.dev) {
-						keep(
-							name,
-							"Linked or outside managed cleanup folders",
-							await summarize({ path, info }, rootInfo.dev),
-						);
+						keep({
+							category: name,
+							reason: "Linked or outside managed cleanup folders",
+							...(await summarize({ path, info })),
+						});
 						return;
 					}
 					for (const staged of await children(path)) {
@@ -327,24 +346,24 @@ export function createStorage({
 							entry: staged,
 							category: "export-staging",
 							busy: isPending(basename(staged.path)),
-							device: rootInfo.dev,
 						});
 					}
 				});
 				for (const exported of await children(entry.path)) {
 					if (storageName(exported.path) !== EXPORT_STAGING_FOLDER)
-						keep(
-							name,
-							PROTECTED_FOLDERS.get("Exports") ?? "Published exports",
-							await summarize(exported),
-						);
+						keep({
+							category: name,
+							reason: PROTECTED_FOLDERS.get("Exports") ?? "Published exports",
+							...(await summarize(exported)),
+						});
 				}
 			} else {
-				keep(
-					name,
-					PROTECTED_FOLDERS.get(name) ?? "Outside managed cleanup folders",
-					await summarize(entry),
-				);
+				keep({
+					category: name,
+					reason:
+						PROTECTED_FOLDERS.get(name) ?? "Outside managed cleanup folders",
+					...(await summarize(entry)),
+				});
 			}
 		}
 

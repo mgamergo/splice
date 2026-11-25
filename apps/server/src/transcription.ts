@@ -285,9 +285,11 @@ export function createTranscriptionJobs({
 					.then(async () => {
 						if (created.state.status === "completed") return;
 						try {
-							const backend = await cacheUse.use("transcripts", () =>
-								transcribe({ job: created, source, model, key }),
-							);
+							const backend = await cacheUse.use({
+								cache: "transcripts",
+								operation: () =>
+									transcribe({ job: created, source, model, key }),
+							});
 							created.state = { status: "completed", cached: false, backend };
 						} catch (error) {
 							created.state = {

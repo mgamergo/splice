@@ -440,9 +440,12 @@ export function createNoiseReducer({
 		return renders.run({
 			key: identity.key,
 			signal,
-			work: (jobSignal) => cacheUse.use("noise-reduction", () =>
-				renderAndCache({ path, ...identity, signal: jobSignal }),
-			),
+			work: (jobSignal) =>
+				cacheUse.use({
+					cache: "noise-reduction",
+					operation: () =>
+						renderAndCache({ path, ...identity, signal: jobSignal }),
+				}),
 		});
 	}
 

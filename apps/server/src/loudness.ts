@@ -578,27 +578,45 @@ export function createLoudnessMeter({
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
 			const target = { path, ranges, denoised };
-			const run = () => cacheUse.use("loudness", async () => {
-				const identified = await identify({ target, signal });
-				stop.signal.throwIfAborted();
-				const work = (jobSignal: AbortSignal) => cacheUse.use("loudness", async () => {
-					const cached = await readCache(identified.cachePath);
-					if (cached) return { ...cached, cached: true };
-					return {
-						...(await measureAndCache({ target, identified, signal: jobSignal })),
-						cached: false,
-					};
+			const run = () =>
+				cacheUse.use({
+					cache: "loudness",
+					operation: async () => {
+						const identified = await identify({ target, signal });
+						stop.signal.throwIfAborted();
+						const work = (jobSignal: AbortSignal) =>
+							cacheUse.use({
+								cache: "loudness",
+								operation: async () => {
+									const cached = await readCache(identified.cachePath);
+									if (cached) return { ...cached, cached: true };
+									return {
+										...(await measureAndCache({
+											target,
+											identified,
+											signal: jobSignal,
+										})),
+										cached: false,
+									};
+								},
+							});
+						const measured = await active.run({
+							key: identified.key,
+							signal,
+							work: (jobSignal) =>
+								denoised
+									? cacheUse.use({
+											cache: "noise-reduction",
+											operation: () => work(jobSignal),
+										})
+									: work(jobSignal),
+						});
+						return { path, ranges, noiseReduction: denoised, ...measured };
+					},
 				});
-				const measured = await active.run({
-					key: identified.key,
-					signal,
-					work: (jobSignal) => denoised
-						? cacheUse.use("noise-reduction", () => work(jobSignal))
-						: work(jobSignal),
-				});
-				return { path, ranges, noiseReduction: denoised, ...measured };
-			});
-			return denoised ? cacheUse.use("noise-reduction", run) : run();
+			return denoised
+				? cacheUse.use({ cache: "noise-reduction", operation: run })
+				: run();
 		},
 
 		async stop() {
