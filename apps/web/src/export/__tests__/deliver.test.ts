@@ -130,9 +130,10 @@ afterEach(() => {
 });
 
 describe("Horizontal delivery", () => {
-	test("waits for the saved spellings before fixing the SRT", async () => {
+	test("applies spellings to the approved edit while newer edits are made", async () => {
 		const editor = horizontalEditor();
 		const renders = recordRenders(editor);
+		const approved = takeDeliverySnapshot({ editor });
 		let release: () => void = () => {};
 		const loadSpellings = mock(
 			() =>
@@ -152,20 +153,31 @@ describe("Horizontal delivery", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		// Nothing renders until the spellings are in.
 		expect(renders).toHaveLength(0);
+		setCaptionSources({ editor, sources: [] });
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.sequences.updateSequenceTracks({
+			tracks: { ...tracks, main: { ...tracks.main, clips: [] } },
+		});
+		expect(editor.command.getRevision()).toBeGreaterThan(approved.source.revision);
 		release();
 		const result = await exported;
-		expect(result).toMatchObject({ success: true, record: { cueCount: 1 } });
+		expect(result).toMatchObject({ success: true, record: { ...approved.source } });
+		expect(renders[0].scene).toEqual(approved.scene);
 		expect(loadSpellings).toHaveBeenCalled();
-		const srt = splice.calls.find(({ method }) => method === "exports.begin");
+		const begin = splice.calls.find(({ method }) => method === "exports.begin");
 		// The fingerprint covers the SRT with the spelling applied.
-		const withSpelling = takeDeliverySnapshot({ editor });
-		expect(withSpelling.srt).toContain("Deploy to Vercel.");
-		expect(srt?.params.fingerprint).toBe(await deliveryFingerprint(withSpelling));
+		expect(begin?.params.fingerprint).toBe(
+			await deliveryFingerprint({
+				...approved,
+				srt: approved.srt.replace("versel", "Vercel"),
+			}),
+		);
 	});
 
-	test("a failed spellings load fails the export at that step, and Retry loads them again", async () => {
+	test("Retry after a spellings load failure still exports the approved revision", async () => {
 		const editor = horizontalEditor();
-		recordRenders(editor);
+		const renders = recordRenders(editor);
+		const approved = takeDeliverySnapshot({ editor });
 		let attempts = 0;
 		useCaptionsStore.setState({
 			loadSpellings: async () => {
@@ -179,7 +191,13 @@ describe("Horizontal delivery", () => {
 			failedStep: "spellings",
 			error: expect.stringContaining("splice is not running"),
 		});
-		expect(await editor.project.retryDelivery()).toMatchObject({ success: true });
+		setCaptionSources({ editor, sources: [] });
+		expect(await editor.project.retryDelivery()).toMatchObject({
+			success: true,
+			record: { ...approved.source, fingerprint: await deliveryFingerprint(approved) },
+		});
+		expect(attempts).toBe(2);
+		expect(renders).toHaveLength(1);
 	});
 
 	test("renders 1920×1080 at 30 fps, and Retry renders the approved edit, not a later one", async () => {

@@ -2,16 +2,15 @@ import {
 	type ExportRecord,
 	type ExportSource,
 	exportRecordSchema,
+	type ProjectCaptions,
+	type Replacement,
 } from "@splice/bridge/delivery";
 import { PROJECT_FORMATS } from "@splice/bridge";
 import type { FrameRate } from "opencut-wasm";
 import { z } from "zod";
 import { callSplice, uploadExportFile } from "@/bridge/splice-api";
-import { cuesToSrt } from "@/captions/cues";
-import {
-	sequenceCaptionCues,
-	sequenceEndSeconds,
-} from "@/captions/project-captions";
+import { buildCaptionCues, cuesToSrt } from "@/captions/cues";
+import { sequenceEndSeconds } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
@@ -42,16 +41,19 @@ export interface DeliverySnapshot {
 	source: Omit<ExportSource, "fingerprint">;
 }
 
-export function takeDeliverySnapshot({
+export interface DeliveryInput extends Omit<DeliverySnapshot, "srt" | "source"> {
+	captions: ProjectCaptions | undefined;
+	source: Omit<DeliverySnapshot["source"], "cueCount">;
+}
+
+/** Captures the approved edit before an export waits for anything. */
+export function captureDelivery({
 	editor,
 }: {
 	editor: EditorCore;
-}): DeliverySnapshot {
+}): DeliveryInput {
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
-	const cues = sequenceCaptionCues({ editor, sequence }).filter(
-		({ text }) => text,
-	);
 	return {
 		deliveryId: generateUUID(),
 		scene: {
@@ -61,7 +63,7 @@ export function takeDeliverySnapshot({
 			background: project.settings.background,
 		},
 		fps: DELIVERY_FORMAT.fps,
-		srt: cuesToSrt(cues),
+		captions: project.captions,
 		source: {
 			projectId: project.metadata.id,
 			projectName: project.metadata.name,
@@ -69,22 +71,53 @@ export function takeDeliverySnapshot({
 			sequenceName: sequence.name,
 			revision: editor.command.getRevision(),
 			durationSeconds: sequenceEndSeconds({ sequence }),
-			cueCount: cues.length,
 		},
 	};
 }
 
-/**
- * The snapshot an Export click approves, once the saved spellings its SRT
- * applies have loaded.
- */
-export async function prepareDelivery({
+function snapshotWithSpellings({
+	input,
+	spellings,
+}: {
+	input: DeliveryInput;
+	spellings: Replacement[];
+}): DeliverySnapshot {
+	const { scene, fps, deliveryId, source, captions } = input;
+	const cues = buildCaptionCues({
+		tracks: scene.tracks,
+		captions,
+		spellings,
+		sequenceEnd: source.durationSeconds,
+		sequenceId: source.sequenceId,
+	}).filter(({ text }) => text);
+	return {
+		deliveryId,
+		scene,
+		fps,
+		srt: cuesToSrt(cues),
+		source: { ...source, cueCount: cues.length },
+	};
+}
+
+export function takeDeliverySnapshot({
 	editor,
 }: {
 	editor: EditorCore;
+}): DeliverySnapshot {
+	return snapshotWithSpellings({
+		input: captureDelivery({ editor }),
+		spellings: useCaptionsStore.getState().spellings,
+	});
+}
+
+/** Applies the saved spellings to the cues of the approved edit. */
+export async function prepareDelivery({
+	input,
+}: {
+	input: DeliveryInput;
 }): Promise<DeliverySnapshot> {
-	await useCaptionsStore.getState().loadSpellings();
-	return takeDeliverySnapshot({ editor });
+	const spellings = await useCaptionsStore.getState().loadSpellings();
+	return snapshotWithSpellings({ input, spellings });
 }
 
 /** The files the tracks play, by what identifies them on disk. */

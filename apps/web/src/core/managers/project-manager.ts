@@ -16,7 +16,9 @@ import type {
 } from "@/export";
 import { ExportJobs } from "@/export/export-jobs";
 import {
+	captureDelivery,
 	DeliveryError,
+	type DeliveryInput,
 	type DeliverySnapshot,
 	prepareDelivery,
 	publishDelivery,
@@ -57,10 +59,11 @@ export class ProjectManager {
 	private exportState: ExportState = IDLE_EXPORT_STATE;
 	private exportJobs = new ExportJobs();
 	/**
-	 * A Horizontal export that can be retried: its snapshot, once taken, and
-	 * any finished render.
+	 * A Horizontal export that can be retried with its approved edit and any
+	 * finished snapshot and render.
 	 */
 	private delivery: {
+		input: DeliveryInput;
 		snapshot: DeliverySnapshot | null;
 		quality: ExportQuality;
 		video: ArrayBuffer | null;
@@ -269,12 +272,16 @@ export class ProjectManager {
 	}
 
 	/**
-	 * Exports the active Horizontal sequence as it is now: once the saved
-	 * spellings have loaded, fixes the edit, renders the MP4 at 1080p30, times
-	 * the SRT against the same tracks and publishes both under Exports.
+	 * Captures the approved Horizontal edit, then loads the saved spellings,
+	 * renders the MP4 at 1080p30 and publishes it with the SRT under Exports.
 	 */
 	deliver({ quality }: { quality: ExportQuality }): Promise<ExportResult> {
-		this.delivery = { snapshot: null, quality, video: null };
+		this.delivery = {
+			input: captureDelivery({ editor: this.editor }),
+			snapshot: null,
+			quality,
+			video: null,
+		};
 		return this.runDelivery();
 	}
 
@@ -309,7 +316,7 @@ export class ProjectManager {
 				};
 				if (!delivery.snapshot) {
 					try {
-						delivery.snapshot = await prepareDelivery({ editor: this.editor });
+						delivery.snapshot = await prepareDelivery({ input: delivery.input });
 					} catch (error) {
 						if (signal.aborted) return { success: false, cancelled: true };
 						return {
