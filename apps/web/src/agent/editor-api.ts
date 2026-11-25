@@ -29,6 +29,7 @@ import {
 	graphicsPlanRequestSchema,
 } from "@splice/bridge/graphics";
 import {
+	GraphicPlanConflictError,
 	type GraphicPlanEntry,
 	planGraphicsPass,
 	summarizeGraphics,
@@ -598,18 +599,24 @@ export class EditorApi {
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const found = this.graphicsSequence(parsed.data);
 		if (found.error) return found.error;
-		const { entries, removed } = this.passResult({
-			sequence: found.sequence,
-			graphics: parsed.data.graphics,
-			prune: parsed.data.prune,
-		});
-		return {
-			ok: true as const,
-			sequenceId: found.sequence.id,
-			revision: this.getRevision(),
-			graphics: entries,
-			...(removed > 0 && { wouldRemove: removed }),
-		};
+		try {
+			const { entries, removed } = this.passResult({
+				sequence: found.sequence,
+				graphics: parsed.data.graphics,
+				prune: parsed.data.prune,
+			});
+			return {
+				ok: true as const,
+				sequenceId: found.sequence.id,
+				revision: this.getRevision(),
+				graphics: entries,
+				...(removed > 0 && { wouldRemove: removed }),
+			};
+		} catch (error) {
+			if (error instanceof GraphicPlanConflictError)
+				return this.invalidOp(error.message);
+			throw error;
+		}
 	}
 
 	/** Applies a graphics pass as one undo step. */
@@ -913,6 +920,7 @@ export class EditorApi {
 			if (
 				error instanceof InvalidOpError ||
 				error instanceof TimeSpecError ||
+				error instanceof GraphicPlanConflictError ||
 				error instanceof RemovalTakeError
 			) {
 				return {

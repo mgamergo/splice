@@ -14,11 +14,16 @@ import type {
 import { isLeafChannelData } from "@/animation/channel-data";
 import { isScalarChannel } from "@/animation/interpolation";
 import type { ScalarAnimationKey } from "@/animation/types";
+import { resolveOpacityAtTime } from "@/animation/values";
 import { playedClips } from "@/agent/rough-cut";
 import { highlightBoxSize } from "@/graphics/definitions/graphics-pass";
 import { DEFAULT_GRAPHIC_SOURCE_SIZE } from "@/graphics/types";
 import type { ProjectItem } from "@/media/types";
-import { buildTransformFromParams } from "@/rendering";
+import {
+	buildTransformFromParams,
+	readBlendModeFromParams,
+	readOpacityFromParams,
+} from "@/rendering";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
 import { buildGraphicClip, buildTextClip } from "@/timeline/clip-utils";
 import { buildEmptyTrack } from "@/timeline/placement";
@@ -142,7 +147,7 @@ function screenFrame({
 			: resolveTransformAtTime({
 					baseTransform,
 					animations: clip.animations,
-					localTime: time - seconds(clip.startTime),
+					localTime: ticks(time - seconds(clip.startTime)),
 				});
 	return {
 		center: transform.position,
@@ -300,9 +305,38 @@ export function locateSourceTime({
 	sourceTime: number;
 	near?: number;
 }): Anchor | null {
-	const found: Anchor[] = [];
-	for (const track of videoTracks(tracks)) {
-		if (track.hidden) continue;
+	return resolveSourceTime({ tracks, projectItemId, sourceTime, near }).anchor;
+}
+
+function pictureOpacity({
+	clip,
+	time,
+}: {
+	clip: VideoTrack["clips"][number];
+	time: MediaTime;
+}) {
+	return resolveOpacityAtTime({
+		animations: clip.animations,
+		localTime: time - clip.startTime,
+		baseOpacity: readOpacityFromParams({ params: clip.params }),
+	});
+}
+
+function resolveSourceTime({
+	tracks,
+	projectItemId,
+	sourceTime,
+	near,
+}: Parameters<typeof locateSourceTime>[0]): {
+	anchor: Anchor | null;
+	covered: boolean;
+} {
+	const pictureTracks = videoTracks(tracks).filter((track) => !track.hidden);
+	let anchor: Anchor | null = null;
+	let covered = false;
+	const distance = (time: number) =>
+		near === undefined ? time : Math.abs(time - near);
+	for (const [layer, track] of pictureTracks.entries()) {
 		for (const clip of track.clips) {
 			if (
 				clip.type !== "video" ||
@@ -312,18 +346,101 @@ export function locateSourceTime({
 				continue;
 			const range = sourceRange(clip);
 			if (sourceTime < range.start || sourceTime >= range.end) continue;
-			found.push({
-				time: seconds(clip.startTime) + (sourceTime - range.start) / range.rate,
-				trackId: track.id,
-				clip,
-			});
+			const time =
+				seconds(clip.startTime) + (sourceTime - range.start) / range.rate;
+			const frameTime = ticks(time);
+			if (pictureOpacity({ clip, time: frameTime }) <= 0) continue;
+			// The renderer draws higher tracks last. Within a track, later
+			// starts and then lexically later IDs draw on top.
+			const obscured = pictureTracks
+				.slice(0, layer + 1)
+				.some((upperTrack) =>
+					upperTrack.clips.some(
+						(upperClip) =>
+							(upperTrack !== track ||
+								upperClip.startTime > clip.startTime ||
+								(upperClip.startTime === clip.startTime &&
+									upperClip.id.localeCompare(clip.id) > 0)) &&
+							!upperClip.hidden &&
+							upperClip.startTime <= frameTime &&
+							frameTime < upperClip.startTime + upperClip.duration &&
+							!upperClip.masks?.length &&
+							readBlendModeFromParams({ params: upperClip.params }) ===
+								"normal" &&
+							pictureOpacity({ clip: upperClip, time: frameTime }) >= 1,
+					),
+				);
+			if (obscured) {
+				covered = true;
+			} else if (!anchor || distance(time) < distance(anchor.time)) {
+				anchor = { time, trackId: track.id, clip };
+			}
 		}
 	}
-	if (found.length === 0) return null;
-	const distance = (anchor: Anchor) =>
-		near === undefined ? anchor.time : Math.abs(anchor.time - near);
-	return found.reduce((best, anchor) =>
-		distance(anchor) < distance(best) ? anchor : best,
+	return { anchor, covered };
+}
+
+/** Map the planned source range onto the contiguous surviving picture nearest the action. */
+function mapGraphicRange({
+	record,
+	anchor,
+	tracks,
+}: {
+	record: GraphicRecord;
+	anchor: Anchor;
+	tracks: SequenceTracks;
+}) {
+	const track = videoTracks(tracks).find(({ id }) => id === anchor.trackId);
+	const { rate } = sourceRange(anchor.clip);
+	// Older records stored their planned timing as offsets in sequence seconds.
+	const sourceStart =
+		record.sourceInterval?.start ??
+		record.action.time + record.planned.start * rate;
+	const sourceEnd =
+		record.sourceInterval?.end ?? sourceStart + record.planned.duration * rate;
+	const spans = (track?.clips ?? [])
+		.flatMap((clip) => {
+			if (
+				clip.type !== "video" ||
+				clip.hidden ||
+				clip.mediaId !== record.action.projectItemId
+			)
+				return [];
+			const range = sourceRange(clip);
+			const from = Math.max(sourceStart, range.start);
+			const to = Math.min(sourceEnd, range.end);
+			if (to <= from) return [];
+			const clipStart = seconds(clip.startTime);
+			return [
+				{
+					start: clipStart + (from - range.start) / range.rate,
+					end: clipStart + (to - range.start) / range.rate,
+					from,
+					to,
+				},
+			];
+		})
+		.sort((a, b) => a.start - b.start);
+	const runs: typeof spans = [];
+	for (const span of spans) {
+		const previous = runs.at(-1);
+		if (
+			previous &&
+			ticks(previous.end) === ticks(span.start) &&
+			ticks(span.from) >= ticks(previous.to)
+		) {
+			previous.end = span.end;
+			previous.to = span.to;
+		} else {
+			runs.push(span);
+		}
+	}
+	const distance = ({ start, end }: (typeof spans)[number]) =>
+		Math.max(start - anchor.time, anchor.time - end, 0);
+	return runs.reduce<(typeof spans)[number] | undefined>(
+		(nearest, span) =>
+			!nearest || distance(span) < distance(nearest) ? span : nearest,
+		undefined,
 	);
 }
 
@@ -965,7 +1082,7 @@ export function syncGraphics({
 	);
 	for (const record of ordered) {
 		const current = shown.get(record.id);
-		const anchor = locateSourceTime({
+		const { anchor, covered } = resolveSourceTime({
 			tracks,
 			projectItemId: record.action.projectItemId,
 			sourceTime: record.action.time,
@@ -995,8 +1112,10 @@ export function syncGraphics({
 				placed: undefined,
 				flags: [
 					flag({
-						code: "action_missing",
-						message: `Its action (${record.action.time.toFixed(2)} s in the recording) is no longer in the cut. Review it: delete it, or restore the take that shows the action.`,
+						code: covered ? "action_covered" : "action_missing",
+						message: covered
+							? "Another picture clip covers the action. Restore the picture that shows it or replan the graphic for the replacement."
+							: `Its action (${record.action.time.toFixed(2)} s in the recording) is no longer in the cut. Review it: delete it, or restore the take that shows the action.`,
 					}),
 				],
 			});
@@ -1017,11 +1136,18 @@ export function syncGraphics({
 
 		const values = effectiveValues(adjusted);
 		const hidden = overrides.hidden ?? false;
-		const start = Math.max(0, anchor.time + values.start);
+		const range = mapGraphicRange({ record, anchor, tracks });
+		const requestedStart =
+			overrides.start === undefined
+				? (range?.start ?? anchor.time)
+				: anchor.time + overrides.start;
+		const requestedDuration =
+			overrides.duration ?? (range ? range.end - range.start : 0);
+		const start = Math.max(0, requestedStart);
 		// Clip against the end of the picture so a graphic cannot extend the export.
 		const duration = Math.min(
 			pictureEnd - start,
-			values.duration + Math.min(0, anchor.time + values.start),
+			requestedDuration + Math.min(0, requestedStart),
 		);
 		if (duration <= 0 || ticks(duration) <= 0) {
 			if (current)
@@ -1037,7 +1163,7 @@ export function syncGraphics({
 					flag({
 						code: "timing_outside_picture",
 						message:
-							"Its timing falls beyond the last picture clip. Replan its timing or delete it.",
+							"Its timing falls outside the remaining picture. Replan its timing or delete it.",
 					}),
 				],
 			});
@@ -1045,18 +1171,23 @@ export function syncGraphics({
 		}
 		if (record.kind === "highlight" && record.target) {
 			const midpoint = start + duration / 2;
-			const picture = videoTracks(tracks)
-				.find(({ id }) => id === anchor.trackId)
-				?.clips.find(
-					(clip): clip is VideoClip =>
-						clip.type === "video" &&
-						!clip.hidden &&
-						clip.mediaId === record.action.projectItemId &&
-						seconds(clip.startTime) <= midpoint &&
-						midpoint < seconds(clip.startTime) + seconds(clip.duration),
-				);
+			const clips = videoTracks(tracks).find(
+				({ id }) => id === anchor.trackId,
+			)?.clips;
+			const picture = clips?.find(
+				(clip): clip is VideoClip =>
+					clip.type === "video" &&
+					!clip.hidden &&
+					clip.mediaId === record.action.projectItemId &&
+					seconds(clip.startTime) <= midpoint &&
+					midpoint < seconds(clip.startTime) + seconds(clip.duration),
+			);
+			const currentAnchor = clips?.find(
+				(clip): clip is VideoClip =>
+					clip.type === "video" && clip.id === anchor.clip.id,
+			);
 			const frame = screenFrame({
-				clip: picture ?? anchor.clip,
+				clip: picture ?? currentAnchor ?? anchor.clip,
 				size: sizes.get(record.action.projectItemId),
 				canvas,
 				time: picture ? midpoint : anchor.time,
@@ -1206,6 +1337,8 @@ export interface GraphicPlanEntry {
 	end?: number;
 }
 
+export class GraphicPlanConflictError extends Error {}
+
 const planKey = (graphic: PlannedGraphic) =>
 	graphic.key ??
 	`${graphic.kind}:${graphic.projectItemId}:${(graphic.action ?? graphic.passage.start).toFixed(3)}`;
@@ -1309,18 +1442,23 @@ export function planGraphicsPass({
 			});
 			continue;
 		}
-		const match =
-			records.find((record) => record.key === key) ??
-			records.find((record) =>
-				sameAction({
-					a: {
-						kind: record.kind,
-						projectItemId: record.action.projectItemId,
-						action: record.action.time,
-					},
-					b: identity,
-				}),
+		const keyMatch = records.find((record) => record.key === key);
+		const actionMatch = records.find((record) =>
+			sameAction({
+				a: {
+					kind: record.kind,
+					projectItemId: record.action.projectItemId,
+					action: record.action.time,
+				},
+				b: identity,
+			}),
+		);
+		if (keyMatch && actionMatch && keyMatch.id !== actionMatch.id) {
+			throw new GraphicPlanConflictError(
+				`Graphic key "${key}" belongs to a different graphic than this action. Use "${actionMatch.key}" to update the graphic on this action, or keep "${key}" on its original action.`,
 			);
+		}
+		const match = keyMatch ?? actionMatch;
 		if (match && (matched.has(match.id) || match.kind !== graphic.kind)) {
 			report({
 				status: "skip_duplicate",
@@ -1341,7 +1479,7 @@ export function planGraphicsPass({
 			});
 			continue;
 		}
-		const anchor = locateSourceTime({
+		const { anchor, covered } = resolveSourceTime({
 			tracks,
 			projectItemId: graphic.projectItemId,
 			sourceTime: action,
@@ -1351,7 +1489,9 @@ export function planGraphicsPass({
 			report({
 				status: "skip_not_in_cut",
 				...(match && { id: match.id }),
-				reason: `The recording's ${action.toFixed(2)} s isn't on the sequence's picture.`,
+				reason: covered
+					? `Another picture clip covers the recording's action at ${action.toFixed(2)} s.`
+					: `The recording's ${action.toFixed(2)} s isn't on the sequence's picture.`,
 			});
 			continue;
 		}
@@ -1410,6 +1550,10 @@ export function planGraphicsPass({
 			passage,
 			action: { projectItemId: graphic.projectItemId, time: action },
 			...(graphic.target && { target: graphic.target }),
+			sourceInterval: {
+				start: shownFrom,
+				end: shownFrom + values.duration * rate,
+			},
 			planned: values,
 		};
 		const record: GraphicRecord = match
