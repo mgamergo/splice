@@ -162,6 +162,7 @@ function PreviewCanvas({
 			width: nativeWidth,
 			height: nativeHeight,
 			fps: activeProject.settings.fps,
+			keyFrameFirst: true,
 		});
 	}, [nativeWidth, nativeHeight, activeProject.settings.fps]);
 
@@ -206,7 +207,9 @@ function PreviewCanvas({
 		if (
 			frame === lastFrameRef.current &&
 			renderTree === lastSequenceRef.current &&
-			renderer.isOutputCurrent()
+			renderer.isOutputCurrent() &&
+			// A scrub showed a key frame; render again as the exact one decodes.
+			!renderer.videoCache.isRefining()
 		) {
 			return;
 		}

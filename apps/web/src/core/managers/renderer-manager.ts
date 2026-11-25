@@ -5,11 +5,10 @@ import type { RootNode } from "@/services/renderer/nodes/root-node";
 import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SequenceExporter } from "@/services/renderer/sequence-exporter";
+import type { StreamTargetChunk } from "mediabunny";
 import { buildScene } from "@/services/renderer/scene-builder";
-import {
-	createTimelineAudioBuffer,
-	createTimelineAudioReader,
-} from "@/media/audio";
+import { createTimelineAudioReader } from "@/media/audio";
+import { MAX_TRUE_PEAK_DBTP } from "@splice/bridge/ops";
 import { calculateTotalDuration } from "@/timeline";
 import type { SequenceTracks } from "@/timeline/types";
 import { formatTimecode } from "opencut-wasm";
@@ -28,6 +27,13 @@ export interface ExportScene {
 	background: TBackground;
 	master?: Pick<MixLoudness, "gainDb" | "ceilingDbtp">;
 }
+
+/**
+ * The master an export applies before the mix has been measured: no gain,
+ * and the same true-peak limiter measured mixes use, so a clipping peak is
+ * caught without buffering the whole mix to find it.
+ */
+const UNMEASURED_MASTER = { gainDb: 0, ceilingDbtp: MAX_TRUE_PEAK_DBTP };
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -179,8 +185,11 @@ export class RendererManager {
 		onProgress,
 		signal,
 		scene,
+		stream,
 	}: {
 		options: ExportOptions;
+		/** Writes the file here as it renders instead of returning it. */
+		stream?: WritableStream<StreamTargetChunk>;
 		onProgress?: ({ progress }: { progress: number }) => void;
 		signal: AbortSignal;
 		/**
@@ -223,27 +232,16 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 
-			const reader =
-				includeAudio && master
-					? createTimelineAudioReader({
-							tracks,
-							projectItems,
-							duration,
-							signal,
-						})
-					: null;
-			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio && !master) {
-				onProgress?.({ progress: 0.05 });
-				audioBuffer = await createTimelineAudioBuffer({
-					tracks,
-					projectItems,
-					duration,
-					signal,
-					master,
-				});
-			}
-			signal.throwIfAborted();
+			// Audio streams in second by second beside the frames, so a long
+			// sequence starts rendering at once and never holds its whole mix.
+			const reader = includeAudio
+				? createTimelineAudioReader({
+						tracks,
+						projectItems,
+						duration,
+						signal,
+					})
+				: null;
 
 			const sequence = buildScene({
 				tracks,
@@ -261,32 +259,26 @@ export class RendererManager {
 				format,
 				quality,
 				shouldIncludeAudio: !!includeAudio,
-				audioBuffer: audioBuffer || undefined,
-				audioBlocks: master && reader ? reader.blocks({ master }) : undefined,
+				audioBlocks: reader?.blocks({ master: master ?? UNMEASURED_MASTER }),
+				stream,
 				signal,
 			});
 
-			exporter.on("progress", (progress) => {
-				const adjustedProgress = includeAudio
-					? 0.05 + progress * 0.95
-					: progress;
-				onProgress?.({ progress: adjustedProgress });
-			});
+			exporter.on("progress", (progress) => onProgress?.({ progress }));
 
-			const buffer = await exporter.export({ rootNode: sequence });
+			const exported = await exporter.export({ rootNode: sequence });
 
 			if (signal.aborted) {
 				return { success: false, cancelled: true };
 			}
 
-			if (!buffer) {
+			if (!exported) {
 				return { success: false, error: "Export failed to produce buffer" };
 			}
 
-			return {
-				success: true,
-				buffer,
-			};
+			return "buffer" in exported
+				? { success: true, buffer: exported.buffer, encoder: exported.encoder }
+				: { success: true, streamed: true, encoder: exported.encoder };
 		} catch (error) {
 			if (signal.aborted) {
 				return { success: false, cancelled: true };

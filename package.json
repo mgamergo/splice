@@ -1,6 +1,9 @@
 {
   "name": "splice",
-  "packageManager": "bun@1.2.18",
+  "packageManager": "bun@1.4.4",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -13,13 +16,14 @@
     "typecheck": "tsc --noEmit -p apps/web && tsc --noEmit -p apps/server && tsc --noEmit -p packages/bridge",
     "test": "bun test",
     "splice": "bun apps/server/src/cli.ts",
-    "splice:mcp": "bun apps/server/src/cli.ts mcp"
+    "splice:mcp": "bun apps/server/src/cli.ts mcp",
+    "bench": "bun bench/run.ts"
   },
   "dependencies": {
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",
     "next": "^16.1.3",
-    "opencut-wasm": "^0.2.10"
+    "opencut-wasm": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -30,6 +34,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.5.0",
+    "playwright-core": "1",
     "prettier": "^3.8.3",
     "turbo": "^2.8.20",
     "typescript": "^6.0.2",

@@ -16,6 +16,8 @@ export function isDiskMedia(data: MediaData): data is DiskMedia {
 	return !(data instanceof Blob) && data.kind === "disk";
 }
 
+const DISK_READ_CACHE_BYTES = 16 * 2 ** 20;
+
 /**
  * A mediabunny source that reads the bytes where they live. `signal` stops its
  * requests: disposing the Input alone leaves a request that is still waiting
@@ -31,6 +33,11 @@ export function createMediaSource({
 	if (!isDiskMedia(data)) return new BlobSource(data);
 	return new UrlSource(data.url, {
 		requestInit: { credentials: "same-origin" },
+		// mediabunny caches 64 MiB per open file by default, and playback,
+		// waveforms and export each open their own. `splice` serves the file
+		// from local disk, so a re-read is cheap; 16 MiB still holds seconds
+		// of even a 50 Mbps camera file.
+		maxCacheSize: DISK_READ_CACHE_BYTES,
 		// The default retries forever, which a missing file would hit.
 		getRetryDelay: (previousAttempts) =>
 			!signal?.aborted && previousAttempts < 3 ? 0.5 : null,

@@ -77,3 +77,33 @@ export async function uploadExportFile({
 		offset += chunk.size;
 	} while (offset < body.size);
 }
+
+/**
+ * A stream mediabunny writes an MP4 into as it renders. Each write lands at
+ * its byte position in `splice`'s staging folder, so the tab never holds the
+ * file: an hour of video costs the same memory as a minute.
+ */
+export function createExportFileStream({
+	exportId,
+	kind,
+	signal,
+}: {
+	exportId: string;
+	kind: ExportFileKind;
+	signal?: AbortSignal;
+}): WritableStream<{ data: Uint8Array<ArrayBuffer>; position: number }> {
+	return new WritableStream({
+		async write({ data, position }) {
+			const response = await fetch(
+				`${BRIDGE_PATHS.api}/exports/${exportId}/${kind}?offset=${position}&patch=1`,
+				{
+					method: "PUT",
+					headers: { authorization: authorization() },
+					body: data,
+					signal,
+				},
+			);
+			await readResult(response);
+		},
+	});
+}

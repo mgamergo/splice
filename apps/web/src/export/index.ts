@@ -42,6 +42,10 @@ export const DELIVERY_STEP_LABELS: Record<DeliveryStep, string> = {
 export interface ExportResult {
 	success: boolean;
 	buffer?: ArrayBuffer;
+	/** The file went to the stream the export was given, as it rendered. */
+	streamed?: boolean;
+	/** Whether the GPU's video encoder was asked for. */
+	encoder?: "hardware" | "default";
 	error?: string;
 	cancelled?: boolean;
 	/** The step a Horizontal export failed at. */

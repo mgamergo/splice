@@ -67,7 +67,9 @@ import type { SpliceConfig } from "./config";
 import { invalidParams } from "./transcription";
 import { createRpcClient, RpcCallError, type RpcCall } from "./rpc-client";
 import { readSession } from "./session";
+import { rm } from "node:fs/promises";
 import { startDetached } from "./background";
+import { writeLaunchEnv } from "./launch-env";
 import { detectPausesInput } from "./pauses";
 import { transcribeInput, transcribeStatusInput } from "./transcription";
 import {
@@ -1408,19 +1410,26 @@ export async function connectToSplice({
 }): Promise<RpcCall> {
 	const origin = `http://127.0.0.1:${config.port}`;
 	if (!(await isSpliceRunning({ origin }))) {
-		// The same Bun that runs this, so nothing depends on `bun` being on PATH.
-		await startDetached({
-			command: process.execPath,
-			args: [`${import.meta.dir}/cli.ts`, "serve"],
-		});
-		const deadline = Date.now() + START_TIMEOUT_MS;
-		while (!(await isSpliceRunning({ origin }))) {
-			if (Date.now() > deadline) {
-				throw new Error(
-					`splice didn't start on port ${config.port}. Start it by hand with \`bun run splice\`.`,
-				);
+		const launchEnv = await writeLaunchEnv();
+		try {
+			// The same Bun that runs this, so nothing depends on `bun` being on PATH.
+			await startDetached({
+				command: process.execPath,
+				args: [`${import.meta.dir}/cli.ts`, "serve", "--launch-env", launchEnv],
+				outsideJob: true,
+			});
+			const deadline = Date.now() + START_TIMEOUT_MS;
+			while (!(await isSpliceRunning({ origin }))) {
+				if (Date.now() > deadline) {
+					throw new Error(
+						`splice didn't start on port ${config.port}. Start it by hand with \`bun run splice\`.`,
+					);
+				}
+				await Bun.sleep(500);
 			}
-			await Bun.sleep(500);
+		} finally {
+			// splice deletes it on reading; this covers a start that failed.
+			await rm(launchEnv, { force: true });
 		}
 	}
 	const deadline = Date.now() + 10_000;

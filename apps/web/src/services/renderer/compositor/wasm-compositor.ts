@@ -44,6 +44,10 @@ class WasmCompositor {
 	private initializedSize: { width: number; height: number } | null = null;
 	private cache = new Map<string, RenderedCacheEntry | ExternalCacheEntry>();
 	private framesRendered = 0;
+	/** Whether the GPU backend takes VideoFrames and bitmaps as they are. */
+	private directUploads = true;
+	/** Canvases that sources the GPU can't take are drawn into, reused per texture. */
+	private uploadCanvases = new Map<string, OffscreenCanvas>();
 
 	ensureInitialized({ width, height }: { width: number; height: number }) {
 		if (!this.canvas) {
@@ -76,6 +80,7 @@ class WasmCompositor {
 			if (!nextIds.has(previousId)) {
 				releaseTexture(previousId);
 				this.cache.delete(previousId);
+				this.uploadCanvases.delete(previousId);
 			}
 		}
 
@@ -115,18 +120,44 @@ class WasmCompositor {
 			return;
 		}
 
+		const { source } = texture;
+		// A frame a later read already moved past is closed; the texture keeps
+		// its last upload rather than failing the whole frame.
+		if (isClosedVideoFrame(source)) return;
+
 		incrementCounter({ name: "textureUpload" });
 		incrementCounter({
 			name: "textureUploadPixels",
 			by: texture.width * texture.height,
 		});
+		if (isDirectSource(source) && this.directUploads) {
+			try {
+				uploadTexture({
+					id: texture.id,
+					source,
+					width: texture.width,
+					height: texture.height,
+				});
+				this.cache.set(texture.id, {
+					kind: "external",
+					source,
+					width: texture.width,
+					height: texture.height,
+				});
+				return;
+			} catch (error) {
+				// WebGL can't copy video frames; draw them into a canvas from now on.
+				console.warn("Uploading video frames directly failed:", error);
+				this.directUploads = false;
+			}
+		}
 		uploadTexture({
 			id: texture.id,
-			source: ensureOffscreenCanvas({
-				source: texture.source,
+			source: this.uploadCanvas({
+				id: texture.id,
+				source,
 				width: texture.width,
 				height: texture.height,
-				label: `texture upload ${texture.id}`,
 			}),
 			width: texture.width,
 			height: texture.height,
@@ -137,6 +168,30 @@ class WasmCompositor {
 			width: texture.width,
 			height: texture.height,
 		});
+	}
+
+	private uploadCanvas({
+		id,
+		source,
+		width,
+		height,
+	}: {
+		id: string;
+		source: CanvasImageSource;
+		width: number;
+		height: number;
+	}): OffscreenCanvas {
+		if (source instanceof OffscreenCanvas) return source;
+		let canvas = this.uploadCanvases.get(id);
+		if (!canvas || canvas.width !== width || canvas.height !== height) {
+			canvas = createBackingCanvas({ width, height });
+			this.uploadCanvases.set(id, canvas);
+		}
+		const context = canvas.getContext("2d");
+		if (!context) throw new Error(`Failed to get 2d context for texture upload ${id}`);
+		context.clearRect(0, 0, width, height);
+		context.drawImage(source, 0, 0, width, height);
+		return canvas;
 	}
 
 	private syncRenderedTexture(texture: RenderedTextureDescriptor) {
@@ -204,31 +259,25 @@ function createBackingCanvas({
 	return new OffscreenCanvas(width, height);
 }
 
-function ensureOffscreenCanvas({
-	source,
-	width,
-	height,
-	label,
-}: {
-	source: CanvasImageSource;
-	width: number;
-	height: number;
-	label: string;
-}): OffscreenCanvas {
-	if (source instanceof OffscreenCanvas) {
-		return source;
-	}
+/** Sources the GPU copies as they are, without drawing them into a canvas. */
+function isDirectSource(
+	source: CanvasImageSource,
+): source is VideoFrame | ImageBitmap | OffscreenCanvas {
+	return (
+		(typeof VideoFrame !== "undefined" && source instanceof VideoFrame) ||
+		(typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) ||
+		(typeof OffscreenCanvas !== "undefined" && source instanceof OffscreenCanvas)
+	);
+}
 
-	if (typeof OffscreenCanvas === "undefined") {
-		throw new Error(`OffscreenCanvas is required for ${label}`);
-	}
-
-	const canvas = new OffscreenCanvas(width, height);
-	const context = canvas.getContext("2d");
-	if (!context) {
-		throw new Error(`Failed to get 2d context for ${label}`);
-	}
-	context.clearRect(0, 0, width, height);
-	context.drawImage(source, 0, 0, width, height);
-	return canvas;
+/**
+ * A closed VideoFrame reports no size; copying from it would throw inside
+ * the GPU core. (Its format is null too, but so is a valid hardware frame's.)
+ */
+function isClosedVideoFrame(source: CanvasImageSource): boolean {
+	return (
+		typeof VideoFrame !== "undefined" &&
+		source instanceof VideoFrame &&
+		source.codedWidth === 0
+	);
 }

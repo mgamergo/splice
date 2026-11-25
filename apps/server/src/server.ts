@@ -532,6 +532,7 @@ export function startServer({
 					exportId: upload[1],
 					kind,
 					offset,
+					patch: url.searchParams.get("patch") === "1",
 					body: request.body,
 				});
 				return Response.json(rpcResult({ id: null, result }));

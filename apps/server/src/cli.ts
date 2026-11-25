@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { resolveConfig } from "./config";
+import { applyLaunchEnv } from "./launch-env";
 import { runMcp } from "./mcp";
 import { serve } from "./serve";
 import { printLink } from "./link";
@@ -44,7 +45,22 @@ async function relaunchWithoutProxyForLoopback(): Promise<boolean> {
 	process.exit(await child.exited);
 }
 
-async function main(argv: string[]) {
+/**
+ * The oldest Bun Splice runs on. 1.2 crashes whisper's CPU fallback on
+ * Windows, which only shows deep into a transcription.
+ */
+const MINIMUM_BUN = "1.4.2";
+
+async function main(input: string[]) {
+	if (Bun.semver.order(Bun.version, MINIMUM_BUN) < 0) {
+		console.error(
+			`Splice needs Bun ${MINIMUM_BUN} or later; this is Bun ${Bun.version}. Run \`bun upgrade\` and start it again.`,
+		);
+		process.exit(1);
+	}
+	const argv = await applyLaunchEnv({ argv: input });
+	// A relaunch below repeats the arguments; the file is gone by then.
+	process.argv = [...process.argv.slice(0, 2), ...argv];
 	if (await relaunchWithoutProxyForLoopback()) {
 		return;
 	}

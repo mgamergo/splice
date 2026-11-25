@@ -22,6 +22,7 @@ import type {
 	TTimelineViewState,
 } from "@/project/types";
 import type {
+	DeliveryStep,
 	ExportOptions,
 	ExportQuality,
 	ExportResult,
@@ -34,9 +35,12 @@ import {
 	deliveryScene,
 	type DeliveryInput,
 	type DeliverySnapshot,
+	abortDelivery,
+	beginDelivery,
+	finishDelivery,
 	prepareDelivery,
-	publishDelivery,
 } from "@/export/deliver";
+import { createExportFileStream, uploadExportFile } from "@/bridge/splice-api";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
 import { generateUUID } from "@/utils/id";
@@ -90,7 +94,9 @@ export class ProjectManager {
 	private delivery: {
 		input: DeliveryInput | DeliverySnapshot;
 		quality: ExportQuality;
-		video: ArrayBuffer | null;
+		/** The staged export whose MP4 is fully written, kept to retry publishing. */
+		staged: string | null;
+		encoder?: ExportResult["encoder"];
 	} | null = null;
 
 	constructor(private editor: EditorCore) {}
@@ -557,10 +563,11 @@ export class ProjectManager {
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
+		this.dropDelivery();
 		this.delivery = {
 			input,
 			quality,
-			video: null,
+			staged: null,
 		};
 		return this.runDelivery();
 	}
@@ -588,10 +595,10 @@ export class ProjectManager {
 		if (!delivery) return { success: false, error: "Nothing to export." };
 		this.exportState = {
 			isExporting: true,
-			progress: delivery.video ? 0.9 : 0,
+			progress: delivery.staged ? 0.95 : 0,
 			result: null,
-			step: delivery.video
-				? "upload-video"
+			step: delivery.staged
+				? "upload-captions"
 				: "srt" in delivery.input || delivery.input.shortStyle
 					? "render"
 					: "spellings",
@@ -620,9 +627,16 @@ export class ProjectManager {
 					update({ step: "render" });
 				}
 				const snapshot = delivery.input;
-				if (!delivery.video) {
+				const onStep = (step: DeliveryStep) => update({ step });
+				if (!delivery.staged) {
+					let exportId: string | null = null;
 					try {
 						await verifySequenceMedia({ ...snapshot.scene, signal });
+						const begun = await beginDelivery({ snapshot, signal, onStep });
+						if ("committed" in begun)
+							return { success: true, record: begun.committed };
+						exportId = begun.exportId;
+						const staging = exportId;
 						const rendered = await this.editor.renderer.exportProject({
 							options: {
 								format: "mp4",
@@ -632,41 +646,73 @@ export class ProjectManager {
 							},
 							signal,
 							scene: snapshot.scene,
+							// The MP4 goes to Exports' staging folder as it renders.
+							stream: createExportFileStream({
+								exportId: staging,
+								kind: "mp4",
+								signal,
+							}),
 							// Rendering is most of the work; writing the files is the rest.
 							onProgress: ({ progress }) =>
-								update({ progress: progress * 0.9 }),
+								update({ progress: progress * 0.95 }),
 						});
-						if (rendered.cancelled) return rendered;
+						if (rendered.cancelled) {
+							abortDelivery({ exportId: staging });
+							return rendered;
+						}
 						// An unavailable source can also make a decoder fail or skip content.
 						await verifySequenceMedia({ ...snapshot.scene, signal });
-						if (!rendered.success || !rendered.buffer)
+						if (!rendered.success || (!rendered.streamed && !rendered.buffer))
 							throw new Error(
 								rendered.error ?? "The render produced no video.",
 							);
-						delivery.video = rendered.buffer;
+						if (rendered.buffer) {
+							const video = rendered.buffer;
+							onStep("upload-video");
+							await uploadExportFile({
+								exportId: staging,
+								kind: "mp4",
+								body: new Blob([video], { type: "video/mp4" }),
+								signal,
+							});
+						}
+						delivery.staged = staging;
+						delivery.encoder = rendered.encoder;
 					} catch (error) {
+						if (exportId) abortDelivery({ exportId });
 						if (signal.aborted) return { success: false, cancelled: true };
 						return {
 							success: false,
 							error: error instanceof Error ? error.message : String(error),
-							failedStep: "render",
+							failedStep:
+								error instanceof DeliveryError ? error.step : "render",
 						};
 					}
 				}
 				try {
-					const record = await publishDelivery({
+					const record = await finishDelivery({
 						snapshot,
-						video: delivery.video,
+						exportId: delivery.staged,
 						signal,
-						onStep: (step) => update({ step }),
+						onStep,
 					});
-					return { success: true, record };
+					return { success: true, record, encoder: delivery.encoder };
 				} catch (error) {
+					const failedStep =
+						error instanceof DeliveryError ? error.step : "publish";
+					// A cancel drops the delivery, so its staging goes too. A publish
+					// may have gone through with its answer lost: drop the staging
+					// (splice ignores the abort once publishing owns it) and let Retry
+					// ask begin, which knows. A failed SRT write keeps it for Retry.
+					if (signal.aborted || failedStep === "publish") {
+						abortDelivery({ exportId: delivery.staged });
+						delivery.staged = null;
+					}
 					if (signal.aborted) return { success: false, cancelled: true };
 					return {
 						success: false,
 						error: error instanceof Error ? error.message : String(error),
-						failedStep: error instanceof DeliveryError ? error.step : "publish",
+						failedStep,
 					};
 				}
 			},
@@ -698,6 +744,13 @@ export class ProjectManager {
 		return result;
 	}
 
+	/** Forgets the delivery kept for Retry, and the MP4 it staged. */
+	private dropDelivery(): void {
+		const staged = this.delivery?.staged;
+		if (staged) abortDelivery({ exportId: staged });
+		this.delivery = null;
+	}
+
 	cancelExport(): void {
 		this.exportJobs.cancel();
 	}
@@ -712,7 +765,7 @@ export class ProjectManager {
 	}
 
 	clearExportState(): void {
-		this.delivery = null;
+		this.dropDelivery();
 		this.exportState = IDLE_EXPORT_STATE;
 		this.notify();
 	}

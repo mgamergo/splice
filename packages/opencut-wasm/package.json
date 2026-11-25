@@ -1,0 +1,14 @@
+{
+	"name": "opencut-wasm",
+	"version": "0.2.10-splice.1",
+	"description": "OpenCut's compositor and timing core, compiled to WebAssembly, with Splice's changes. Built by build.sh.",
+	"type": "module",
+	"license": "MIT",
+	"private": true,
+	"main": "opencut_wasm.js",
+	"types": "opencut_wasm.d.ts",
+	"sideEffects": [
+		"./opencut_wasm.js",
+		"./snippets/*"
+	]
+}

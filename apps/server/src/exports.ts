@@ -15,6 +15,7 @@ import type { Dirent } from "node:fs";
 import {
 	appendFile,
 	mkdir,
+	open,
 	readdir,
 	readFile,
 	rename,
@@ -49,6 +50,8 @@ const openFolderWithDesktop: OpenFolder = (folder) =>
 					? "open"
 					: "xdg-open",
 		args: [folder],
+		// The file manager is the point: never start it hidden.
+		hidden: false,
 	});
 
 /** A file name stem that is valid on Windows, from the project name and time. */
@@ -279,17 +282,21 @@ export function createExportStore({
 
 		/**
 		 * Writes one chunk of a staged file. Chunks arrive in
-		 * order; offset 0 starts the file again.
+		 * order; offset 0 starts the file again. A `patch` writes at `offset`
+		 * within what is already written, or appends, without truncating:
+		 * an MP4 written as it renders goes back to fill in its index.
 		 */
 		async write({
 			exportId,
 			kind,
 			offset,
+			patch = false,
 			body,
 		}: {
 			exportId: string;
 			kind: ExportFileKind;
 			offset: number;
+			patch?: boolean;
 			body: ReadableStream<Uint8Array> | null;
 		}) {
 			pendingExport({ exportId });
@@ -300,11 +307,22 @@ export function createExportStore({
 				if (kind === "srt" && entry.source.includeSrt === false)
 					throw invalidParams("This export does not include an SRT.");
 				const written = entry.written.get(kind) ?? 0;
-				if (offset !== 0 && offset !== written)
+				if (patch ? offset > written : offset !== 0 && offset !== written)
 					throw invalidParams(
 						`The ${kind.toUpperCase()} continues at byte ${written}, not ${offset}.`,
 					);
 				const file = join(entry.dir, kind);
+				if (patch) {
+					const handle = await open(file, written === 0 ? "w" : "r+");
+					try {
+						await handle.write(data, 0, data.length, offset);
+					} finally {
+						await handle.close();
+					}
+					const bytes = Math.max(written, offset + data.length);
+					entry.written.set(kind, bytes);
+					return { bytes };
+				}
 				if (offset === 0) await writeFile(file, data);
 				else await appendFile(file, data);
 				entry.written.set(kind, offset + data.length);

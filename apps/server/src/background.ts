@@ -6,32 +6,77 @@ function powershellQuote(value: string): string {
 }
 
 /**
+ * The PowerShell that starts `command` on Windows. `outsideJob` creates it
+ * through WMI, whose provider host is its parent: agent hosts run MCP servers
+ * in a job object and kill the whole job on restart, and a process started
+ * any other way, Start-Process included, stays in its parent's job. Where WMI
+ * is unavailable it falls back to Start-Process.
+ */
+export function windowsLaunchScript({
+	command,
+	args,
+	hidden,
+	outsideJob,
+	cwd = process.cwd(),
+}: {
+	command: string;
+	args: string[];
+	hidden: boolean;
+	outsideJob: boolean;
+	/** WMI would otherwise start the process in System32. */
+	cwd?: string;
+}): string {
+	const startProcess = `Start-Process${hidden ? " -WindowStyle Hidden" : ""} -FilePath ${powershellQuote(command)}${
+		args.length
+			? ` -ArgumentList ${args.map((arg) => powershellQuote(`"${arg}"`)).join(",")}`
+			: ""
+	}`;
+	if (!outsideJob) return `$ErrorActionPreference = 'Stop'; ${startProcess}`;
+	const commandLine = [command, ...args]
+		.map((part) => `"${part.replaceAll('"', '\\"')}"`)
+		.join(" ");
+	return [
+		"$ErrorActionPreference = 'Stop'",
+		"try {",
+		`  $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]${hidden ? 0 : 1} }`,
+		`  $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${powershellQuote(commandLine)}; CurrentDirectory = ${powershellQuote(cwd)}; ProcessStartupInformation = $startup }`,
+		"  if ($created.ReturnValue -ne 0) { throw \"Win32_Process.Create returned $($created.ReturnValue)\" }",
+		"} catch {",
+		`  ${startProcess}`,
+		"}",
+	].join("; ").replaceAll("{; ", "{ ").replaceAll("; }", " }");
+}
+
+/**
  * Starts a process that outlives the one starting it. Agent hosts restart MCP
  * servers by killing their whole process tree, which would take a plain child
- * with it. On Windows, PowerShell's Start-Process makes the process a child of a
- * short-lived PowerShell instead of this one; elsewhere a new session does the same.
- * Resolves once the process has started; rejects if it couldn't be.
+ * with it. On Windows, PowerShell starts it (see `windowsLaunchScript`);
+ * elsewhere a new session does the same. `hidden: false` shows its window,
+ * for a file manager. Resolves once the process has started; rejects if it
+ * couldn't be.
  */
 export function startDetached({
 	command,
 	args,
+	hidden = true,
+	outsideJob = false,
 }: {
 	command: string;
 	args: string[];
+	hidden?: boolean;
+	/** Windows: leave the job object the agent host runs this process in. */
+	outsideJob?: boolean;
 }): Promise<void> {
 	if (process.platform === "win32") {
-		const argumentList = args
-			.map((arg) => powershellQuote(`"${arg}"`))
-			.join(",");
 		// Not `detached`: a detached PowerShell gets no console and exits without
-		// running the command. It exits right after Start-Process either way.
+		// running the command. It exits right after starting it either way.
 		const child = spawn(
 			"powershell.exe",
 			[
 				"-NoProfile",
 				"-NonInteractive",
 				"-Command",
-				`$ErrorActionPreference = 'Stop'; Start-Process -WindowStyle Hidden -FilePath ${powershellQuote(command)} -ArgumentList ${argumentList}`,
+				windowsLaunchScript({ command, args, hidden, outsideJob }),
 			],
 			{ stdio: "ignore", windowsHide: true },
 		);

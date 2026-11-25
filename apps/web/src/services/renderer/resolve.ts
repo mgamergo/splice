@@ -19,7 +19,7 @@ import {
 } from "@/text/measure-clip";
 import { resolveColorAtTime, resolveOpacityAtTime } from "@/animation/values";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
-import type { VideoCache } from "@/services/video-cache/service";
+import type { DecodedFrame, VideoCache } from "@/services/video-cache/service";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
 import {
@@ -46,12 +46,17 @@ import type {
 } from "./nodes/visual-node";
 
 /** The source frame a video clip shows at `clipTime`. */
-function getVideoFrameAt({
+async function getVideoFrameAt({
 	cache,
 	params,
 	clipTime,
+	keyFrameFirst,
+	frames,
 }: {
 	cache: VideoCache;
+	keyFrameFirst: boolean;
+	/** Collects the frame, which the render releases once it has used it. */
+	frames: DecodedFrame[];
 	params: Pick<
 		VideoNode["params"],
 		"mediaId" | "file" | "trimStart" | "retime"
@@ -61,32 +66,40 @@ function getVideoFrameAt({
 	const sourceTimeTicks =
 		params.trimStart +
 		getSourceTimeAtClipTime({ clipTime, retime: params.retime });
-	return cache.getFrameAt({
+	const frame = await cache.getFrameAt({
 		mediaId: params.mediaId,
 		file: params.file,
 		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+		keyFrameFirst,
 	});
+	if (frame) frames.push(frame);
+	return frame;
 }
 
 type ResolveContext = {
 	renderer: CanvasRenderer;
 	time: number;
+	frames: DecodedFrame[];
 };
 
 export async function resolveRenderTree({
 	node,
 	renderer,
 	time,
+	frames,
 }: {
 	node: AnyBaseNode;
 	renderer: CanvasRenderer;
 	time: number;
+	/** Receives every video frame the tree shows, for the render to release. */
+	frames: DecodedFrame[];
 }): Promise<void> {
 	await resolveNode({
 		node,
 		context: {
 			renderer,
 			time,
+			frames,
 		},
 	});
 }
@@ -221,6 +234,8 @@ async function resolveVideoNode({
 
 	const frame = await getVideoFrameAt({
 		cache: context.renderer.videoCache,
+		keyFrameFirst: context.renderer.keyFrameFirst,
+		frames: context.frames,
 		params: node.params,
 		clipTime,
 	});
@@ -231,8 +246,8 @@ async function resolveVideoNode({
 	const visualState = resolveVisualState({
 		params: node.params,
 		context,
-		sourceWidth: frame.canvas.width,
-		sourceHeight: frame.canvas.height,
+		sourceWidth: frame.width,
+		sourceHeight: frame.height,
 	});
 	if (!visualState) {
 		return null;
@@ -240,9 +255,9 @@ async function resolveVideoNode({
 
 	return {
 		...visualState,
-		source: frame.canvas,
-		sourceWidth: frame.canvas.width,
-		sourceHeight: frame.canvas.height,
+		source: frame.source,
+		sourceWidth: frame.width,
+		sourceHeight: frame.height,
 	};
 }
 
@@ -408,6 +423,8 @@ async function resolveBlurBackgroundNode({
 		node,
 		clipTime,
 		cache: context.renderer.videoCache,
+		keyFrameFirst: context.renderer.keyFrameFirst,
+		frames: context.frames,
 	});
 	if (!backdropSource) {
 		return null;
@@ -434,21 +451,31 @@ async function resolveBackdropSource({
 	node,
 	clipTime,
 	cache,
+	keyFrameFirst,
+	frames,
 }: {
 	node: BlurBackgroundNode;
 	clipTime: number;
 	cache: VideoCache;
+	keyFrameFirst: boolean;
+	frames: DecodedFrame[];
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
-		const frame = await getVideoFrameAt({ cache, params: node.params, clipTime });
+		const frame = await getVideoFrameAt({
+			cache,
+			keyFrameFirst,
+			frames,
+			params: node.params,
+			clipTime,
+		});
 		if (!frame) {
 			return null;
 		}
 
 		return {
-			source: frame.canvas,
-			width: frame.canvas.width,
-			height: frame.canvas.height,
+			source: frame.source,
+			width: frame.width,
+			height: frame.height,
 		};
 	}
 
