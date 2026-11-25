@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor, s, videoClip } from "@/agent/__tests__/fixtures";
+import { setCaptionSources } from "@/captions/project-captions";
 import { createTabHandlers } from "@/bridge/handlers";
 import type { ProjectItem } from "@/media/types";
 import { buildDefaultSequence } from "@/timeline/sequences";
@@ -14,6 +15,9 @@ import {
 	envelopeAt,
 	musicEnvelope,
 	speechPassages,
+	tracksWithMusicDucking,
+	musicTimingFingerprint,
+	isCurrentOverride,
 } from "../music";
 
 const tracks = {
@@ -218,4 +222,130 @@ test("a music write refuses a stale revision and checks whether the agent was st
 	blocked = true;
 	await expect(agentEdit).rejects.toThrow("The creator stopped the agent");
 	expect(editor.sequences.getActiveSequence().mix).toBeUndefined();
+});
+
+test("recomputes ducking after a take swap, flags old overrides and preserves trimmed music and creator keys", async () => {
+	const editor = setUpEditor({ tracks });
+	const projectItems = [
+		item({ id: "rec", type: "video", duration: 10 }),
+		item({ id: "alternate", type: "video", duration: 10 }),
+		item({ id: "bed", type: "audio", duration: 8 }),
+	];
+	editor.media.setProjectItems({ projectItems });
+	const sources = [
+		{ projectItemId: "rec", words: [{ start: 2, end: 3, text: "early" }] },
+		{
+			projectItemId: "alternate",
+			words: [{ start: 6, end: 7, text: "later" }],
+		},
+	];
+	setCaptionSources({ editor, sources });
+	const api = new EditorApi(editor);
+	const revision = () => ({ expectedRevision: api.getRevision() });
+	expect(
+		await api.addMusic({
+			request: {
+				...revision(),
+				projectItemId: "bed",
+				levelDb: -10,
+				fadeInSeconds: 0,
+				fadeOutSeconds: 0,
+				overrides: [{ start: 6, end: 7 }],
+			},
+		}),
+	).toMatchObject({ ok: true });
+	const current = () => editor.sequences.getActiveSequence();
+	const gainAt = (localTime: number) =>
+		resolveEffectiveAudioGain({
+			clip: tracksWithMusicDucking({
+				sequence: current(),
+				projectItems,
+				projectSources: sources,
+			}).audio[0].clips[0],
+			localTime,
+		});
+	expect(gainAt(4.5)).toBeCloseTo(10 ** (-10 / 20));
+	const saved = current();
+	const music = saved.tracks.audio[0];
+	const bed = music.clips[0];
+	const manual: typeof bed = {
+		...bed,
+		duration: s(7.5),
+		trimEnd: s(0.5),
+		animations: {
+			volume: {
+				keys: [
+					{
+						id: "manual-level",
+						time: s(2),
+						value: -12,
+						segmentToNext: "linear",
+						tangentMode: "auto",
+					},
+				],
+			},
+		},
+	};
+	editor.sequences.updateSequenceTracks({
+		tracks: {
+			...saved.tracks,
+			main: {
+				...saved.tracks.main,
+				clips: saved.tracks.main.clips.map((clip) => ({
+					...clip,
+					mediaId: "alternate",
+					duration: s(7.5),
+				})),
+			},
+			audio: [{ ...music, clips: [manual] }],
+		},
+	});
+	expect(gainAt(4.5)).toBeCloseTo(10 ** (-26 / 20));
+	// The old override would still hold the music at -26 dB here.
+	expect(gainAt(7.25)).toBeCloseTo(10 ** (-12 / 20));
+	const settings = current().mix?.music;
+	if (!settings) throw new Error("Expected music");
+	expect(
+		isCurrentOverride({
+			override: settings.overrides[0],
+			fingerprint: musicTimingFingerprint({
+				tracks: current().tracks,
+				music: settings,
+			}),
+		}),
+	).toBe(false);
+	expect(
+		await api.updateMusic({
+			request: {
+				...revision(),
+				overrides: [...settings.overrides, { start: 2, end: 2.5 }],
+			},
+		}),
+	).toMatchObject({ ok: true });
+	expect(current().tracks.audio[0].clips[0]).toBe(manual);
+	expect(gainAt(2.25)).toBeCloseTo(10 ** (-26 / 20));
+
+	expect(
+		await api.updateMusic({ request: { ...revision(), refit: true } }),
+	).toMatchObject({ ok: true });
+	expect(gainAt(7.25)).toBeCloseTo(10 ** (-10 / 20));
+});
+
+test("music_add rejects a stale Footage path request before it probes media", async () => {
+	const editor = setUpEditor({ tracks });
+	const api = new EditorApi(editor);
+	const stale = api.getRevision();
+	editor.command.bumpRevision();
+	const fetch = spyOn(globalThis, "fetch");
+	try {
+		expect(
+			await api.addMusic({
+				request: { path: "bed.wav", expectedRevision: stale },
+			}),
+		).toMatchObject({ ok: false, code: "REVISION_CONFLICT" });
+		expect(fetch).not.toHaveBeenCalled();
+		expect(editor.media.getProjectItems()).toEqual([]);
+	} finally {
+		fetch.mockRestore();
+	}
 });

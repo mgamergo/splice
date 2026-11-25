@@ -94,7 +94,7 @@ import {
 	markBestTake,
 	resolveTake,
 } from "@/timeline/markers/removal-takes";
-import { summarizeItem } from "@/media/import-disk";
+import { importDiskItems, summarizeItem } from "@/media/import-disk";
 import { generateUUID } from "@/utils/id";
 import { AddMarkerCommand } from "@/commands/sequence/add-marker";
 import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
@@ -652,11 +652,25 @@ export class EditorApi {
 		beforeWrite?: () => void;
 		edit: (check: () => void) => Promise<MusicReport>;
 	}) {
+		const projectId = this.editor.project.getActiveOrNull()?.metadata.id;
+		const generation = this.editor.media.getGeneration();
 		try {
 			const report = await edit(() => {
 				beforeWrite?.();
 				const conflict = this.checkWrite({ expectedRevision });
 				if (conflict) throw new WriteConflict(conflict);
+				if (
+					this.editor.project.getActiveOrNull()?.metadata.id !== projectId ||
+					this.editor.media.getGeneration() !== generation
+				) {
+					throw new WriteConflict({
+						ok: false,
+						code: "REVISION_CONFLICT",
+						message:
+							"The project changed. Re-read the sequence and plan again.",
+						revision: this.getRevision(),
+					});
+				}
 			});
 			return { ok: true as const, revision: this.getRevision(), ...report };
 		} catch (error) {
@@ -680,20 +694,50 @@ export class EditorApi {
 		if (conflict) return conflict;
 		const sequence = this.mixSequence(parsed.data);
 		if ("ok" in sequence) return sequence;
-		const { projectItemId, label = "Agent: add music", expectedRevision, sequenceId: _id, ...options } =
-			parsed.data;
+		const {
+			projectItemId,
+			path,
+			label = "Agent: add music",
+			expectedRevision,
+			sequenceId: _id,
+			...options
+		} = parsed.data;
 		return this.musicEdit({
 			expectedRevision,
 			beforeWrite,
-			edit: (check) =>
-				addMusic({
+			edit: async (check) => {
+				check();
+				let id = projectItemId;
+				if (path) {
+					id = this.editor.media
+						.getProjectItems()
+						.map(summarizeItem)
+						.find((item) => item.path === path && !item.missing)?.id;
+					if (!id) {
+						const { imported, failed } = await importDiskItems({
+							editor: this.editor,
+							paths: [path],
+							isBlocked: () => false,
+							beforeCommit: check,
+						});
+						check();
+						id = imported[0]?.id;
+						if (!id)
+							throw new MusicError(
+								failed[0]?.error ?? `Couldn't import ${path}.`,
+							);
+					}
+				}
+				if (!id) throw new MusicError("Pass either path or projectItemId.");
+				return addMusic({
 					editor: this.editor,
 					sequenceId: sequence.id,
-					projectItemId,
+					projectItemId: id,
 					options,
 					label,
 					check,
-				}),
+				});
+			},
 		});
 	}
 
@@ -817,7 +861,12 @@ export class EditorApi {
 			loudness: sequence.mix?.loudness
 				? {
 						...sequence.mix.loudness,
-						stale: isMixLoudnessStale({ sequence, projectItems: this.editor.media.getProjectItems() }),
+						stale: isMixLoudnessStale({
+							sequence,
+							projectItems: this.editor.media.getProjectItems(),
+							projectSources:
+								this.editor.project.getActiveOrNull()?.captions?.sources,
+						}),
 					}
 				: null,
 			pictureRepairs: pictureRepairs({ tracks: sequence.tracks }).map(

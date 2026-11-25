@@ -20,6 +20,7 @@ import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/timeline/audio-constants";
 import type {
 	AudioTrack,
 	SequenceTracks,
+	TSequence,
 	UploadAudioClip,
 } from "@/timeline/types";
 import { generateUUID } from "@/utils/id";
@@ -450,9 +451,11 @@ function fitMusicClips({
 function volumeKeys({
 	points,
 	clipStart,
+	generated = false,
 }: {
 	points: EnvelopePoint[];
 	clipStart: number;
+	generated?: boolean;
 }): ScalarAnimationKey[] {
 	const keys: ScalarAnimationKey[] = [];
 	for (const { time, db } of points) {
@@ -462,7 +465,7 @@ function volumeKeys({
 		// Two points a tick apart keep the later one.
 		if (keys.at(-1)?.time === at) keys.pop();
 		keys.push({
-			id: generateUUID(),
+			id: generated ? String(at) : generateUUID(),
 			time: at,
 			value: db,
 			segmentToNext: "linear",
@@ -473,18 +476,19 @@ function volumeKeys({
 }
 
 /**
- * The sequence with its music track fitted, faded and ducked from
- * `settings`, replacing what the music track held. A new music track goes
- * below the other audio tracks.
+ * Reports the ducking passages and optionally fits new music clips with
+ * fades and loop seams. A new track goes below the other audio tracks.
  */
 export function withMusic({
 	tracks,
 	settings,
 	item,
 	speech,
+	refit = true,
 }: {
 	tracks: SequenceTracks;
 	settings: MusicSettings;
+	refit?: boolean;
 	item: Pick<ProjectItem, "id" | "name" | "duration">;
 	speech: Passage[];
 }): { tracks: SequenceTracks; passages: Passage[] } {
@@ -493,21 +497,25 @@ export function withMusic({
 		throw new MusicError(
 			"The sequence is empty, so there is nothing to fit music to.",
 		);
+	const fingerprint = musicTimingFingerprint({ tracks, music: settings });
 	const passages = duckedPassages({
 		speech,
-		overrides: settings.overrides,
+		overrides: settings.overrides.filter((override) =>
+			isCurrentOverride({ override, fingerprint }),
+		),
 		holdPauseSeconds: settings.holdPauseSeconds,
 	});
-	const envelope = musicEnvelope({ passages, settings, length });
+	const existing = tracks.audio.find((track) =>
+		isMusicTrack({ track, music: settings }),
+	);
+	if (!refit) return { tracks, passages };
+	const envelope = musicEnvelope({ passages: [], settings, length });
 	const clips = fitMusicClips({
 		item,
 		length,
 		envelope,
 		levelDb: settings.levelDb,
 	});
-	const existing = tracks.audio.find((track) =>
-		isMusicTrack({ track, music: settings }),
-	);
 	const track: AudioTrack = existing
 		? { ...existing, clips }
 		: {
@@ -527,5 +535,139 @@ export function withMusic({
 				: [...tracks.audio, track],
 		},
 		passages,
+	};
+}
+
+/** Identifies the timing of the non-music source clips for absolute overrides. */
+export function musicTimingFingerprint({
+	tracks,
+	music,
+}: {
+	tracks: SequenceTracks;
+	music: MusicSettings;
+}): string {
+	const content = withoutMusic({ tracks, music });
+	const timings = [content.main, ...content.overlay, ...content.audio].flatMap(
+		({ clips }) =>
+			clips.flatMap((clip) =>
+				canClipHaveAudio(clip) &&
+				hasMediaId(clip) &&
+				(clip.type !== "video" || clip.isSourceAudioEnabled !== false)
+					? [
+							JSON.stringify([
+								clip.id,
+								clip.mediaId,
+								clip.startTime,
+								clip.trimStart,
+								clip.duration,
+								clip.retime?.rate,
+							]),
+						]
+					: [],
+			),
+	);
+	return fingerprintText(timings.sort().join("\n"));
+}
+
+export function fingerprintText(value: string): string {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index++) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return `${hash.toString(16)}-${value.length.toString(16)}`;
+}
+
+export function isCurrentOverride({
+	override,
+	fingerprint,
+}: {
+	override: MixOverride;
+	fingerprint: string;
+}): boolean {
+	return override.timelineFingerprint === fingerprint;
+}
+
+/** Derive the ducking layer from the edit being played. Creator keys stay on the clips. */
+export function tracksWithMusicDucking({
+	sequence,
+	projectItems,
+	projectSources = [],
+}: {
+	sequence: TSequence;
+	projectItems: ProjectItem[];
+	projectSources?: CaptionsRequest["sources"];
+}): SequenceTracks {
+	const { tracks, mix } = sequence;
+	const music = mix?.music;
+	if (!music) return tracks;
+	const sources = new Map<string, CaptionsRequest["sources"][number]>();
+	for (const source of [
+		...(music.fit?.sources ?? []),
+		...(sequence.captions?.sources ?? []),
+		...projectSources,
+	]) {
+		if (source.words.length) sources.set(source.projectItemId, source);
+	}
+	const fingerprint = musicTimingFingerprint({ tracks, music });
+	const { passages: speech } = speechPassages({
+		tracks,
+		projectItems,
+		sources: [...sources.values()],
+		music,
+	});
+	const passages = duckedPassages({
+		speech,
+		overrides: music.overrides.filter((override) =>
+			isCurrentOverride({ override, fingerprint }),
+		),
+		holdPauseSeconds: music.holdPauseSeconds,
+	});
+	const length = contentEndSeconds({ tracks, music });
+	const points = musicEnvelope({
+		passages,
+		settings: {
+			levelDb: 0,
+			duckDb: music.duckDb,
+			fadeInSeconds: 0,
+			fadeOutSeconds: 0,
+		},
+		length,
+	});
+	const firstAfter = (time: number) => {
+		let low = 0;
+		let high = points.length;
+		while (low < high) {
+			const middle = Math.floor((low + high) / 2);
+			if (points[middle].time <= time) low = middle + 1;
+			else high = middle;
+		}
+		return low;
+	};
+	return {
+		...tracks,
+		audio: tracks.audio.map((track) =>
+			!isMusicTrack({ track, music })
+				? track
+				: {
+						...track,
+						clips: track.clips.map((clip) => {
+							const start = mediaTimeToSeconds({ time: clip.startTime });
+							const end = start + mediaTimeToSeconds({ time: clip.duration });
+							const keys = volumeKeys({
+								points: [
+									{ time: start, db: envelopeAt({ points, time: start }) },
+									...points.slice(firstAfter(start), firstAfter(end)),
+									{ time: end, db: envelopeAt({ points, time: end }) },
+								],
+								clipStart: start,
+								generated: true,
+							});
+							return keys.some(({ value }) => value !== 0)
+								? { ...clip, musicDucking: { keys } }
+								: clip;
+						}),
+					},
+		),
 	};
 }

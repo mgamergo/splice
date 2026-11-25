@@ -1283,14 +1283,10 @@ describe("noise reduction tools", () => {
 });
 
 describe("final mix tools", () => {
-	test("music_add imports a Footage track the project lacks, then fits it", async () => {
+	test("music_add forwards the Footage path and revision in one editor operation", async () => {
 		const calls: Array<[string, unknown]> = [];
 		const client = await connect(async ({ method, params }) => {
 			calls.push([method, params]);
-			if (method === "editor.listItems")
-				return [{ id: "rec", type: "video", path: "take.mp4", missing: false }];
-			if (method === "editor.importItems")
-				return { imported: [{ id: "song" }], failed: [] };
 			return { ok: true, revision: 4 };
 		});
 		const result = await client.callTool({
@@ -1299,28 +1295,11 @@ describe("final mix tools", () => {
 		});
 		expect(result.isError).toBeFalsy();
 		expect(calls).toEqual([
-			["editor.listItems", undefined],
-			["editor.importItems", { paths: ["music/song.mp3"] }],
 			[
 				"editor.addMusic",
-				{ expectedRevision: 3, duckDb: -18, projectItemId: "song" },
+				{ expectedRevision: 3, duckDb: -18, path: "music/song.mp3" },
 			],
 		]);
-	});
-
-	test("music_add reuses an item already in the project", async () => {
-		const calls: string[] = [];
-		const client = await connect(async ({ method }) => {
-			calls.push(method);
-			return method === "editor.listItems"
-				? [{ id: "song", type: "audio", path: "song.mp3", missing: false }]
-				: { ok: true };
-		});
-		await client.callTool({
-			name: "music_add",
-			arguments: { path: "song.mp3", expectedRevision: 1 },
-		});
-		expect(calls).toEqual(["editor.listItems", "editor.addMusic"]);
 	});
 
 	test("music_add takes a path or a project item, not both", async () => {

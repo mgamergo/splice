@@ -829,55 +829,24 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 			guard(async () => text(await rpc({ method: "exports.list", params: args }))),
 	);
 
-	/** The project item for a Footage path, imported first if the project lacks it. */
-	const itemForPath = async (path: string): Promise<string> => {
-		const listed = itemsSchema
-			.parse(await rpc({ method: "editor.listItems" }))
-			.find((item) => item.path === path && !item.missing);
-		if (listed) return listed.id;
-		const { imported, failed } = z
-			.object({
-				imported: z.array(z.object({ id: z.string() })),
-				failed: z.array(z.object({ error: z.string() })),
-			})
-			.parse(await rpc({ method: "editor.importItems", params: { paths: [path] } }));
-		const id = imported[0]?.id;
-		if (!id)
-			throw new Error(
-				`Couldn't import ${path}: ${failed[0]?.error ?? "unknown error"}`,
-			);
-		return id;
-	};
-
 	server.registerTool(
 		"music_add",
 		{
 			title: "Add music to the sequence",
 			description:
-				"Music is opt-in: only add it when the creator asked for it and chose the track. Uses an audio file from Footage (path, imported if needed) or an audio project item as the sequence's music, replacing any music it had, as one undo step. Splice fits it to the sequence (trims it, or loops it when it's shorter), fades both ends, and ducks it under speech with volume keyframes on a Music track: it dips under every spoken passage, including short pauses, and rises gently in longer quiet passages. Speech comes from the recordings' transcripts; a recording without one counts as speaking wherever it plays. The level defaults to 10 LU under the narration target from a measurement of the track. Pass overrides to keep the music ducked where application sounds must stay audible. Run mix_loudness afterwards: the music changes the mix.",
-			inputSchema: {
-				...addMusicRequestSchema.shape,
-				projectItemId: addMusicRequestSchema.shape.projectItemId.optional(),
-				path: z
-					.string()
-					.min(1)
-					.optional()
-					.describe("An audio file under Footage, from footage_list. Pass this or projectItemId."),
-			},
+				"Music is opt-in: only add it when the creator asked for it and chose the track. Uses an audio file from Footage (path, imported if needed) or an audio project item as the sequence's music, replacing any music it had, as one undo step. Splice fits it to the sequence (trims it, or loops it when it's shorter), fades both ends, and ducks it under speech on a Music track: it dips under every spoken passage, including short pauses, and rises gently in longer quiet passages. Speech comes from the recordings' transcripts; a recording without one counts as speaking wherever it plays. The level defaults to 10 LU under the narration target from a measurement of the track. Pass overrides to keep the music ducked where application sounds must stay audible. Run mix_loudness afterwards: the music changes the mix.",
+			inputSchema: addMusicRequestSchema.shape,
 		},
-		({ path, projectItemId, ...args }) =>
+		(args) =>
 			guard(async () => {
-				if (Boolean(path) === Boolean(projectItemId))
+				const parsed = addMusicRequestSchema.safeParse(args);
+				if (!parsed.success)
 					return {
 						...text("Pass either path or projectItemId."),
 						isError: true,
 					};
-				const id = path ? await itemForPath(path) : projectItemId;
 				return editorResult(
-					await rpc({
-						method: "editor.addMusic",
-						params: { ...args, projectItemId: id },
-					}),
+					await rpc({ method: "editor.addMusic", params: parsed.data }),
 				);
 			}),
 	);
@@ -887,7 +856,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Adjust the sequence's music",
 			description:
-				"Changes the music's level, ducking depth, fades, the pause length that keeps it ducked, or the passages kept ducked for application sounds (overrides replace the saved list), then refits and reducks it against the sequence as it is now, as one undo step. Also use it after recuts, so the music follows the new length and speech. Rebuilding replaces the music's volume keyframes, including ones the creator dragged by hand.",
+				"Changes the music's level, ducking depth, fades, the pause length that keeps it ducked, or the passages kept ducked for application sounds (overrides replace the saved list), as one undo step. Speech ducking follows recuts automatically. An override or ducking-depth edit preserves clip trims and volume keyframes. Use refit or change the level or fades to rebuild the music clips and keyframes.",
 			inputSchema: updateMusicRequestSchema.shape,
 		},
 		(args) =>

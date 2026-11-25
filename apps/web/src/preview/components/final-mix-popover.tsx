@@ -6,7 +6,6 @@ import { z } from "zod";
 import type { UpdateMusicRequest } from "@splice/bridge/mix";
 import { callSplice } from "@/bridge/splice-api";
 import { readBridgeToken } from "@/bridge/token";
-import { importDiskItems } from "@/media/import-disk";
 import { isDiskMedia } from "@/media/media-data";
 import { EditorApi } from "@/agent/editor-api";
 import { Button } from "@/components/ui/button";
@@ -18,7 +17,11 @@ import {
 } from "@/components/ui/popover";
 import { useEditor } from "@/editor/use-editor";
 import { isMixLoudnessStale } from "@/mix/final-mix";
-import { contentEndSeconds } from "@/mix/music";
+import {
+	contentEndSeconds,
+	isCurrentOverride,
+	musicTimingFingerprint,
+} from "@/mix/music";
 import { pictureRepairs } from "@/mix/picture-repair";
 import { mediaTimeToSeconds } from "@/wasm";
 
@@ -51,6 +54,9 @@ function FinalMixControls() {
 	const api = useMemo(() => new EditorApi(editor), [editor]);
 	const sequence = useEditor((e) => e.sequences.getActiveSequence());
 	const items = useEditor((e) => e.media.getProjectItems());
+	const projectSources = useEditor(
+		(e) => e.project.getActiveOrNull()?.captions?.sources,
+	);
 	const [busy, setBusy] = useState<string | null>(null);
 	const [footageAudio, setFootageAudio] = useState<string[]>([]);
 	const [footageError, setFootageError] = useState<string | null>(null);
@@ -78,6 +84,9 @@ function FinalMixControls() {
 		};
 	}, []);
 	const music = sequence.mix?.music;
+	const timing = music
+		? musicTimingFingerprint({ tracks: sequence.tracks, music })
+		: "";
 	const loudness = sequence.mix?.loudness;
 	const audioItems = items.filter(
 		(item) => item.type === "audio" && !item.missing,
@@ -133,8 +142,11 @@ function FinalMixControls() {
 				{loudness && (
 					<p className="text-muted-foreground">
 						{loudness.expectedLufs} LUFS · {loudness.expectedTruePeakDbtp} dBTP
-						{isMixLoudnessStale({ sequence, projectItems: items }) &&
-							" · Mix changed. Measure again."}
+						{isMixLoudnessStale({
+							sequence,
+							projectItems: items,
+							projectSources,
+						}) && " · Mix changed. Measure again."}
 					</p>
 				)}
 				<Button
@@ -167,31 +179,16 @@ function FinalMixControls() {
 						const revision = request();
 						void run({
 							label: "Fitting music…",
-							action: async () => {
-								let projectItemId = selection;
-								if (selection.startsWith(FOOTAGE_PREFIX)) {
-									const path = selection.slice(FOOTAGE_PREFIX.length);
-									const result = await importDiskItems({
-										editor,
-										paths: [path],
-										isBlocked: () => false,
-									});
-									const item = result.imported[0];
-									if (!item)
-										throw new Error(
-											result.failed[0]?.error ??
-												"Couldn't import the track from Footage.",
-										);
-									projectItemId = item.id;
-								}
-								return api.addMusic({
+							action: () =>
+								api.addMusic({
 									request: {
 										...revision,
-										projectItemId,
+										...(selection.startsWith(FOOTAGE_PREFIX)
+											? { path: selection.slice(FOOTAGE_PREFIX.length) }
+											: { projectItemId: selection }),
 										label: "Add music",
 									},
-								});
-							},
+								}),
 						});
 					}}
 				>
@@ -239,7 +236,13 @@ function FinalMixControls() {
 				{music && (
 					<>
 						<form
-							key={JSON.stringify([sequence.id, music])}
+							key={JSON.stringify([
+								sequence.id,
+								music.levelDb,
+								music.duckDb,
+								music.fadeInSeconds,
+								music.fadeOutSeconds,
+							])}
 							className="space-y-2"
 							onSubmit={(event) => {
 								event.preventDefault();
@@ -249,6 +252,7 @@ function FinalMixControls() {
 									action: () =>
 										adjustMusic({
 											label: "Adjust music",
+											refit: true,
 											levelDb: numberField({ fields, name: "level" }),
 											duckDb: -numberField({ fields, name: "duck" }),
 											fadeInSeconds: numberField({ fields, name: "fadeIn" }),
@@ -293,6 +297,12 @@ function FinalMixControls() {
 								Refit and redraw keyframes
 							</Button>
 						</form>
+						{!music.fit?.separateDucking && (
+							<p className="text-muted-foreground text-xs">
+								This older mix has ducking in its volume keyframes. Refit to
+								redraw them.
+							</p>
+						)}
 						<h4 className="font-medium">Application sound passages</h4>
 						<form
 							className="space-y-2"
@@ -337,16 +347,22 @@ function FinalMixControls() {
 								Keep music ducked
 							</Button>
 						</form>
-						{music.overrides.map(({ start, end }, index) => (
+						{music.overrides.map((override, index) => (
 							<div key={index} className="flex items-center justify-between">
 								<span>
-									{start}–{end} s
+									{override.start}–{override.end} s
+									{!isCurrentOverride({ override, fingerprint: timing }) && (
+										<span className="text-muted-foreground">
+											{" "}
+											· Timing changed. Remove and add again.
+										</span>
+									)}
 								</span>
 								<Button
 									size="sm"
 									variant="text"
 									disabled={!!busy}
-									aria-label={`Remove ducking at ${start}–${end} seconds`}
+									aria-label={`Remove ducking at ${override.start}–${override.end} seconds`}
 									onClick={() =>
 										void run({
 											label: "Updating ducking…",

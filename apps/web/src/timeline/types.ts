@@ -1,3 +1,4 @@
+import type { ScalarAnimationChannel } from "@/animation/types";
 import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
@@ -100,6 +101,8 @@ export interface RetimeConfig {
 }
 
 interface BaseAudioClip extends BaseTimelineClip {
+	/** Generated on render tracks from the current narration. */
+	musicDucking?: ScalarAnimationChannel;
 	type: "audio";
 	buffer?: AudioBuffer;
 	retime?: RetimeConfig;

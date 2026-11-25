@@ -14,7 +14,7 @@ import {
 import { fetchTranscriptSources } from "@/captions/project-captions";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import type { EditorCore } from "@/core";
-import { createTimelineAudioBuffer, decodeAudioRange } from "@/media/audio";
+import { createTimelineAudioReader, decodeAudioRange } from "@/media/audio";
 import { isDiskMedia } from "@/media/media-data";
 import type { ProjectItem } from "@/media/types";
 import {
@@ -26,9 +26,12 @@ import { isClipMuted } from "@/timeline/audio-state";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/timeline/audio-constants";
 import type { SequenceTracks, TSequence } from "@/timeline/types";
 import { generateUUID } from "@/utils/id";
-import { measureMix, planMixGain } from "./loudness-meter";
+import { measureMix, planMixGainFromBlocks } from "./loudness-meter";
 import {
 	contentEndSeconds,
+	fingerprintText,
+	musicTimingFingerprint,
+	tracksWithMusicDucking,
 	isMusicTrack,
 	MUSIC_DEFAULTS,
 	MusicError,
@@ -99,6 +102,9 @@ export function mixFingerprint({
 				clip.params.volume,
 				clip.params.noiseReduction,
 				clip.animations?.volume,
+				...(clip.type === "audio" && clip.musicDucking
+					? [clip.musicDucking]
+					: []),
 			]);
 		}
 	}
@@ -126,6 +132,7 @@ async function speechSources({
 }): Promise<CaptionsRequest["sources"]> {
 	const byItem = new Map<string, CaptionsRequest["sources"][number]>();
 	for (const source of [
+		...(sequence.mix?.music?.fit?.sources ?? []),
 		...(sequence.captions?.sources ?? []),
 		...(editor.project.getActiveOrNull()?.captions?.sources ?? []),
 	]) {
@@ -204,10 +211,14 @@ async function applyMusic({
 	settings,
 	label,
 	check,
+	refit,
+	replaceOverrides,
 }: {
 	editor: EditorCore;
 	sequenceId: string;
 	settings: MusicSettings;
+	refit: boolean;
+	replaceOverrides: boolean;
 	label: string;
 	/** Throws to stop before the edit, e.g. when the sequence changed meanwhile. */
 	check?: () => void;
@@ -228,11 +239,42 @@ async function applyMusic({
 		sources,
 		music: settings,
 	});
+	const timing = musicTimingFingerprint({
+		tracks: sequence.tracks,
+		music: settings,
+	});
+	const previous = sequence.mix?.music;
+	const overrides = replaceOverrides
+		? settings.overrides.map((override) => {
+				const saved = previous?.overrides.find(
+					({ start, end, note }) =>
+						start === override.start &&
+						end === override.end &&
+						note === override.note,
+				);
+				return {
+					...override,
+					timelineFingerprint: saved
+						? (saved.timelineFingerprint ?? "")
+						: timing,
+				};
+			})
+		: settings.overrides;
+	settings = {
+		...settings,
+		overrides,
+		fit: {
+			sources,
+			speechFingerprint: fingerprintText(JSON.stringify(speech)),
+			separateDucking: refit || previous?.fit?.separateDucking === true,
+		},
+	};
 	const { tracks, passages } = withMusic({
 		tracks: sequence.tracks,
 		settings,
 		item,
 		speech,
+		refit,
 	});
 	check?.();
 	editor.command.execute({
@@ -317,7 +359,15 @@ export async function addMusic({
 		overrides: options.overrides ?? current?.overrides ?? [],
 		musicLufs,
 	};
-	return applyMusic({ editor, sequenceId, settings, label, check });
+	return applyMusic({
+		editor,
+		sequenceId,
+		settings,
+		label,
+		check,
+		refit: true,
+		replaceOverrides: options.overrides !== undefined,
+	});
 }
 
 /** Changes the music's mix settings, and refits it to the sequence as it is now. */
@@ -337,13 +387,21 @@ export async function updateMusic({
 	const current = findSequence({ editor, sequenceId }).mix?.music;
 	if (!current)
 		throw new MusicError("This sequence has no music. Add a track first.");
+	const { refit, ...changes } = options;
 	const defined = Object.fromEntries(
-		Object.entries(options).filter(([, value]) => value !== undefined),
+		Object.entries(changes).filter(([, value]) => value !== undefined),
 	);
 	return applyMusic({
 		editor,
 		sequenceId,
 		settings: { ...current, ...defined },
+		refit:
+			refit === true ||
+			options.levelDb !== undefined ||
+			options.fadeInSeconds !== undefined ||
+			options.fadeOutSeconds !== undefined ||
+			(refit === undefined && Object.keys(defined).length === 0),
+		replaceOverrides: options.overrides !== undefined,
 		label,
 		check,
 	});
@@ -384,35 +442,6 @@ export function removeMusic({
 	});
 }
 
-/**
- * Mixes the sequence as the clips sum, before the final gain: narration,
- * application sounds and music, at their clip volumes and keyframes.
- */
-async function renderMix({
-	projectItems,
-	sequence,
-	signal,
-}: {
-	projectItems: ProjectItem[];
-	sequence: TSequence;
-	signal?: AbortSignal;
-}) {
-	const buffer = await createTimelineAudioBuffer({
-		tracks: sequence.tracks,
-		projectItems,
-		duration: calculateTotalDuration({ tracks: sequence.tracks }),
-		signal,
-		master: false,
-	});
-	if (!buffer) return null;
-	return {
-		channels: Array.from({ length: buffer.numberOfChannels }, (_, channel) =>
-			buffer.getChannelData(channel),
-		),
-		sampleRate: buffer.sampleRate,
-	};
-}
-
 const round1 = (value: number | null) =>
 	value === null ? null : Math.round(value * 10) / 10;
 
@@ -435,14 +464,24 @@ export async function measureMixLoudness({
 }): Promise<MixLoudness> {
 	const sequence = findSequence({ editor, sequenceId });
 	const projectItems = editor.media.getProjectItems();
-	const fingerprint = mixFingerprint({ tracks: sequence.tracks, projectItems });
-	const audio = await renderMix({ projectItems, sequence, signal });
+	const tracks = tracksWithMusicDucking({
+		sequence,
+		projectItems,
+		projectSources: editor.project.getActiveOrNull()?.captions?.sources,
+	});
+	const fingerprint = mixFingerprint({ tracks, projectItems });
+	const audio = createTimelineAudioReader({
+		tracks,
+		projectItems,
+		signal,
+		duration: calculateTotalDuration({ tracks: sequence.tracks }),
+	});
 	if (!audio)
 		throw new MusicError(
 			"Nothing in this sequence plays audio, so there is no mix to measure.",
 		);
-	const { gainDb, measured, expected } = await planMixGain({
-		audio,
+	const { gainDb, measured, expected } = await planMixGainFromBlocks({
+		...audio,
 		targetLufs,
 		ceilingDbtp,
 		signal,
@@ -476,8 +515,9 @@ export function saveMixLoudness({
 	const sequence = findSequence({ editor, sequenceId });
 	if (
 		isMixLoudnessStale({
-			sequence: { ...sequence, mix: { loudness } },
+			sequence: { ...sequence, mix: { ...sequence.mix, loudness } },
 			projectItems: editor.media.getProjectItems(),
+			projectSources: editor.project.getActiveOrNull()?.captions?.sources,
 		})
 	)
 		throw new MusicError("The mix changed while measuring. Measure it again.");
@@ -495,14 +535,19 @@ export function saveMixLoudness({
 export function isMixLoudnessStale({
 	sequence,
 	projectItems,
-}: {
-	sequence: TSequence;
-	projectItems: ProjectItem[];
-}): boolean {
+	projectSources,
+}: Parameters<typeof tracksWithMusicDucking>[0]): boolean {
 	const loudness = sequence.mix?.loudness;
 	return (
 		!!loudness &&
 		loudness.fingerprint !==
-			mixFingerprint({ tracks: sequence.tracks, projectItems })
+			mixFingerprint({
+				tracks: tracksWithMusicDucking({
+					sequence,
+					projectItems,
+					projectSources,
+				}),
+				projectItems,
+			})
 	);
 }

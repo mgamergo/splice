@@ -1,3 +1,4 @@
+import { tracksWithMusicDucking } from "@/mix/music";
 import type { MixLoudness } from "@splice/bridge/mix";
 import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
@@ -185,7 +186,11 @@ export class RendererManager {
 				const sequence = this.editor.sequences.getActiveSequence();
 				const projectItems = this.editor.media.getProjectItems();
 				scene = {
-					tracks: sequence.tracks,
+					tracks: tracksWithMusicDucking({
+						sequence,
+						projectItems,
+						projectSources: activeProject.captions?.sources,
+					}),
 					projectItems,
 					canvasSize: activeProject.settings.canvasSize,
 					background: activeProject.settings.background,

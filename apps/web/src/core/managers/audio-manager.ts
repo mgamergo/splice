@@ -1,4 +1,5 @@
 import type { SequenceMix } from "@splice/bridge/mix";
+import { tracksWithMusicDucking } from "@/mix/music";
 import type { EditorCore } from "@/core";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
@@ -199,7 +200,11 @@ export class AudioManager {
 		const controller = new AbortController();
 		const readSignal = AbortSignal.any([signal, controller.signal]);
 		const projectItems = this.editor.media.getProjectItems();
-		const { tracks } = sequence;
+		const tracks = tracksWithMusicDucking({
+			sequence,
+			projectItems,
+			projectSources: this.editor.project.getActiveOrNull()?.captions?.sources,
+		});
 		const reader = createTimelineAudioReader({
 			tracks,
 			projectItems,
@@ -326,7 +331,11 @@ export class AudioManager {
 
 		const sequence = this.editor.sequences.getActiveSequence();
 		const projectItems = this.editor.media.getProjectItems();
-		const { tracks } = sequence;
+		const tracks = tracksWithMusicDucking({
+			sequence,
+			projectItems,
+			projectSources: this.editor.project.getActiveOrNull()?.captions?.sources,
+		});
 		const duration = this.editor.timeline.getTotalDuration();
 
 		if (duration <= 0) return;

@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import {
+	captionSourceSchema,
 	DEFAULT_TARGET_LUFS,
 	expectedRevision,
 	MAX_TRUE_PEAK_DBTP,
@@ -26,6 +27,7 @@ export const mixOverrideSchema = z
 		start: seconds.describe("Sequence seconds"),
 		end: z.number().positive().describe("Sequence seconds"),
 		note: z.string().max(200).optional(),
+		timelineFingerprint: z.string().optional(),
 	})
 	.refine((range) => range.end > range.start, {
 		path: ["end"],
@@ -57,6 +59,13 @@ export const musicSettingsSchema = z.strictObject({
 	overrides: z.array(mixOverrideSchema).max(500),
 	/** The track's integrated loudness when it was added, or null if it couldn't be measured. */
 	musicLufs: z.number().nullable(),
+	fit: z
+		.strictObject({
+			sources: z.array(captionSourceSchema),
+			speechFingerprint: z.string(),
+			separateDucking: z.boolean(),
+		})
+		.optional(),
 });
 
 /** The whole-mix gain, from a measurement of everything the sequence plays. */
@@ -110,20 +119,38 @@ const musicOptions = {
 		),
 };
 
-export const addMusicRequestSchema = z.strictObject({
-	sequenceId,
-	expectedRevision,
-	projectItemId: z
-		.string()
-		.min(1)
-		.describe("The audio project item to use, from items_list or items_import"),
-	...musicOptions,
-	label: z.string().min(1).max(120).optional(),
-});
+export const addMusicRequestSchema = z
+	.strictObject({
+		sequenceId,
+		expectedRevision,
+		projectItemId: z
+			.string()
+			.min(1)
+			.describe(
+				"The audio project item to use, from items_list or items_import",
+			)
+			.optional(),
+		path: z
+			.string()
+			.min(1)
+			.optional()
+			.describe("Audio file under Footage. Pass this or projectItemId."),
+		...musicOptions,
+		label: z.string().min(1).max(120).optional(),
+	})
+	.refine(({ path, projectItemId }) => !!path !== !!projectItemId, {
+		message: "Pass either path or projectItemId.",
+	});
 
 export const updateMusicRequestSchema = z.strictObject({
 	sequenceId,
 	expectedRevision,
+	refit: z
+		.boolean()
+		.optional()
+		.describe(
+			"Rebuild the music clips, fades and loop seams. Replaces manual edits on the music track.",
+		),
 	...musicOptions,
 	label: z.string().min(1).max(120).optional(),
 });
