@@ -51,13 +51,14 @@ The settled outcome of the design grilling that ended on 2026-11-22. Terms follo
 - **Corrections** are creator edits that change the agent's cuts (a swap, a restore, re-trimming a pause). They are logged to `D:\Splice\Profile\` as raw data, and `profile.md` is the short summary the agent reads before every rough cut.
 - The first take rankings are done inside Splice, by swapping and restoring takes on agent rough cuts of test videos.
 - The **profile agent** runs inside `splice`. It is lightweight and never edits video. Once the creator has been idle for about 30 seconds, it analyzes the corrections, updates the profile and asks at most one **profile question** per batch, as a card in the editor that can be dismissed.
-- Profile updates apply silently. They are listed in a Profile panel, where each one can be reverted.
+- Profile updates apply silently and appear in the **Profile** panel. Reverting the latest text change writes a new update that restores its previous text. Older text changes cannot be reverted directly because reapplying their previous text would overwrite newer changes. Corrections and answers stay in the evidence history.
+- One question can be open at a time. The update stores the question, and an answer or dismissal closes it across editor reloads. The profile agent includes saved answers it has yet to process in its next batch.
 - Providers:
   - an OpenAI-compatible API (OpenRouter, or a local model), or
-  - a CLI the creator is signed in to (`codex exec` / `claude -p`); check each CLI's terms on non-interactive use before building this.
+  - a CLI the creator is signed in to (`codex exec` or `claude -p`). Enable background use explicitly in **Settings > Profile agent** after confirming your plan and terms allow it.
 
-  There is no direct Claude API provider, and no grabbing of subscription tokens. The model is chosen later.
-- Keys stay in the server, never in page code. With no provider set up, corrections queue in `pending.jsonl`. The MCP tools `profile_pending` and `profile_apply` let the T3 Code agent process them, and any other agent can work from the file.
+  There is no direct Claude API provider, and no grabbing of subscription tokens. The CLI uses its default model.
+- Set `SPLICE_PROFILE_API_KEY` in the server environment for API endpoints that require a key. **Settings > Profile agent** saves the provider, base URL, and model under `Profile/provider.json`. With no provider set up, corrections queue in `pending.jsonl`. The MCP tools `profile_pending` and `profile_apply` let the T3 Code agent process them, and any other agent can work from the file.
 
 ## Development process
 

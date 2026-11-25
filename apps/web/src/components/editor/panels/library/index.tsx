@@ -10,6 +10,7 @@ import { ReviewPanel } from "@/approval/components/review-panel";
 import { useEditor } from "@/editor/use-editor";
 import { projectFormat } from "@/project/format";
 import { MediaView } from "./views/project-items";
+import { ProfilePanel } from "@/profile/components/profile-panel";
 import { SettingsView } from "./views/settings";
 import { SoundsView } from "@/sounds/components/library-view";
 import { StickersView } from "@/stickers/components/library-view";
@@ -43,6 +44,7 @@ export function LibraryPanel() {
 				Adjustment view coming soon...
 			</div>
 		),
+		profile: <ProfilePanel />,
 		settings: <SettingsView />,
 	};
 

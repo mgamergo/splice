@@ -10,6 +10,7 @@ import { LibraryPanel } from "@/components/editor/panels/library";
 import { PropertiesPanel } from "@/components/editor/panels/properties";
 import { Timeline } from "@/timeline/components";
 import { PreviewPanel } from "@/preview/components";
+import { ProfileQuestionCard } from "@/profile/components/profile-question";
 import { EditorHeader } from "@/components/editor/editor-header";
 import { EditorProvider } from "@/components/providers/editor-provider";
 import { usePanelStore } from "@/editor/panel-store";
@@ -56,6 +57,7 @@ export default function Editor() {
 					<ReopenSummary key={projectId} />
 					<ApprovedPreview key={projectId} />
 					<EditorHeader />
+					<ProfileQuestionCard />
 					<div className="min-h-0 min-w-0 flex-1">
 						<EditorLayout />
 					</div>

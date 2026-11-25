@@ -96,6 +96,24 @@ export function useAgentBridge(): void {
 			recordRevisionFloor(revision);
 			client.notifyRevision(revision);
 		});
+		const activityEvents = [
+			"pointerdown",
+			"pointermove",
+			"keydown",
+			"wheel",
+		] as const;
+		let lastActivityReport = -Infinity;
+		const reportActivity = () => {
+			const now = performance.now();
+			if (now - lastActivityReport < 1_000) return;
+			lastActivityReport = now;
+			client.notifyActivity();
+		};
+		for (const event of activityEvents)
+			window.addEventListener(event, reportActivity, {
+				capture: true,
+				passive: true,
+			});
 		const stopReporting = storageService.subscribeCorrectionOutbox(() => {
 			void flushCorrections();
 		});
@@ -105,6 +123,8 @@ export function useAgentBridge(): void {
 		client.notifyRevision(api.getRevision());
 
 		return () => {
+			for (const event of activityEvents)
+				window.removeEventListener(event, reportActivity, true);
 			stopWatchingFraming();
 			unsubscribe();
 			stopReporting();
