@@ -51,10 +51,10 @@ function countEndedBy({
 	return low;
 }
 
-type MapPiece = <TClip extends TimelineClip>(
-	piece: TClip,
-	original: TClip,
-) => TClip;
+type MapPiece = <TClip extends TimelineClip>(clips: {
+	piece: TClip;
+	original: TClip;
+}) => TClip;
 
 /**
  * Removes every range from one track in a single pass. Each clip is cut by the
@@ -116,7 +116,7 @@ function rippleDeleteClips<TClip extends TimelineClip>({
 		if (rest) pieces.push(rest);
 		return pieces
 			.reverse()
-			.map((piece) => place(mapPiece?.(piece, clip) ?? piece));
+			.map((piece) => place(mapPiece?.({ piece, original: clip }) ?? piece));
 	});
 }
 

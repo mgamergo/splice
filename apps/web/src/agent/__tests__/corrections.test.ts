@@ -5,13 +5,13 @@ import { s, setUpEditor } from "@/agent/__tests__/fixtures";
 import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
 import { RazorClipsCommand } from "@/commands/timeline/clip/razor-clips";
 
-const range = (sourceIn: number, sourceOut: number) => ({
+const range = ([sourceIn, sourceOut]: [number, number]) => ({
 	projectItemId: "rec",
 	sourceIn,
 	sourceOut,
 });
-const recording = (sourceIn: number, sourceOut: number) => ({
-	...range(sourceIn, sourceOut),
+const recording = ([sourceIn, sourceOut]: [number, number]) => ({
+	...range([sourceIn, sourceOut]),
 	recording: "talk.wav",
 });
 
@@ -44,10 +44,10 @@ function setup() {
 test("creator Swap records the displaced source and preserves the original agent ranking across later swaps", () => {
 	const { editor, api, active, corrections } = setup();
 	const best = {
-		...range(10, 15),
+		...range([10, 15]),
 		ranking: { completeness: 0.9, fluency: 0.8, pacing: 0.7 },
 	};
-	const chosen = range(2, 7);
+	const chosen = range([2, 7]);
 	expect(
 		api.roughCut({
 			expectedRevision: api.getRevision(),
@@ -83,8 +83,8 @@ test("creator Swap records the displaced source and preserves the original agent
 			projectId: "project-1",
 			sequenceId,
 			revision: api.getRevision(),
-			before: [recording(11, 15)],
-			after: [recording(2, 7)],
+			before: [recording([11, 15])],
+			after: [recording([2, 7])],
 			decision: {
 				markerId,
 				sectionName: "Intro",
@@ -95,8 +95,8 @@ test("creator Swap records the displaced source and preserves the original agent
 	]);
 	swap();
 	expect(corrections[1]).toMatchObject({
-		before: [recording(2, 7)],
-		after: [recording(10, 15)],
+		before: [recording([2, 7])],
+		after: [recording([10, 15])],
 		decision: { agentBestTake: best },
 	});
 	editor.command.undo();
@@ -106,9 +106,9 @@ test("creator Swap records the displaced source and preserves the original agent
 
 test("creator Restore captures only the restored ranges, and the same op in an agent batch is ignored", () => {
 	const { editor, api, active, corrections } = setup();
-	const first = range(1, 3);
-	const second = range(5, 7);
-	const best = range(10, 15);
+	const first = range([1, 3]);
+	const second = range([5, 7]);
+	const best = range([10, 15]);
 	expect(
 		api.roughCut({
 			expectedRevision: api.getRevision(),
@@ -138,23 +138,23 @@ test("creator Restore captures only the restored ranges, and the same op in an a
 		{
 			kind: "restore_takes",
 			before: [],
-			after: [recording(5, 7)],
+			after: [recording([5, 7])],
 			decision: { agentBestTake: best, selectedTakes: [second] },
 		},
 	]);
 });
 
 test.each([
-	{ kind: "pause", plan: { pauses: [range(5, 8)] }, cutIn: 5.2, cutOut: 7.8 },
+	{ kind: "pause", plan: { pauses: [range([5, 8])] }, cutIn: 5.2, cutOut: 7.8 },
 	{
 		kind: "false_start",
-		plan: { falseStarts: [range(5, 8)] },
+		plan: { falseStarts: [range([5, 8])] },
 		cutIn: 5,
 		cutOut: 8,
 	},
 	{
 		kind: "filler_word",
-		plan: { fillerWords: [range(5, 8)] },
+		plan: { fillerWords: [range([5, 8])] },
 		cutIn: 5,
 		cutOut: 8,
 	},
@@ -176,8 +176,8 @@ test.each([
 		expect(corrections).toMatchObject([
 			{
 				kind: "retrim",
-				before: [recording(cutOut, 20)],
-				after: [recording(cutOut - 0.3, 20)],
+				before: [recording([cutOut, 20])],
+				after: [recording([cutOut - 0.3, 20])],
 				decision: {
 					kind,
 					edge: "in",
@@ -202,7 +202,7 @@ test("a razor keeps provenance only on the existing cut edges", () => {
 	expect(
 		api.roughCut({
 			expectedRevision: api.getRevision(),
-			falseStarts: [range(5, 8)],
+			falseStarts: [range([5, 8])],
 		}),
 	).toMatchObject({ ok: true });
 	const track = active().tracks.audio[0];
@@ -224,8 +224,8 @@ test("a false-start edge keeps its provenance when it snaps into a pause", () =>
 	expect(
 		api.roughCut({
 			expectedRevision: api.getRevision(),
-			pauses: [range(4, 6), range(8, 10)],
-			falseStarts: [range(5, 9)],
+			pauses: [range([4, 6]), range([8, 10])],
+			falseStarts: [range([5, 9])],
 		}),
 	).toMatchObject({ ok: true });
 	const [left] = active().tracks.audio[0].clips;
@@ -238,8 +238,8 @@ test("a false-start edge keeps its provenance when it snaps into a pause", () =>
 	expect(corrections).toMatchObject([
 		{
 			kind: "retrim",
-			before: [recording(0, 4.2)],
-			after: [recording(0, 4)],
+			before: [recording([0, 4.2])],
+			after: [recording([0, 4])],
 			decision: {
 				kind: "false_start",
 				edge: "out",

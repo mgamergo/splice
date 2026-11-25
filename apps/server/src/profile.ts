@@ -58,7 +58,13 @@ async function sizeIfPresent(path: string) {
 	}
 }
 
-function parseRequest<T>(schema: z.ZodType<T>, params: unknown): T {
+function parseRequest<T>({
+	schema,
+	params,
+}: {
+	schema: z.ZodType<T>;
+	params: unknown;
+}): T {
 	const parsed = schema.safeParse(params);
 	if (!parsed.success) throw invalidParams(parsed.error.message);
 	return parsed.data;
@@ -105,7 +111,7 @@ export function createProfileStore({ root }: { root: string }) {
 		}
 	}
 
-	async function replace(path: string, text: string) {
+	async function replace({ path, text }: { path: string; text: string }) {
 		const temporary = `${path}.tmp`;
 		const handle = await open(temporary, "w");
 		try {
@@ -119,7 +125,15 @@ export function createProfileStore({ root }: { root: string }) {
 	}
 
 	/** Replays an append at its original byte offset, including a partial write. */
-	async function append(path: string, offset: number, text: string) {
+	async function append({
+		path,
+		offset,
+		text,
+	}: {
+		path: string;
+		offset: number;
+		text: string;
+	}) {
 		const bytes = Buffer.from(text);
 		const handle = await open(path, "a+");
 		try {
@@ -145,26 +159,26 @@ export function createProfileStore({ root }: { root: string }) {
 		if (transaction.kind === "capture") {
 			const { offset, lines } = transaction;
 			const corrections = parseCorrections(lines);
-			await append(correctionPath, offset, lines);
+			await append({ path: correctionPath, offset, text: lines });
 			const pendingIds = new Set(pending.map(({ id }) => id));
-			await replace(
-				pendingPath,
-				jsonLines([
+			await replace({
+				path: pendingPath,
+				text: jsonLines([
 					...pending,
 					...corrections.filter(({ id }) => !pendingIds.has(id)),
 				]),
-			);
+			});
 			for (const { id } of corrections) knownIds?.add(id);
 		} else {
 			const { offset, lines } = transaction;
 			const update = updateSchema.parse(JSON.parse(lines));
-			await append(updatesPath, offset, lines);
-			await replace(profilePath, update.text);
+			await append({ path: updatesPath, offset, text: lines });
+			await replace({ path: profilePath, text: update.text });
 			const applied = new Set(update.correctionIds);
-			await replace(
-				pendingPath,
-				jsonLines(pending.filter(({ id }) => !applied.has(id))),
-			);
+			await replace({
+				path: pendingPath,
+				text: jsonLines(pending.filter(({ id }) => !applied.has(id))),
+			});
 		}
 		await rm(journalPath);
 		await syncDirectory();
@@ -183,14 +197,14 @@ export function createProfileStore({ root }: { root: string }) {
 	}
 
 	async function commit(transaction: Transaction) {
-		await replace(journalPath, JSON.stringify(transaction));
+		await replace({ path: journalPath, text: JSON.stringify(transaction) });
 		await finish(transaction);
 	}
 
 	async function readProfile() {
 		const existing = await readIfPresent(profilePath);
 		if (existing !== undefined) return existing;
-		await replace(profilePath, EMPTY_PROFILE);
+		await replace({ path: profilePath, text: EMPTY_PROFILE });
 		return EMPTY_PROFILE;
 	}
 
@@ -203,7 +217,10 @@ export function createProfileStore({ root }: { root: string }) {
 				return { text, version: versionOf(text) };
 			}),
 		async capture(params: unknown) {
-			const { corrections } = parseRequest(profileCaptureSchema, params);
+			const { corrections } = parseRequest({
+				schema: profileCaptureSchema,
+				params,
+			});
 			return serialized(async () => {
 				const ids = (knownIds ??= new Set(
 					(await readCorrections(correctionPath)).map(({ id }) => id),
@@ -224,7 +241,10 @@ export function createProfileStore({ root }: { root: string }) {
 			});
 		},
 		async pending(params: unknown) {
-			const { after, limit } = parseRequest(profilePendingSchema, params ?? {});
+			const { after, limit } = parseRequest({
+				schema: profilePendingSchema,
+				params: params ?? {},
+			});
 			return serialized(async () => {
 				const pending = await readCorrections(pendingPath);
 				const index = after ? pending.findIndex(({ id }) => id === after) : -1;
@@ -243,10 +263,10 @@ export function createProfileStore({ root }: { root: string }) {
 			});
 		},
 		async apply(params: unknown) {
-			const { text, correctionIds, expectedVersion } = parseRequest(
-				profileApplySchema,
+			const { text, correctionIds, expectedVersion } = parseRequest({
+				schema: profileApplySchema,
 				params,
-			);
+			});
 			return serialized(async () => {
 				const previousText = await readProfile();
 				if (

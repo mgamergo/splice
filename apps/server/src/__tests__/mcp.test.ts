@@ -104,7 +104,13 @@ describe("splice mcp tools", () => {
 			createRpcClient({ origin: server.origin, token }),
 		);
 		try {
-			const tabCall = async (method: string, params?: unknown) => {
+			const tabCall = async ({
+				method,
+				params,
+			}: {
+				method: string;
+				params?: unknown;
+			}) => {
 				const response = await fetch(server.origin + BRIDGE_PATHS.api, {
 					method: "POST",
 					headers: { origin: server.origin, authorization: `Bearer ${token}` },
@@ -120,35 +126,38 @@ describe("splice mcp tools", () => {
 				sourceOut: 4,
 			};
 			expect(
-				await tabCall("profile.capture", {
-					corrections: [
-						{
-							id,
-							kind: "retrim",
-							projectId: "project",
-							sequenceId: "rough",
-							revision: 14,
-							timestamp: "2026-11-25T12:00:00.000Z",
-							before: [before],
-							after: [{ ...before, sourceOut: 4.2 }],
-							decision: {
-								kind: "pause",
-								edge: "out",
-								sourceIn: 4,
-								sourceOut: 6,
-								removedSeconds: 2,
+				await tabCall({
+					method: "profile.capture",
+					params: {
+						corrections: [
+							{
+								id,
+								kind: "retrim",
+								projectId: "project",
+								sequenceId: "rough",
+								revision: 14,
+								timestamp: "2026-11-25T12:00:00.000Z",
+								before: [before],
+								after: [{ ...before, sourceOut: 4.2 }],
+								decision: {
+									kind: "pause",
+									edge: "out",
+									sourceIn: 4,
+									sourceOut: 6,
+									removedSeconds: 2,
+								},
 							},
-						},
-					],
+						],
+					},
 				}),
 			).toMatchObject({ result: { recorded: 1 } });
-			expect(await tabCall("profile.read")).toMatchObject({
+			expect(await tabCall({ method: "profile.read" })).toMatchObject({
 				error: expect.anything(),
 			});
-			expect(await tabCall("profile.pending")).toMatchObject({
+			expect(await tabCall({ method: "profile.pending" })).toMatchObject({
 				error: expect.anything(),
 			});
-			expect(await tabCall("profile.apply")).toMatchObject({
+			expect(await tabCall({ method: "profile.apply" })).toMatchObject({
 				error: expect.anything(),
 			});
 

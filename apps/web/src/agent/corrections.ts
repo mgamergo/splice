@@ -112,7 +112,13 @@ export function tagTighteningEdges({
 		windows.map((window) => ({ ...window, kind: "pause", pauseSeconds })),
 	);
 	// A spoken cut can start or end in breath padding after it snaps to silence.
-	const spoken = (windows: TimeRange[], kind: TighteningKind): CutDecision[] =>
+	const spoken = ({
+		windows,
+		kind,
+	}: {
+		windows: TimeRange[];
+		kind: TighteningKind;
+	}): CutDecision[] =>
 		windows.map(({ start, end }) => ({
 			start:
 				silent.find((pause) => pause.start <= start && start < pause.end)
@@ -123,8 +129,8 @@ export function tagTighteningEdges({
 			kind,
 		}));
 	const decisions = [
-		...spoken(falseStarts, "false_start"),
-		...spoken(fillerWords, "filler_word"),
+		...spoken({ windows: falseStarts, kind: "false_start" }),
+		...spoken({ windows: fillerWords, kind: "filler_word" }),
 		...silent,
 	];
 	const removed = normalizeRanges({ ranges: cuts });
@@ -145,7 +151,13 @@ export function tagTighteningEdges({
 	const afterCut = atEdge("end");
 	const beforeCut = atEdge("start");
 
-	return <TClip extends TimelineClip>(piece: TClip, original: TClip): TClip => {
+	return <TClip extends TimelineClip>({
+		piece,
+		original,
+	}: {
+		piece: TClip;
+		original: TClip;
+	}): TClip => {
 		if (!isRetimableClip(original) || !hasMediaId(original)) return piece;
 		const originalEnd = roundMediaTime({
 			time: original.startTime + original.duration,

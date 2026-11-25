@@ -23,7 +23,7 @@ const readLines = async (file: string) =>
 		.trim()
 		.split("\n")
 		.map((record) => JSON.parse(record));
-const write = (file: string, text: string | Buffer) =>
+const write = ({ file, text }: { file: string; text: string | Buffer }) =>
 	writeFile(join(directory, file), text);
 const line = (record: unknown) => JSON.stringify(record) + "\n";
 
@@ -59,7 +59,7 @@ test("initializes the template and leaves an existing editing profile intact", a
 	const { text } = await store.read();
 	expect(text).toContain("# Editing profile");
 	expect(await read("profile.md")).toBe(text);
-	await write("profile.md", "# Creator preferences");
+	await write({ file: "profile.md", text: "# Creator preferences" });
 	expect(await createProfileStore({ root }).read()).toMatchObject({
 		text: "# Creator preferences",
 	});
@@ -136,19 +136,19 @@ test("recovers a partial append through a UTF-8 recording name without duplicati
 	await mkdir(directory);
 	const bytes = Buffer.from(line(second));
 	const split = bytes.indexOf("é") + 1;
-	await write(
-		"corrections.jsonl",
-		Buffer.concat([Buffer.from(line(first)), bytes.subarray(0, split)]),
-	);
-	await write("pending.jsonl", line(first));
-	await write(
-		"transaction.json",
-		JSON.stringify({
+	await write({
+		file: "corrections.jsonl",
+		text: Buffer.concat([Buffer.from(line(first)), bytes.subarray(0, split)]),
+	});
+	await write({ file: "pending.jsonl", text: line(first) });
+	await write({
+		file: "transaction.json",
+		text: JSON.stringify({
 			kind: "capture",
 			offset: Buffer.byteLength(line(first)),
 			lines: line(second),
 		}),
-	);
+	});
 
 	const store = createProfileStore({ root });
 	expect(await store.pending({})).toEqual({
@@ -175,12 +175,12 @@ test("finishes a restarted apply whose history row and profile were already writ
 		previousText: original.text,
 		text: "# Keep longer breaths",
 	};
-	await write("updates.jsonl", line(update));
-	await write("profile.md", update.text);
-	await write(
-		"transaction.json",
-		JSON.stringify({ kind: "apply", offset: 0, lines: line(update) }),
-	);
+	await write({ file: "updates.jsonl", text: line(update) });
+	await write({ file: "profile.md", text: update.text });
+	await write({
+		file: "transaction.json",
+		text: JSON.stringify({ kind: "apply", offset: 0, lines: line(update) }),
+	});
 
 	const restarted = createProfileStore({ root });
 	expect(await restarted.read()).toMatchObject({ text: update.text });
