@@ -5,6 +5,7 @@ import {
 	Mp4OutputFormat,
 	WebMOutputFormat,
 	BufferTarget,
+	NullTarget,
 	StreamTarget,
 	type StreamTargetChunk,
 	CanvasSource,
@@ -43,9 +44,38 @@ type ExportParams = {
 	 * with the whole file in memory.
 	 */
 	stream?: WritableStream<StreamTargetChunk>;
+	/** False keeps to the browser's default encoder; see `chooseEncoder`. */
+	hardwareEncoder?: boolean;
 	/** Cancels the export, along with any video read it is waiting on. */
 	signal: AbortSignal;
 };
+
+/**
+ * An encoder failed during an export. The browser's own message ("Encoding
+ * error.") doesn't say which encoder it was; this does.
+ */
+export class ExportEncoderError extends Error {
+	readonly track: "video" | "audio";
+	readonly encoder: EncoderChoice;
+
+	constructor({
+		track,
+		encoder,
+		cause,
+	}: {
+		track: "video" | "audio";
+		encoder: EncoderChoice;
+		cause: unknown;
+	}) {
+		const reason = cause instanceof Error ? cause.message : String(cause);
+		super(
+			`The ${track} encoder${track === "video" && encoder === "hardware" ? " on the GPU" : ""} failed: ${reason}`,
+			{ cause },
+		);
+		this.track = track;
+		this.encoder = encoder;
+	}
+}
 
 /** What an export produced: the file, or confirmation it went to the stream. */
 export type ExportedVideo =
@@ -76,32 +106,54 @@ export type SequenceExporterEvents = {
 };
 
 /**
- * Prefers the GPU's encoder (NVENC, AMF, Quick Sync), which is several
- * times faster than software encoding and leaves the CPU to decode and
- * composite. Falls back to the browser's choice where none can take the
- * size and bitrate.
+ * Prefers the GPU's encoder (NVENC, AMF, Quick Sync), which is several times
+ * faster than software encoding and leaves the CPU to decode and composite.
+ * Windows can report a hardware encoder that then fails on the first frame,
+ * so it encodes two frames from the export's own canvas first, and keeps to
+ * the browser's default where that fails.
  */
 async function chooseEncoder({
+	canvas,
 	codec,
-	width,
-	height,
 	bitrate,
 }: {
+	canvas: HTMLCanvasElement | OffscreenCanvas;
 	codec: VideoCodec;
-	width: number;
-	height: number;
 	bitrate: (typeof qualityMap)[ExportQuality];
 }): Promise<EncoderChoice> {
 	try {
-		return (await canEncodeVideo(codec, {
-			width,
-			height,
+		if (
+			!(await canEncodeVideo(codec, {
+				width: canvas.width,
+				height: canvas.height,
+				bitrate,
+				hardwareAcceleration: "prefer-hardware",
+			}))
+		)
+			return "default";
+		const probe = new Output({
+			format: new Mp4OutputFormat(),
+			target: new NullTarget(),
+		});
+		const source = new CanvasSource(canvas, {
+			codec,
 			bitrate,
 			hardwareAcceleration: "prefer-hardware",
-		}))
-			? "hardware"
-			: "default";
-	} catch {
+		});
+		probe.addVideoTrack(source, { frameRate: 30 });
+		try {
+			await probe.start();
+			await source.add(0, 1 / 30);
+			await source.add(1 / 30, 1 / 30);
+			source.close();
+			await probe.finalize();
+		} catch (error) {
+			if (probe.state === "started") await probe.cancel();
+			throw error;
+		}
+		return "hardware";
+	} catch (error) {
+		console.warn("The GPU video encoder failed a test encode; using the default:", error);
 		return "default";
 	}
 }
@@ -114,6 +166,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 	private shouldIncludeAudio: boolean;
 	private audioBlocks?: ExportParams["audioBlocks"];
 	private stream?: WritableStream<StreamTargetChunk>;
+	private hardwareEncoder: boolean;
 	private signal: AbortSignal;
 
 	constructor({
@@ -126,6 +179,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		shouldIncludeAudio,
 		audioBlocks,
 		stream,
+		hardwareEncoder = true,
 		signal,
 	}: ExportParams) {
 		super();
@@ -148,6 +202,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBlocks = audioBlocks;
 		this.stream = stream;
+		this.hardwareEncoder = hardwareEncoder;
 		this.signal = signal;
 	}
 
@@ -207,14 +262,32 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			: 1;
 		const width = this.renderer.width * scale;
 		const height = this.renderer.height * scale;
+		const drawScaled = () => {
+			if (!scaled) return;
+			const { canvas, context } = scaled;
+			context.fillRect(0, 0, canvas.width, canvas.height);
+			context.drawImage(
+				outputCanvas,
+				(canvas.width - width) / 2,
+				(canvas.height - height) / 2,
+				width,
+				height,
+			);
+		};
 		const codec: VideoCodec = this.format === "webm" ? "vp9" : "avc";
 		const bitrate = qualityMap[this.quality];
-		const encoder = await chooseEncoder({
-			codec,
-			width: scaled?.canvas.width ?? this.renderer.width,
-			height: scaled?.canvas.height ?? this.renderer.height,
-			bitrate,
-		});
+		if (this.hardwareEncoder) {
+			// The test encode reads the canvas, so give it the first frame.
+			await this.renderer.render({ node: rootNode, time: 0 });
+			if (scaled) drawScaled();
+		}
+		const encoder = this.hardwareEncoder
+			? await chooseEncoder({
+					canvas: scaled?.canvas ?? outputCanvas,
+					codec,
+					bitrate,
+				})
+			: "default";
 		const videoSource = new CanvasSource(scaled?.canvas ?? outputCanvas, {
 			codec,
 			bitrate,
@@ -262,7 +335,9 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 							return;
 						}
 						nextBlock = blocks!.next();
-						await audioSource.add(block.value.buffer);
+						await audioSource.add(block.value.buffer).catch((cause: unknown) => {
+							throw new ExportEncoderError({ track: "audio", encoder, cause });
+						});
 						audioUntil = block.value.time + block.value.buffer.duration;
 					}
 				};
@@ -284,20 +359,14 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 						// Renders this frame while the encoder takes the last one.
 						await this.renderer.render({ node: rootNode, time: timeTicks });
 						await encoding;
-						if (scaled) {
-							const { canvas, context } = scaled;
-							context.fillRect(0, 0, canvas.width, canvas.height);
-							context.drawImage(
-								outputCanvas,
-								(canvas.width - width) / 2,
-								(canvas.height - height) / 2,
-								width,
-								height,
-							);
-						}
+						if (scaled) drawScaled();
 						// The canvas is captured before `add` returns, so the next
 						// frame can draw over it straight away.
-						encoding = videoSource.add(timeSeconds, 1 / fpsFloat);
+						encoding = videoSource
+							.add(timeSeconds, 1 / fpsFloat)
+							.catch((cause: unknown) => {
+								throw new ExportEncoderError({ track: "video", encoder, cause });
+							});
 
 						const now = performance.now();
 						if (now - reportedAt >= PROGRESS_INTERVAL_MS) {

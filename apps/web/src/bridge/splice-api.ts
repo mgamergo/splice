@@ -92,10 +92,15 @@ export function createExportFileStream({
 	kind: ExportFileKind;
 	signal?: AbortSignal;
 }): WritableStream<{ data: Uint8Array<ArrayBuffer>; position: number }> {
+	let started = false;
 	return new WritableStream({
 		async write({ data, position }) {
+			// The first write starts the file afresh, which also clears what an
+			// earlier render into the same staging left; later ones patch it.
+			const patch = started || position !== 0;
+			started = true;
 			const response = await fetch(
-				`${BRIDGE_PATHS.api}/exports/${exportId}/${kind}?offset=${position}&patch=1`,
+				`${BRIDGE_PATHS.api}/exports/${exportId}/${kind}?offset=${position}${patch ? "&patch=1" : ""}`,
 				{
 					method: "PUT",
 					headers: { authorization: authorization() },

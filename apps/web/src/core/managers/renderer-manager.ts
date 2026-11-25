@@ -4,7 +4,10 @@ import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
-import { SequenceExporter } from "@/services/renderer/sequence-exporter";
+import {
+	ExportEncoderError,
+	SequenceExporter,
+} from "@/services/renderer/sequence-exporter";
 import type { StreamTargetChunk } from "mediabunny";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { createTimelineAudioReader } from "@/media/audio";
@@ -185,11 +188,15 @@ export class RendererManager {
 		onProgress,
 		signal,
 		scene,
-		stream,
+		createStream,
 	}: {
 		options: ExportOptions;
-		/** Writes the file here as it renders instead of returning it. */
-		stream?: WritableStream<StreamTargetChunk>;
+		/**
+		 * Opens where the file is written as it renders, instead of returning
+		 * it. Each stream starts the file afresh: a render the GPU's encoder
+		 * failed runs again into a new one.
+		 */
+		createStream?: () => WritableStream<StreamTargetChunk>;
 		onProgress?: ({ progress }: { progress: number }) => void;
 		signal: AbortSignal;
 		/**
@@ -232,17 +239,6 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 
-			// Audio streams in second by second beside the frames, so a long
-			// sequence starts rendering at once and never holds its whole mix.
-			const reader = includeAudio
-				? createTimelineAudioReader({
-						tracks,
-						projectItems,
-						duration,
-						signal,
-					})
-				: null;
-
 			const sequence = buildScene({
 				tracks,
 				projectItems,
@@ -251,22 +247,50 @@ export class RendererManager {
 				background,
 			});
 
-			const exporter = new SequenceExporter({
-				width: canvasSize.width,
-				height: canvasSize.height,
-				outputSize,
-				fps: exportFps,
-				format,
-				quality,
-				shouldIncludeAudio: !!includeAudio,
-				audioBlocks: reader?.blocks({ master: master ?? UNMEASURED_MASTER }),
-				stream,
-				signal,
-			});
+			const render = ({ hardwareEncoder }: { hardwareEncoder: boolean }) => {
+				// Audio streams in second by second beside the frames, so a long
+				// sequence starts rendering at once and never holds its whole mix.
+				const reader = includeAudio
+					? createTimelineAudioReader({
+							tracks,
+							projectItems,
+							duration,
+							signal,
+						})
+					: null;
+				const exporter = new SequenceExporter({
+					width: canvasSize.width,
+					height: canvasSize.height,
+					outputSize,
+					fps: exportFps,
+					format,
+					quality,
+					shouldIncludeAudio: !!includeAudio,
+					audioBlocks: reader?.blocks({ master: master ?? UNMEASURED_MASTER }),
+					stream: createStream?.(),
+					hardwareEncoder,
+					signal,
+				});
+				exporter.on("progress", (progress) => onProgress?.({ progress }));
+				return exporter.export({ rootNode: sequence });
+			};
 
-			exporter.on("progress", (progress) => onProgress?.({ progress }));
-
-			const exported = await exporter.export({ rootNode: sequence });
+			let exported: Awaited<ReturnType<typeof render>>;
+			try {
+				exported = await render({ hardwareEncoder: true });
+			} catch (error) {
+				// A GPU encoder can pass the test encode and still fail later on
+				// Windows. Render again on the browser's default encoder.
+				if (
+					signal.aborted ||
+					!(error instanceof ExportEncoderError) ||
+					error.encoder !== "hardware"
+				)
+					throw error;
+				console.warn("Rendering again without the GPU encoder:", error);
+				onProgress?.({ progress: 0 });
+				exported = await render({ hardwareEncoder: false });
+			}
 
 			if (signal.aborted) {
 				return { success: false, cancelled: true };
