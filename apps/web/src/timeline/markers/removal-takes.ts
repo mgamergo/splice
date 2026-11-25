@@ -1,4 +1,5 @@
 import type {
+	ItemRange,
 	Take,
 	TakeAudioSegment,
 	TakePlacement,
@@ -556,10 +557,10 @@ export function mapSourceRangeToSequence({
 }: {
 	tracks: SequenceTracks;
 	range: ResolvedRange;
-}): Array<{ start: MediaTime; end: MediaTime }> {
+}): Array<{ start: MediaTime; end: MediaTime; clipIds: string[] }> {
 	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
 		findTakeWindows({ track, take: range, complete: false }).map(
-			({ start, end }) => ({ start, end }),
+			({ start, end, clipIds }) => ({ start, end, clipIds }),
 		),
 	);
 }
@@ -987,6 +988,39 @@ export function swapTakeClips({
 	}
 
 	const { start, end, parts } = bestWindow;
+	const previousRanges = parts.flatMap((part): ItemRange[] => {
+		const source = [tracks.main, ...tracks.overlay, ...tracks.audio].find(
+			({ id }) => id === part.trackId,
+		);
+		return part.clipIds.flatMap((id) => {
+			const clip = source?.clips.find((clip) => clip.id === id);
+			if (!clip || (clip.type !== "video" && clip.type !== "audio")) return [];
+			const sourceIn = Math.max(clip.trimStart, part.sourceIn);
+			const sourceOut = Math.min(
+				clip.trimStart +
+					roundMediaTime({
+						time: getSourceSpanAtClipTime({
+							clipTime: clip.duration,
+							retime: clip.retime,
+						}),
+					}),
+				part.sourceOut,
+			);
+			return sourceOut > sourceIn
+				? [
+						{
+							projectItemId: part.range.item.id,
+							sourceIn: mediaTimeToSeconds({
+								time: roundMediaTime({ time: sourceIn }),
+							}),
+							sourceOut: mediaTimeToSeconds({
+								time: roundMediaTime({ time: sourceOut }),
+							}),
+						},
+					]
+				: [];
+		});
+	});
 	const videoParts = parts.filter(({ range }) => range.item.type === "video");
 	const audioParts = parts.filter(({ range }) => range.item.type === "audio");
 	const audioForVideo = new Map(
@@ -1165,6 +1199,7 @@ export function swapTakeClips({
 	// that would otherwise be pruned once it's empty. Placements follow the
 	// take's ranges, which is how restoring reads them.
 	return {
+		previousRanges,
 		previousPlacements: best.map(
 			(range, index): TakePlacement =>
 				placed.get(range) ?? neighborPlacement({ take: best, index, placed }),

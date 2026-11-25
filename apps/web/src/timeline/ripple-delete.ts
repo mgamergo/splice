@@ -51,6 +51,11 @@ function countEndedBy({
 	return low;
 }
 
+type MapPiece = <TClip extends TimelineClip>(clips: {
+	piece: TClip;
+	original: TClip;
+}) => TClip;
+
 /**
  * Removes every range from one track in a single pass. Each clip is cut by the
  * ranges it overlaps, last range first, then every piece moves left by the
@@ -61,11 +66,13 @@ function rippleDeleteClips<TClip extends TimelineClip>({
 	ranges,
 	removedBefore,
 	generateId,
+	mapPiece,
 }: {
 	clips: TClip[];
 	ranges: TimeRange[];
 	removedBefore: (time: MediaTime) => MediaTime;
 	generateId: () => string;
+	mapPiece?: MapPiece;
 }): TClip[] {
 	const place = (clip: TClip): TClip => {
 		const removed = removedBefore(clip.startTime);
@@ -107,7 +114,9 @@ function rippleDeleteClips<TClip extends TimelineClip>({
 			rest = left;
 		}
 		if (rest) pieces.push(rest);
-		return pieces.reverse().map(place);
+		return pieces
+			.reverse()
+			.map((piece) => place(mapPiece?.({ piece, original: clip }) ?? piece));
 	});
 }
 
@@ -121,11 +130,13 @@ export function rippleDeleteRanges({
 	markers,
 	ranges,
 	generateId,
+	mapPiece,
 }: {
 	tracks: SequenceTracks;
 	markers: Marker[];
 	ranges: TimeRange[];
 	generateId: () => string;
+	mapPiece?: MapPiece;
 }): { tracks: SequenceTracks; markers: Marker[] } {
 	const sorted = normalizeRanges({ ranges });
 	// removed[i] is the total length of the first i ranges.
@@ -148,6 +159,7 @@ export function rippleDeleteRanges({
 			ranges: sorted,
 			removedBefore,
 			generateId,
+			mapPiece,
 		}),
 	});
 	return {

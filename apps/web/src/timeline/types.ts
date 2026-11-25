@@ -7,6 +7,7 @@ import type { ParamValues } from "@/params";
 import type { SequenceGraphics } from "@splice/bridge/graphics";
 import type { SequenceMix } from "@splice/bridge/mix";
 import type { RemovalMarkerData } from "@splice/bridge/ops";
+import type { TighteningEdge } from "@splice/bridge/profile";
 import type { MediaTime } from "@/wasm";
 import type { CaptionPart, SavedShortCaptions } from "@/agent/short-caption-corrections";
 
@@ -137,6 +138,9 @@ interface BaseTimelineClip {
 	sourceDuration?: MediaTime;
 	/** Removal markers whose best take is represented by this clip. */
 	bestTakeMarkerIds?: string[];
+	/** Source cuts that created the clip's in and out edges in a Rough Cut. */
+	tighteningIn?: TighteningEdge;
+	tighteningOut?: TighteningEdge;
 	/** Shared by a video clip and the audio extracted from it. */
 	sourceAudioGroupId?: string;
 	/** The graphics-pass graphic this clip shows: a highlight, a card or a zoom's handle. */

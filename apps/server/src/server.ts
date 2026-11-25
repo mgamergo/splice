@@ -50,6 +50,7 @@ import { createLoudnessMeter } from "./loudness";
 import { createNoiseReducer, wantsDenoisedAudio } from "./noise-reduction";
 import { createTranscriptionJobs } from "./transcription";
 import { createExportStore, type OpenFolder } from "./exports";
+import { createProfileStore } from "./profile";
 import { createStyleProfile } from "./style-profile";
 import { createSpellingStore } from "./spellings";
 
@@ -189,11 +190,13 @@ export function startServer({
 	const loudness = createLoudnessMeter({ root, noiseReduction });
 	const exportStore = createExportStore({ root, openFolder });
 	const spellings = createSpellingStore({ root });
+	const profile = createProfileStore({ root });
 	const style = createStyleProfile({ root });
 	/** What the editor tab may ask of `splice` itself. */
 	const tabApi: Record<TabApiMethod, (params: unknown) => Promise<unknown>> = {
 		"footage.list": () => listFootage({ root }),
 		"transcript.words": (params) => transcription.words(params),
+		"profile.capture": (params) => profile.capture(params),
 		"style.defaults": style.defaults,
 		"framing.list": style.listFraming,
 		"framing.reconcile": style.reconcileFraming,
@@ -218,6 +221,9 @@ export function startServer({
 		["loudness.measure", (request) => loudness.measure(request)],
 		["pauses.detect", (request) => pauses.detect(request)],
 		["noiseReduction.render", (request) => noiseReduction.render(request)],
+		["profile.read", () => profile.read()],
+		["profile.pending", ({ params }) => profile.pending(params)],
+		["profile.apply", ({ params }) => profile.apply(params)],
 		["style.defaults", style.defaults],
 		["style.setDefaults", ({ params }) => style.setDefaults(params)],
 		["framing.list", style.listFraming],
@@ -851,6 +857,10 @@ export function startServer({
 		},
 	});
 
+	void profile.initialize().catch((error) => {
+		console.error("Couldn't initialize the editing profile:", error);
+	});
+
 	return {
 		server,
 		bridge,
@@ -862,6 +872,7 @@ export function startServer({
 				pauses.stop(),
 				transcription.stop(),
 				exportStore.stop(),
+				profile.stop(),
 				loudness.stop(),
 				noiseReduction.stop(),
 			]);

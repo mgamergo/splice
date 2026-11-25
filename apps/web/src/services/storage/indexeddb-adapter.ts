@@ -19,18 +19,24 @@ export class IndexedDBAdapter<T> implements StorageAdapter<T> {
 		this.version = version;
 	}
 
-	private async getDB(): Promise<IDBDatabase> {
+	protected upgrade(_db: IDBDatabase): void {}
+
+	protected async getDB(): Promise<IDBDatabase> {
 		return new Promise((resolve, reject) => {
 			const request = indexedDB.open(this.dbName, this.version);
 
 			request.onerror = () => reject(request.error);
-			request.onsuccess = () => resolve(request.result);
+			request.onsuccess = () => {
+				request.result.onversionchange = () => request.result.close();
+				resolve(request.result);
+			};
 
 			request.onupgradeneeded = (event) => {
 				const db = (event.target as IDBOpenDBRequest).result;
 				if (!db.objectStoreNames.contains(this.storeName)) {
 					db.createObjectStore(this.storeName, { keyPath: "id" });
 				}
+				this.upgrade(db);
 			};
 		});
 	}

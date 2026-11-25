@@ -1,8 +1,10 @@
+import type { CorrectionEdit } from "@splice/bridge/profile";
 import type { EditorSelectionPatch } from "@/selection/editor-selection";
 import type { ClipRef } from "@/timeline/types";
 
 export interface CommandResult {
 	selection?: EditorSelectionPatch;
+	corrections?: CorrectionEdit[];
 }
 
 export function createClipSelectionResult(

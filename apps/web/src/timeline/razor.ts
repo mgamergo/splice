@@ -53,6 +53,7 @@ export function razorClip<TClip extends TimelineClip>({
 		left: {
 			...clip,
 			duration: leftVisibleDuration,
+			...(clip.tighteningOut && { tighteningOut: undefined }),
 			trimEnd: addMediaTime({ a: clip.trimEnd, b: rightSourceSpan }),
 			animations: leftAnimations,
 		},
@@ -61,6 +62,7 @@ export function razorClip<TClip extends TimelineClip>({
 			id: rightClipId,
 			startTime: at,
 			duration: rightVisibleDuration,
+			...(clip.tighteningIn && { tighteningIn: undefined }),
 			trimStart: addMediaTime({ a: clip.trimStart, b: leftSourceSpan }),
 			animations: rightAnimations,
 		},
