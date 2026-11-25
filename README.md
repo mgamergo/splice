@@ -77,7 +77,15 @@ SPLICE_WHISPER_BIN="$PWD/whisper.cpp/build/bin/whisper-cli" bun run splice
 
 When you create a project, choose its format: **Horizontal** (1920×1080) or **Short** (1080×1920), both at 30 fps. `sequence_get` reports the format.
 
-In a Short project, `rough_cut` also burns in word-by-word captions from the recordings' cached transcripts, in the same undo step. They follow the tightened cut, so a word whose middle was cut away drops out. Pass `captionStyle` to change the defaults: up to 3 words at a time, bold white text on a black box, near the bottom and clear of the Shorts controls. To caption any sequence, or to restyle existing captions, call `captions_add`. It replaces the sequence's Captions track. The captions are ordinary text clips, so you can also edit them in the timeline.
+### Edit and deliver a Short
+
+Choose **Short · Explainer** or **Short · Raw** when you create a project. To change the video style later, open **Settings** in the Library panel and select **Video style**. Agents can read the style with `sequence_get` and set it with `short_style`.
+
+Explainer fills the 9:16 frame with vertical footage by default. Use `graphics_plan` and `graphics_apply` to place glass cards where they add information. Cards prefer the top half and can move or wait for an on-screen action to clear. In Raw, use `short_hook` if the opening needs a brief line grounded in what is said or shown. Give the tool the time the demonstration starts so it can clear the hook. Mark Raw explanatory cards as `creatorDirected` when the creator requests them.
+
+`rough_cut` burns in word-by-word captions from the cached transcripts and follows the timing of the tightened cut. To restyle them or caption another sequence, call `captions_add`. Captions start centered in Explainer and lower in Raw. Auto placement keeps each passage together where possible and uses graphics targets to keep the action visible. Use `short_caption_placement` to set a fixed placement, or edit caption clips in the Timeline panel. Direct placement changes survive a rerun.
+
+Click **Export**, review any issues, and choose the current edit or an approved cut. Splice saves a 1080×1920 MP4 with burned-in captions and applies the cut's saved master gain. Select **Include a separate SRT when captions are available** to save the same caption text and timing alongside the MP4. In the standalone editor, Export downloads the files. Agents can request the active sequence's current SRT with `short_srt`.
 
 ### Horizontal captions and export
 

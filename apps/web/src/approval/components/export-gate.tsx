@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { useEditor } from "@/editor/use-editor";
 import type { DeliverySnapshot } from "@/export/deliver";
+import { projectFormat } from "@/project/format";
 import { measureMixLoudness, saveMixLoudness } from "@/mix/final-mix";
 import {
 	captureApproval,
@@ -34,7 +35,9 @@ export function ExportGate({
 }) {
 	const editor = useEditor();
 	const review = useReviewState();
-	const spellings = useApprovalSpellings();
+	const horizontal = useEditor((e) => projectFormat({ project: e.project.getActive() }) === "horizontal");
+	const spellings = useApprovalSpellings({ enabled: horizontal });
+	const loadingSpellings = horizontal && !spellings.ready;
 	const dragging = useEditor((e) => e.timeline.isPreviewActive());
 	const [version, setVersion] = useState<Version>("current");
 	const [starting, setStarting] = useState(false);
@@ -91,7 +94,7 @@ export function ExportGate({
 				);
 				return;
 			}
-			const cues = sequenceCaptionCues({ editor, sequence });
+			const cues = horizontal ? sequenceCaptionCues({ editor, sequence }) : undefined;
 			const current = reviewState({ editor, sequence, cues });
 			if (
 				hasUnavailableExportMedia({ issues: current.issues, approved: false })
@@ -232,11 +235,11 @@ export function ExportGate({
 					measuring ||
 					dragging ||
 					unavailable ||
-					(!approved && !spellings.ready) ||
+					(!approved && loadingSpellings) ||
 					blocking.length > 0
 				}
 			>
-				{starting || (!approved && !spellings.ready && !spellings.error) ? (
+				{starting || (!approved && loadingSpellings && !spellings.error) ? (
 					<Spinner />
 				) : (
 					<Download className="size-4" />

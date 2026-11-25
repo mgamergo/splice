@@ -23,6 +23,8 @@ export interface ExportScene {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
 	canvasSize: TCanvasSize;
+	/** Delivery size when it differs from the saved composition. */
+	outputSize?: TCanvasSize;
 	background: TBackground;
 	master?: Pick<MixLoudness, "gainDb" | "ceilingDbtp">;
 }
@@ -197,7 +199,7 @@ export class RendererManager {
 					master: sequence.mix?.loudness,
 				};
 			}
-			const { tracks, projectItems, canvasSize, background, master } = scene;
+			const { tracks, projectItems, canvasSize, outputSize, background, master } = scene;
 
 			const duration = calculateTotalDuration({ tracks });
 			if (duration === 0) {
@@ -239,6 +241,7 @@ export class RendererManager {
 			const exporter = new SequenceExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
+				outputSize,
 				fps: exportFps,
 				format,
 				quality,

@@ -67,7 +67,7 @@ function Playback({
 	const [playing, setPlaying] = useState(false);
 	const [caption, setCaption] = useState("");
 	const [error, setError] = useState<string | null>(null);
-	const { canvasSize, fps } = editor.project.getActive().settings;
+	const { canvasSize, fps } = checkpoint.shortFrame ?? editor.project.getActive().settings;
 	const { width, height } = canvasSize;
 
 	useEffect(() => {

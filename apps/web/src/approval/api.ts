@@ -23,6 +23,7 @@ import type { ApprovedCheckpoint } from "./types";
 function summarize(checkpoint: ApprovedCheckpoint): CheckpointSummary {
 	const {
 		tracks: _tracks,
+		shortFrame: _shortFrame,
 		markers: _markers,
 		background: _background,
 		sequenceCaptions: _sequenceCaptions,

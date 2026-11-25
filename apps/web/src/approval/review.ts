@@ -5,7 +5,7 @@ import { sequenceCaptionCues } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import { deliveryScene } from "@/export/deliver";
 import type { EditorCore } from "@/core";
-import { projectFormat } from "@/project/format";
+import { projectFormat, projectShortStyle } from "@/project/format";
 import type { TSequence } from "@/timeline/types";
 import {
 	checkpointSequence,
@@ -79,7 +79,8 @@ export function reviewState({
 	cues?: CaptionCue[];
 }): ReviewState {
 	const project = editor.project.getActive();
-	const horizontal = projectFormat({ project }) === "horizontal";
+	const shortStyle = projectShortStyle({ project });
+	const horizontal = !shortStyle;
 	const approved =
 		checkpoint ?? latestCheckpoint({ project, sequenceId: sequence.id });
 	const cues = horizontal
@@ -95,6 +96,8 @@ export function reviewState({
 						projectSources: approved.captions?.sources,
 						background: approved.background,
 					}),
+					shortStyle: approved.shortStyle ?? shortStyle,
+					shortCaptionPosition: shortStyle ? approved.sequenceCaptions?.style?.position : undefined,
 					markers: approved.markers,
 					cues: approved.cues,
 				},
@@ -105,6 +108,8 @@ export function reviewState({
 						projectSources: project.captions?.sources,
 						background: project.settings.background,
 					}),
+					shortStyle,
+					shortCaptionPosition: shortStyle ? sequence.captions?.style?.position : undefined,
 					markers: sequence.markers,
 					cues,
 				},
@@ -143,7 +148,7 @@ export function approvedIssues({
 		issues: collectIssues({
 			sequence: checkpointSequence(checkpoint),
 			projectItems: editor.media.getProjectItems(),
-			horizontal: true,
+			horizontal: projectFormat({ project: editor.project.getActive() }) === "horizontal",
 			captions: checkpoint.captions,
 			cues: checkpoint.cues,
 			checkpoint,

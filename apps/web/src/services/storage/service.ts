@@ -1,5 +1,5 @@
+import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceMixSchema } from "@splice/bridge/mix";
-import { captionsRequestSchema } from "@splice/bridge/ops";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
 import { parseProjectCaptions } from "@splice/bridge/delivery";
 import { parseProjectApproval } from "@/approval/checkpoint";
@@ -251,7 +251,7 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: sequence.tracks,
 				markers: normalizeMarkers({ raw: sequence.markers }),
-				captions: captionsRequestSchema.safeParse(sequence.captions).data,
+				captions: savedShortCaptionsSchema.safeParse(sequence.captions).data,
 				graphics: sequenceGraphicsSchema.safeParse(sequence.graphics).data,
 				mix: sequenceMixSchema.safeParse(sequence.mix).data,
 				createdAt: new Date(sequence.createdAt),

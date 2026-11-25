@@ -21,7 +21,8 @@ import {
 	deliveryScene,
 	takeDeliverySnapshot,
 } from "@/export/deliver";
-import { projectFormat } from "@/project/format";
+import { shortCaptionDelivery } from "@/export/short-srt";
+import { projectFormat, projectShortStyle } from "@/project/format";
 import type { TProject } from "@/project/types";
 import type { Marker, SequenceTracks, TSequence } from "@/timeline/types";
 import { isDiskMedia } from "@/media/media-data";
@@ -105,6 +106,13 @@ export function captureApproval({
 		...(sequence.mix && { mix: structuredClone(sequence.mix) }),
 		markers: structuredClone(sequence.markers),
 		background: structuredClone(snapshot.scene.background),
+		...(snapshot.shortStyle && {
+			shortStyle: snapshot.shortStyle,
+			shortFrame: structuredClone({
+				canvasSize: snapshot.scene.canvasSize,
+				fps: snapshot.fps,
+			}),
+		}),
 		...(sequence.captions && {
 			sequenceCaptions: structuredClone(sequence.captions),
 		}),
@@ -145,6 +153,8 @@ function approvalContent({
 	mix,
 	markers,
 	background,
+	shortStyle,
+	shortFrame,
 	sequenceCaptions,
 	captions,
 	srt,
@@ -157,6 +167,8 @@ function approvalContent({
 		mix,
 		markers,
 		background,
+		shortStyle,
+		shortFrame,
 		sequenceCaptions,
 		captions,
 		srt,
@@ -360,7 +372,13 @@ export function checkpointDeliverySnapshot({
 	checkpoint: ApprovedCheckpoint;
 }): DeliverySnapshot {
 	const project = editor.project.getActive();
+	const shortStyle = checkpoint.shortStyle ?? projectShortStyle({ project });
+	const frame = checkpoint.shortFrame ?? project.settings;
+	const { srt, cueCount } = shortStyle && !checkpoint.shortStyle
+		? shortCaptionDelivery({ tracks: checkpoint.tracks })
+		: checkpoint;
 	return {
+		...(shortStyle && { shortStyle }),
 		deliveryId: generateUUID(),
 		requestedRevision: editor.command.getRevision(),
 		scene: deliveryScene({
@@ -368,9 +386,10 @@ export function checkpointDeliverySnapshot({
 			projectItems: editor.media.getProjectItems(),
 			projectSources: checkpoint.captions?.sources,
 			background: checkpoint.background,
+			shortCanvas: shortStyle ? frame.canvasSize : undefined,
 		}),
-		fps: DELIVERY_FORMAT.fps,
-		srt: checkpoint.srt,
+		fps: shortStyle ? frame.fps : DELIVERY_FORMAT.fps,
+		srt,
 		source: {
 			projectId: project.metadata.id,
 			projectName: project.metadata.name,
@@ -379,7 +398,7 @@ export function checkpointDeliverySnapshot({
 			sequenceName: checkpoint.sequenceName,
 			revision: checkpoint.revision,
 			durationSeconds: checkpoint.durationSeconds,
-			cueCount: checkpoint.cueCount,
+			cueCount,
 		},
 	};
 }
@@ -419,6 +438,10 @@ const storedCheckpointSchema = checkpointSummarySchema.extend({
 		z.object({ type: z.literal("color"), color: z.string() }),
 		z.object({ type: z.literal("blur"), blurIntensity: z.number() }),
 	]),
+	shortFrame: z.object({
+		canvasSize: z.object({ width: z.number().positive(), height: z.number().positive() }),
+		fps: z.object({ numerator: z.number().positive(), denominator: z.number().positive() }),
+	}).optional(),
 	sequenceCaptions: captionsRequestSchema.optional(),
 	captions: projectCaptionsSchema.optional(),
 	srt: z.string(),

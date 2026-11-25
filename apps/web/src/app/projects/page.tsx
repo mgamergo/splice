@@ -16,7 +16,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEditor } from "@/editor/use-editor";
 import { useCaptureBridgeToken } from "@/bridge/use-agent-bridge";
 import { useProjectsStore } from "./store";
-import { PROJECT_FORMATS, type ProjectFormat } from "@splice/bridge";
+import {
+	PROJECT_FORMATS,
+	SHORT_STYLES,
+	SHORT_STYLE_LABELS,
+	type ProjectFormat,
+	type ShortStyle,
+} from "@splice/bridge";
 import type {
 	TProjectMetadata,
 	TProjectSortKey,
@@ -507,11 +513,18 @@ function useCreateProject() {
 	const editor = useEditor();
 	const router = useRouter();
 
-	return async ({ format }: { format: ProjectFormat }) => {
+	return async ({
+		format,
+		shortStyle,
+	}: {
+		format: ProjectFormat;
+		shortStyle?: ShortStyle;
+	}) => {
 		try {
 			const projectId = await editor.project.createNewProject({
 				name: "New project",
 				format,
+				shortStyle,
 			});
 			router.push(`/editor/${projectId}`);
 		} catch (error) {
@@ -531,20 +544,25 @@ function NewProjectMenu({ children }: { children: React.ReactNode }) {
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
 			<DropdownMenuContent align="end">
-				{(Object.keys(PROJECT_FORMATS) as ProjectFormat[]).map((format) => {
-					const { label, width, height } = PROJECT_FORMATS[format];
-					return (
-						<DropdownMenuItem
-							key={format}
-							onSelect={() => createProject({ format })}
-						>
-							{label}
-							<span className="text-muted-foreground ml-auto pl-4 text-xs">
-								{width}×{height}
-							</span>
-						</DropdownMenuItem>
-					);
-				})}
+				<DropdownMenuItem
+					onSelect={() => createProject({ format: "horizontal" })}
+				>
+					{PROJECT_FORMATS.horizontal.label}
+					<span className="text-muted-foreground ml-auto pl-4 text-xs">
+						1920×1080
+					</span>
+				</DropdownMenuItem>
+				{SHORT_STYLES.map((shortStyle) => (
+					<DropdownMenuItem
+						key={shortStyle}
+						onSelect={() => createProject({ format: "short", shortStyle })}
+					>
+						Short · {SHORT_STYLE_LABELS[shortStyle]}
+						<span className="text-muted-foreground ml-auto pl-4 text-xs">
+							1080×1920
+						</span>
+					</DropdownMenuItem>
+				))}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

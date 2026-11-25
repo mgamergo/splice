@@ -3,7 +3,7 @@
  * the review issues the creator fixes or dismisses before exporting.
  */
 import { z } from "zod";
-import { expectedRevision } from "./ops";
+import { expectedRevision, shortStyleSchema } from "./ops";
 
 /** Who saved a checkpoint: the creator in Splice, the agent, or an export. */
 export const CHECKPOINT_ORIGINS = ["editor", "agent", "export"] as const;
@@ -23,6 +23,7 @@ export const checkpointSummarySchema = z.strictObject({
 	cueCount: z.number().int().nonnegative(),
 	origin: z.enum(CHECKPOINT_ORIGINS),
 	note: z.string().max(500).optional(),
+	shortStyle: shortStyleSchema.optional(),
 });
 export type CheckpointSummary = z.infer<typeof checkpointSummarySchema>;
 
@@ -38,6 +39,7 @@ export const ISSUE_KINDS = [
 	"marker-conflict",
 	"flagged",
 	"graphic-flag",
+	"short-hook-flag",
 	"stale-mix",
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
@@ -116,7 +118,7 @@ export const dismissIssueRequestSchema = z.strictObject({
 /** One change between the approved checkpoint and the current edit. */
 export interface CheckpointChange {
 	kind: "added" | "removed" | "changed" | "gap";
-	what: "clip" | "marker" | "caption" | "background" | "mix";
+	what: "clip" | "marker" | "caption" | "background" | "mix" | "Short style";
 	evidence: string;
 	/** The track, marker or caption it concerns, for people to read. */
 	label: string;

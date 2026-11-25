@@ -3,6 +3,8 @@
  * compared by what they play, not by id, so a razor that changes nothing and
  * later clips shifting after a ripple delete aren't changes.
  */
+import type { CaptionStyle } from "@splice/bridge/ops";
+import type { ShortStyle } from "@splice/bridge";
 import type { ChangedPassage, CheckpointChange } from "@splice/bridge/approval";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { TBackground } from "@/project/types";
@@ -26,6 +28,8 @@ export interface ComparableEdit {
 	markers: Marker[];
 	background?: TBackground;
 	master?: ExportScene["master"];
+	shortStyle?: ShortStyle;
+	shortCaptionPosition?: CaptionStyle["position"];
 	cues: Array<{ start: number; end: number; text: string }>;
 }
 
@@ -664,6 +668,28 @@ export function compareEdits({
 			what: "mix",
 			label: "Master gain or true-peak ceiling",
 			evidence: hashText(stableStringify([approved.master, current.master])),
+			start: 0,
+			end: 0,
+			approvedStart: 0,
+			approvedEnd: 0,
+		});
+	if (approved.shortStyle !== current.shortStyle)
+		changes.push({
+			kind: "changed",
+			what: "Short style",
+			label: "Short style",
+			evidence: hashText(stableStringify([approved.shortStyle, current.shortStyle])),
+			start: 0,
+			end: 0,
+			approvedStart: 0,
+			approvedEnd: 0,
+		});
+	if (approved.shortCaptionPosition !== current.shortCaptionPosition)
+		changes.push({
+			kind: "changed",
+			what: "caption",
+			label: "Short caption placement",
+			evidence: hashText(stableStringify([approved.shortCaptionPosition, current.shortCaptionPosition])),
 			start: 0,
 			end: 0,
 			approvedStart: 0,

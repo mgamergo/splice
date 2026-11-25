@@ -158,17 +158,17 @@ export const exportSourceSchema = z.strictObject({
 /** Names one Export click, so retrying it can't publish a second pair. */
 const deliveryId = z.string().regex(/^[0-9a-f-]{36}$/);
 
-/** One published MP4/SRT pair under Exports. */
+/** One published MP4 and its optional SRT under Exports. */
 export const exportRecordSchema = exportSourceSchema.extend({
 	/**
-	 * Both files are `<stem>.mp4` and `<stem>.srt` in the folder `<stem>`
+	 * Files are named `<stem>.mp4` and `<stem>.srt` in the folder `<stem>`
 	 * under Exports (directly in Exports for pairs from before folders).
 	 */
 	stem: z.string().min(1),
 	/** Missing on pairs from before delivery ids. */
 	deliveryId: deliveryId.optional(),
 	exportedAt: z.string(),
-	bytes: z.strictObject({ mp4: z.number(), srt: z.number() }),
+	bytes: z.strictObject({ mp4: z.number(), srt: z.number().optional() }),
 });
 
 /** `Exports/exports.json`, the history of pairs from before per-export folders. */
@@ -182,6 +182,7 @@ export type ExportFileKind = (typeof EXPORT_FILE_KINDS)[number];
 
 export const beginExportRequestSchema = exportSourceSchema.extend({
 	deliveryId,
+	includeSrt: z.boolean().optional(),
 });
 export const exportIdRequestSchema = z.strictObject({
 	exportId: z.string().regex(/^[0-9a-f-]{36}$/),

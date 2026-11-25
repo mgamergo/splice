@@ -9,6 +9,7 @@ import {
 } from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
 import { findGraphicClip } from "@/agent/graphics";
+import { isHookTrack } from "@/agent/short-hook";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { useCaptionsStore } from "@/captions/store";
 import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
@@ -272,6 +273,79 @@ describe("finalizing the cut", () => {
 		});
 		expect(again).toMatchObject({ ok: true, saved: false });
 		expect(editor.project.getActive().approval?.checkpoints).toHaveLength(1);
+	});
+
+	test("saves and restores a Short's style, caption placement and opening hook", async () => {
+		const { editor, api, approval } = setUp();
+		availableRecording();
+		const project = editor.project.getActive();
+		editor.project.setActiveProject({
+			project: {
+				...project,
+				settings: {
+					...project.settings,
+					format: "short",
+					canvasSize: { width: 720, height: 1280 },
+					fps: { numerator: 60, denominator: 1 },
+				},
+			},
+		});
+		const revision = () => ({ expectedRevision: api.getRevision() });
+		expect(api.setShortStyle({ ...revision(), style: "raw" })).toMatchObject({ ok: true });
+		expect(api.addCaptions({
+			...revision(),
+			sources: project.captions?.sources,
+		})).toMatchObject({ ok: true });
+		expect(api.setShortCaptionPlacement({ ...revision(), position: "top" })).toMatchObject({ ok: true });
+		expect(api.setShortHook({
+			...revision(),
+			hook: {
+				text: "Find the switch",
+				demonstrationStart: 2.5,
+				evidence: {
+					kind: "narration",
+					projectItemId: "rec",
+					time: 1.5,
+					detail: "Open settings",
+				},
+			},
+		})).toMatchObject({ status: "placed" });
+
+		const result = await approval.finalizeCut(revision());
+		expect(result).toMatchObject({ ok: true, checkpoint: { shortStyle: "raw" } });
+		const saved = parseProjectApproval({
+			raw: JSON.parse(JSON.stringify(editor.project.getActive().approval)),
+			parseMarkers: (raw) => normalizeMarkers({ raw }),
+		});
+		const checkpoint = saved?.checkpoints[0];
+		if (!checkpoint) throw new Error("Expected a saved checkpoint");
+		expect(checkpoint.shortStyle).toBe("raw");
+		expect(checkpoint.sequenceCaptions?.style?.position).toBe("top");
+		expect(checkpoint.tracks.overlay.find(isHookTrack)?.clips[0]).toMatchObject({
+			params: { content: "Find the switch" },
+			shortHook: { evidence: { projectItemId: "rec", sourceTime: 1.5 } },
+		});
+		expect(checkpoint.srt).toContain("Open settings.");
+		expect(checkpoint.srt).not.toContain("Find the switch");
+		expect(await approval.checkpointStatus()).toMatchObject({ matchesApproved: true });
+
+		api.setShortStyle({ ...revision(), style: "explainer" });
+		api.setShortCaptionPlacement({ ...revision(), position: "bottom" });
+		expect(reviewState({ editor }).comparison?.changes.map(({ label }) => label))
+			.toContain("Short style");
+		const snapshot = checkpointDeliverySnapshot({ editor, checkpoint });
+		expect(snapshot.scene.canvasSize).toEqual({ width: 720, height: 1280 });
+		expect(snapshot.scene.outputSize).toEqual({ width: 1080, height: 1920 });
+		expect(snapshot.fps).toEqual({ numerator: 60, denominator: 1 });
+		expect(await deliveryFingerprint(snapshot)).toBe(checkpoint.fingerprint);
+
+		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
+		expect(editor.project.getActive().settings.shortStyle).toBe("raw");
+		expect(editor.sequences.getActiveSequence().captions?.style?.position).toBe("top");
+		expect(await approval.checkpointStatus()).toMatchObject({ matchesApproved: true });
+		editor.command.undo();
+		expect(editor.project.getActive().settings.shortStyle).toBe("explainer");
+		expect(editor.sequences.getActiveSequence().captions?.style?.position).toBe("bottom");
 	});
 
 	test("reapproval saves a marker-only change even when the MP4 and SRT match", async () => {

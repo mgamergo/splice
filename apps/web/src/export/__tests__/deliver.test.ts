@@ -9,6 +9,7 @@ import {
 } from "bun:test";
 import { MEDIA_VERSION_HEADER } from "@splice/bridge";
 import { type ExportRecord, exportRecordSchema } from "@splice/bridge/delivery";
+import { EditorApi } from "@/agent/editor-api";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import {
 	checkpointDeliverySnapshot,
@@ -44,7 +45,8 @@ const originalWindow = globals.window;
  */
 function fakeSplice() {
 	const published: ExportRecord[] = [];
-	const begun = new Map<string, { deliveryId: string; source: object }>();
+	const begun = new Map<string, { deliveryId: string; source: object; includeSrt: boolean }>();
+	const uploads: string[] = [];
 	const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
 	let loseNextPublishAnswer = false;
 	const respond = (result: unknown) =>
@@ -52,7 +54,10 @@ function fakeSplice() {
 	// fetch's own signature, so positional.
 	const fakeFetch = async (...[input, init]: Parameters<typeof fetch>) => {
 		const url = String(input);
-		if (init?.method === "PUT") return respond({ bytes: 1 });
+		if (init?.method === "PUT") {
+			uploads.push(url.split("?")[0].split("/").at(-1) ?? "");
+			return respond({ bytes: 1 });
+		}
 		const { method, params } = JSON.parse(String(init?.body));
 		calls.push({ method, params });
 		if (method === "exports.begin") {
@@ -61,8 +66,8 @@ function fakeSplice() {
 			);
 			if (committed) return respond({ committed });
 			const exportId = crypto.randomUUID();
-			const { deliveryId, ...source } = params;
-			begun.set(exportId, { deliveryId, source });
+			const { deliveryId, includeSrt, ...source } = params;
+			begun.set(exportId, { deliveryId, source, includeSrt: includeSrt !== false });
 			return respond({ exportId });
 		}
 		if (method === "exports.publish") {
@@ -74,7 +79,7 @@ function fakeSplice() {
 				deliveryId: entry.deliveryId,
 				stem: `Test ${published.length + 1}`,
 				exportedAt: new Date(0).toISOString(),
-				bytes: { mp4: 8, srt: 1 },
+				bytes: { mp4: 8, ...(entry.includeSrt && { srt: 1 }) },
 			});
 			published.push(record);
 			if (loseNextPublishAnswer) {
@@ -88,6 +93,7 @@ function fakeSplice() {
 	return {
 		published,
 		calls,
+		uploads,
 		loseNextPublishAnswer: () => {
 			loseNextPublishAnswer = true;
 		},
@@ -169,6 +175,65 @@ afterEach(() => {
 	useCaptionsStore.setState(initialCaptionsState, true);
 	if (hadWindow) globals.window = originalWindow;
 	else delete globals.window;
+});
+
+test("delivers a mastered Short at 1080×1920 and uploads the SRT only when requested", async () => {
+	const editor = horizontalEditor();
+	const project = editor.project.getActive();
+	editor.project.setActiveProject({
+		project: {
+			...project,
+			settings: {
+				...project.settings,
+				format: "short",
+				canvasSize: { width: 720, height: 1280 },
+			},
+		},
+	});
+	const api = new EditorApi(editor);
+	expect(api.addCaptions({
+		expectedRevision: api.getRevision(),
+		sources: project.captions?.sources,
+	})).toMatchObject({ ok: true });
+	const sequence = editor.sequences.getActiveSequence();
+	saveMixLoudness({
+		editor,
+		sequenceId: sequence.id,
+		loudness: {
+			targetLufs: -14,
+			ceilingDbtp: -1,
+			measuredLufs: -17,
+			measuredTruePeakDbtp: -5,
+			expectedLufs: -14,
+			expectedTruePeakDbtp: -2,
+			gainDb: 3,
+			fingerprint: mixFingerprint({
+				tracks: sequence.tracks,
+				projectItems: editor.media.getProjectItems(),
+			}),
+		},
+	});
+	const renders = recordRenders(editor);
+	const snapshot = takeDeliverySnapshot({ editor });
+	expect(snapshot.srt).toContain("Deploy to versel.");
+	expect(await editor.project.deliver({
+		quality: "high",
+		snapshot: { ...snapshot, includeSrt: false },
+	})).toMatchObject({ success: true, record: { bytes: { mp4: 8 } } });
+	expect(splice.uploads).toEqual(["mp4"]);
+	expect(renders[0]).toMatchObject({
+		options: { fps: { numerator: 60, denominator: 1 }, includeAudio: true },
+		scene: {
+			canvasSize: { width: 720, height: 1280 },
+			outputSize: { width: 1080, height: 1920 },
+			master: { gainDb: 3, ceilingDbtp: -1 },
+		},
+	});
+	expect(await editor.project.deliver({
+		quality: "high",
+		snapshot: { ...snapshot, deliveryId: crypto.randomUUID(), includeSrt: true },
+	})).toMatchObject({ success: true, record: { bytes: { mp4: 8, srt: 1 } } });
+	expect(splice.uploads).toEqual(["mp4", "mp4", "srt"]);
 });
 
 describe("Horizontal delivery", () => {

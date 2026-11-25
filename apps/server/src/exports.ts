@@ -2,7 +2,6 @@ import { RPC_ERRORS } from "@splice/bridge";
 import {
 	type BeginExportRequest,
 	beginExportRequestSchema,
-	EXPORT_FILE_KINDS,
 	type ExportFileKind,
 	type ExportRecord,
 	type ExportSource,
@@ -33,7 +32,7 @@ export const EXPORTS_FOLDER = "Exports";
 export const MAX_EXPORT_CHUNK_BYTES = 64 * 1024 * 1024;
 /** Where an export's files wait until both are written. */
 const STAGING_FOLDER = ".staging";
-/** Each published pair's record, next to its files. */
+/** Each export's record, next to its files. */
 const RECORD_FILE = "export.json";
 const LEGACY_HISTORY_FILE = "exports.json";
 const MAX_STEM_LENGTH = 80;
@@ -89,17 +88,16 @@ interface PendingExport {
 	publishing: boolean;
 }
 
-/** A published pair and where its files are, relative to Exports. */
+/** A published export and where its files are, relative to Exports. */
 interface PublishedExport {
 	record: ExportRecord;
-	files: Record<ExportFileKind, string>;
+	files: { mp4: string; srt?: string };
 }
 
 /**
- * Publishes MP4/SRT pairs under Exports. The tab writes both files into a
- * staging folder of their own; once both are there, the folder gets their
- * record and moves into Exports as `<stem>` in one rename, so a pair is
- * published whole, with its record, or not at all.
+ * Publishes MP4s and optional SRTs. The tab writes the files into a staging
+ * folder. Once every requested file is there, the server adds the record and
+ * renames the folder to `<stem>` under Exports.
  */
 export function createExportStore({
 	root,
@@ -138,11 +136,14 @@ export function createExportStore({
 			});
 		return parsed.data.exports.map((record) => ({
 			record,
-			files: { mp4: `${record.stem}.mp4`, srt: `${record.stem}.srt` },
+			files: {
+				mp4: `${record.stem}.mp4`,
+				...(record.bytes.srt !== undefined && { srt: `${record.stem}.srt` }),
+			},
 		}));
 	}
 
-	/** Every published pair, oldest first. */
+	/** Every published export, oldest first. */
 	async function readPublished(): Promise<PublishedExport[]> {
 		let entries: Dirent[];
 		try {
@@ -172,7 +173,10 @@ export function createExportStore({
 					const { stem } = parsed.data;
 					return {
 						record: parsed.data,
-						files: { mp4: `${name}/${stem}.mp4`, srt: `${name}/${stem}.srt` },
+						files: {
+							mp4: `${name}/${stem}.mp4`,
+							...(parsed.data.bytes.srt !== undefined && { srt: `${name}/${stem}.srt` }),
+						},
 					};
 				}),
 		);
@@ -219,7 +223,7 @@ export function createExportStore({
 	}
 
 	async function publish(entry: PendingExport): Promise<ExportRecord> {
-		const { deliveryId, ...source } = entry.source;
+		const { deliveryId, includeSrt, ...source } = entry.source;
 		// An earlier attempt at this Export, whose answer was lost, published it.
 		const earlier = await committed(deliveryId);
 		if (earlier) return earlier;
@@ -231,12 +235,13 @@ export function createExportStore({
 			exportedAt: now().toISOString(),
 			bytes: {
 				mp4: entry.written.get("mp4") ?? 0,
-				srt: entry.written.get("srt") ?? 0,
+				...(includeSrt !== false && { srt: entry.written.get("srt") ?? 0 }),
 			},
 		};
 		// Nothing outside staging changes until the folder moves in whole.
-		for (const kind of EXPORT_FILE_KINDS)
-			await rename(join(entry.dir, kind), join(entry.dir, `${stem}.${kind}`));
+		await rename(join(entry.dir, "mp4"), join(entry.dir, `${stem}.mp4`));
+		if (includeSrt !== false)
+			await rename(join(entry.dir, "srt"), join(entry.dir, `${stem}.srt`));
 		await writeFile(
 			join(entry.dir, RECORD_FILE),
 			JSON.stringify(record, null, 2),
@@ -249,8 +254,7 @@ export function createExportStore({
 		folder,
 
 		/**
-		 * Starts an export, or, when this Export click already published its
-		 * pair, returns that pair as `committed` instead of starting another.
+		 * Starts an export or returns the record previously published for this delivery ID.
 		 */
 		async begin(
 			params: unknown,
@@ -277,7 +281,7 @@ export function createExportStore({
 		},
 
 		/**
-		 * Writes one chunk of a file of the pair into staging. Chunks arrive in
+		 * Writes one chunk of a staged file. Chunks arrive in
 		 * order; offset 0 starts the file again.
 		 */
 		async write({
@@ -292,6 +296,8 @@ export function createExportStore({
 			body: ReadableStream<Uint8Array> | null;
 		}) {
 			const [, entry] = pendingExport({ exportId });
+			if (kind === "srt" && entry.source.includeSrt === false)
+				throw invalidParams("This export does not include an SRT.");
 			const written = entry.written.get(kind) ?? 0;
 			if (offset !== 0 && offset !== written)
 				throw invalidParams(
@@ -307,9 +313,9 @@ export function createExportStore({
 
 		async publish(params: unknown): Promise<ExportRecord> {
 			const [id, entry] = pendingExport(params);
-			for (const kind of EXPORT_FILE_KINDS)
-				if (!entry.written.has(kind))
-					throw invalidParams(`The ${kind.toUpperCase()} was not written yet.`);
+			if (!entry.written.has("mp4")) throw invalidParams("The MP4 was not written yet.");
+			if (entry.source.includeSrt !== false && !entry.written.has("srt"))
+				throw invalidParams("The SRT was not written yet.");
 			if (!entry.written.get("mp4")) throw invalidParams("The MP4 is empty.");
 			// Publishing owns the staged files, including while it waits in the queue.
 			entry.publishing = true;
@@ -333,7 +339,7 @@ export function createExportStore({
 			return { aborted: true };
 		},
 
-		/** Published pairs, newest first, with whether both files are still there. */
+		/** Published exports, newest first, with whether their files are still present. */
 		async list(params: unknown) {
 			const parsed = exportsListRequestSchema.safeParse(params ?? {});
 			if (!parsed.success) throw invalidParams(parsed.error.message);
@@ -349,13 +355,13 @@ export function createExportStore({
 						files,
 						present:
 							(await exists(join(folder, files.mp4))) &&
-							(await exists(join(folder, files.srt))),
+							(!files.srt || (await exists(join(folder, files.srt)))),
 					})),
 				),
 			};
 		},
 
-		/** Opens the Exports folder, which holds every pair. */
+		/** Opens the Exports folder. */
 		async open() {
 			await mkdir(folder, { recursive: true });
 			try {

@@ -5,7 +5,7 @@ import {
 	type ProjectCaptions,
 	type Replacement,
 } from "@splice/bridge/delivery";
-import { PROJECT_FORMATS } from "@splice/bridge";
+import { PROJECT_FORMATS, type ShortStyle } from "@splice/bridge";
 import type { FrameRate } from "opencut-wasm";
 import { z } from "zod";
 import { callSplice, uploadExportFile } from "@/bridge/splice-api";
@@ -14,7 +14,8 @@ import { sequenceEndSeconds } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
-import type { TBackground, TCanvasSize } from "@/project/types";
+import { projectShortStyle } from "@/project/format";
+import type { TBackground, TCanvasSize, TProjectSettings } from "@/project/types";
 import {
 	pinRenderMedia,
 	recordingIdentity,
@@ -24,6 +25,7 @@ import { isMixLoudnessStale } from "@/mix/final-mix";
 import { tracksWithMusicDucking } from "@/mix/music";
 import { generateUUID } from "@/utils/id";
 import type { DeliveryStep } from "./index";
+import { shortCaptionDelivery } from "./short-srt";
 
 /** Horizontal delivery is 1080p30 whatever the project's settings became. */
 export const DELIVERY_FORMAT = {
@@ -35,11 +37,16 @@ export const DELIVERY_FORMAT = {
 } satisfies { canvasSize: TCanvasSize; fps: FrameRate };
 
 /**
- * What a Horizontal export delivers, fixed when the creator asks for it:
+ * What an export delivers, fixed when the creator asks for it:
  * everything the MP4 renders and the SRT timed against the same tracks.
  * Retrying renders and publishes this, never the edit as it is by then.
  */
+export type ShortDeliveryFrame = Pick<TProjectSettings, "canvasSize" | "fps">;
+
 export interface DeliverySnapshot {
+	shortStyle?: ShortStyle;
+	/** Undefined preserves paired delivery for existing callers. */
+	includeSrt?: boolean;
 	/** Names this Export click, so a retry can't publish a second pair. */
 	deliveryId: string;
 	/** The live edit at the Export click, even when exporting a past checkpoint. */
@@ -64,14 +71,22 @@ export function deliveryScene({
 	projectItems,
 	projectSources,
 	background,
+	shortCanvas,
 }: Parameters<typeof tracksWithMusicDucking>[0] & {
 	background: TBackground;
+	shortCanvas?: TCanvasSize;
 }): ExportScene {
 	const loudness = sequence.mix?.loudness;
 	return {
 		tracks: tracksWithMusicDucking({ sequence, projectItems, projectSources }),
 		projectItems: pinRenderMedia({ projectItems }),
-		canvasSize: DELIVERY_FORMAT.canvasSize,
+		canvasSize: shortCanvas ?? DELIVERY_FORMAT.canvasSize,
+		...(shortCanvas && {
+			outputSize: {
+				width: PROJECT_FORMATS.short.width,
+				height: PROJECT_FORMATS.short.height,
+			},
+		}),
 		background,
 		master: loudness && {
 			gainDb: loudness.gainDb,
@@ -92,6 +107,7 @@ export function captureDelivery({
 	const sequence = editor.sequences.getActiveSequence();
 	const projectItems = editor.media.getProjectItems();
 	const projectSources = project.captions?.sources;
+	const shortStyle = projectShortStyle({ project });
 	if (
 		approval &&
 		!approval.acceptStaleGain &&
@@ -102,13 +118,15 @@ export function captureDelivery({
 		);
 	return {
 		deliveryId: generateUUID(),
+		...(shortStyle && { shortStyle }),
 		scene: deliveryScene({
 			sequence,
 			projectItems,
 			projectSources,
 			background: project.settings.background,
+			shortCanvas: shortStyle ? project.settings.canvasSize : undefined,
 		}),
-		fps: DELIVERY_FORMAT.fps,
+		fps: shortStyle ? project.settings.fps : DELIVERY_FORMAT.fps,
 		captions: project.captions,
 		source: {
 			projectId: project.metadata.id,
@@ -130,7 +148,18 @@ function snapshotWithSpellings({
 	spellings: Replacement[];
 	reviewedCues?: CaptionCue[];
 }): DeliverySnapshot {
-	const { scene, fps, deliveryId, source, captions } = input;
+	const { scene, fps, deliveryId, source, captions, shortStyle } = input;
+	if (shortStyle) {
+		const { srt, cueCount } = shortCaptionDelivery({ tracks: scene.tracks });
+		return {
+			deliveryId,
+			scene,
+			fps,
+			shortStyle,
+			srt,
+			source: { ...source, cueCount },
+		};
+	}
 	const cues = (reviewedCues ?? buildCaptionCues({
 		tracks: scene.tracks,
 		captions,
@@ -171,7 +200,9 @@ export async function prepareDelivery({
 }: {
 	input: DeliveryInput;
 }): Promise<DeliverySnapshot> {
-	const spellings = await useCaptionsStore.getState().loadSpellings();
+	const spellings = input.shortStyle
+		? []
+		: await useCaptionsStore.getState().loadSpellings();
 	return snapshotWithSpellings({ input, spellings });
 }
 
@@ -207,8 +238,9 @@ export async function deliveryFingerprint({
 	scene,
 	fps,
 	srt,
+	shortStyle,
 	legacyMedia = false,
-}: Pick<DeliverySnapshot, "scene" | "fps" | "srt"> & {
+}: Pick<DeliverySnapshot, "scene" | "fps" | "srt" | "shortStyle"> & {
 	legacyMedia?: boolean;
 }): Promise<string> {
 	/* eslint-disable opencut/prefer-object-params -- JSON.stringify calls replacers with (key, value). */
@@ -221,6 +253,7 @@ export async function deliveryFingerprint({
 		fps,
 		media: usedMedia({ scene, legacyMedia }),
 		master: scene.master,
+		...(shortStyle && { shortStyle, outputSize: scene.outputSize }),
 	};
 	const text = `${JSON.stringify(scene.tracks, withoutBuffers)}\n${JSON.stringify(render)}\n${srt}`;
 	const digest = await crypto.subtle.digest(
@@ -248,9 +281,8 @@ const beginResultSchema = z.union([
 ]);
 
 /**
- * Writes the MP4 and SRT into `splice`'s staging folder, then publishes both
- * under Exports at once. A failed step names itself, and `splice` drops the
- * staged files, so earlier pairs stay as they were.
+ * Stages the MP4 and optional SRT, then publishes them together under Exports.
+ * On failure, Splice drops the staged files and reports the failed step.
  */
 export async function publishDelivery({
 	snapshot,
@@ -291,7 +323,11 @@ export async function publishDelivery({
 			beginResultSchema.parse(
 				await callSplice({
 					method: "exports.begin",
-					params: { ...source, deliveryId: snapshot.deliveryId },
+					params: {
+						...source,
+						deliveryId: snapshot.deliveryId,
+						...(snapshot.includeSrt === false && { includeSrt: false }),
+					},
 				}),
 			),
 	});
@@ -308,16 +344,17 @@ export async function publishDelivery({
 					signal,
 				}),
 		});
-		await step({
-			name: "upload-captions",
-			run: () =>
-				uploadExportFile({
-					exportId,
-					kind: "srt",
-					body: new Blob([snapshot.srt], { type: "application/x-subrip" }),
-					signal,
-				}),
-		});
+		if (snapshot.includeSrt !== false)
+			await step({
+				name: "upload-captions",
+				run: () =>
+					uploadExportFile({
+						exportId,
+						kind: "srt",
+						body: new Blob([snapshot.srt], { type: "application/x-subrip" }),
+						signal,
+					}),
+			});
 		return await step({
 			name: "publish",
 			run: async () =>
@@ -336,9 +373,9 @@ export async function publishDelivery({
 	}
 }
 
-/** One published pair, as the export history lists it. */
+/** One published export, as the history lists it. */
 export const listedExportSchema = exportRecordSchema.extend({
-	files: z.object({ mp4: z.string(), srt: z.string() }),
+	files: z.object({ mp4: z.string(), srt: z.string().optional() }),
 	present: z.boolean(),
 });
 export type ListedExport = z.infer<typeof listedExportSchema>;

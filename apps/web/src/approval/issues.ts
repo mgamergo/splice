@@ -5,6 +5,7 @@
 import type { Dismissal, ReviewIssue } from "@splice/bridge/approval";
 import type { ProjectCaptions } from "@splice/bridge/delivery";
 import { findGraphicClip } from "@/agent/graphics";
+import { isHookTrack } from "@/agent/short-hook";
 import { getSourceSpanAtClipTime } from "@/retime";
 import { isDiskMedia } from "@/media/media-data";
 import { recordingIdentity } from "@/media/sequence-media";
@@ -398,6 +399,30 @@ function graphicIssues(
 	});
 }
 
+function shortHookIssues({ tracks }: Pick<TSequence, "tracks">): ReviewIssue[] {
+	return tracks.overlay
+		.filter(isHookTrack)
+		.filter(({ hidden }) => !hidden)
+		.flatMap(({ clips }) =>
+			clips.flatMap((clip): ReviewIssue[] => {
+				const hook = clip.shortHook;
+				if (clip.hidden || !hook?.unavailable) return [];
+				return [{
+					id: `short-hook-flag:${clip.id}:missing-anchor`,
+					kind: "short-hook-flag",
+					title: "Opening hook flagged for review",
+					detail: "The opening hook no longer has visible evidence before the demonstration. Update or remove the hook.",
+					...clipSpan(clip),
+					evidence: hashText(stableStringify([
+						hook.evidence,
+						hook.demonstration,
+						clip.params.content,
+					])),
+				}];
+			}),
+		);
+}
+
 function staleMixIssues(
 	input: Parameters<typeof staleMixFingerprint>[0],
 ): ReviewIssue[] {
@@ -457,6 +482,7 @@ export function collectIssues({
 		...markerIssues(sequence),
 		...flaggedIssues(sequence),
 		...graphicIssues(sequence),
+		...(!horizontal ? shortHookIssues(sequence) : []),
 	]
 		.map((issue) => ({ ...issue, id: `${sequence.id}:${issue.id}` }))
 		.sort((a, b) => a.start - b.start);

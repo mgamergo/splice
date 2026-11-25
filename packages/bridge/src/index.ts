@@ -40,6 +40,10 @@ export const TAB_METHODS = [
 	"editor.graphicsPlan",
 	"editor.graphicsApply",
 	"editor.graphicsList",
+	"editor.shortStyle",
+	"editor.shortHook",
+	"editor.shortCaptionPlacement",
+	"editor.shortSrt",
 	"editor.finalizeCut",
 	"editor.checkpointStatus",
 	"editor.checkpointCompare",
@@ -82,6 +86,13 @@ export const TAB_HELLO = "tab.hello";
 export const STATE_CHANGED = "state.changed";
 
 /** A project's format, chosen when it's created. */
+export const SHORT_STYLES = ["explainer", "raw"] as const;
+export type ShortStyle = (typeof SHORT_STYLES)[number];
+export const SHORT_STYLE_LABELS: Record<ShortStyle, string> = {
+	explainer: "Explainer",
+	raw: "Raw",
+};
+
 export type ProjectFormat = "horizontal" | "short";
 
 export const PROJECT_FORMATS: Record<
@@ -94,7 +105,12 @@ export const PROJECT_FORMATS: Record<
 
 export interface EditorState {
 	revision: number;
-	project: { id: string; name: string; format: ProjectFormat } | null;
+	project: {
+		id: string;
+		name: string;
+		format: ProjectFormat;
+		shortStyle?: ShortStyle;
+	} | null;
 	/** The active sequence; `editor.apply` must name it. */
 	sequenceId: string | null;
 	/** Compact text form of the active sequence, see `buildSequenceDigest`. */

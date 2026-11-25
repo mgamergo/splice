@@ -276,7 +276,7 @@ export function LatestExport() {
 				Revision {latest.revision}
 			</p>
 			<p className="text-muted-foreground break-all">
-				{latest.files.mp4}, {latest.files.srt}
+				{latest.files.mp4}{latest.files.srt && `, ${latest.files.srt}`}
 				{!latest.present && " (moved or deleted)"}
 			</p>
 			<Button

@@ -565,15 +565,25 @@ export function formatSrtTime(milliseconds: number): string {
 	return `${pad(Math.floor(ms / 3_600_000))}:${pad(Math.floor(ms / 60_000) % 60)}:${pad(Math.floor(ms / 1000) % 60)},${String(ms % 1000).padStart(3, "0")}`;
 }
 
+type SrtCue = Pick<CaptionCue, "start" | "end" | "text">;
+
+export function cuesToSrt(cues: SrtCue[]): string {
+	return serializeCuesToSrt({ cues, preserveOverlaps: false });
+}
+
 /** SRT for the cues with text, numbered from 1, in whole milliseconds. */
-export function cuesToSrt(
-	cues: Array<Pick<CaptionCue, "start" | "end" | "text">>,
-): string {
+export function serializeCuesToSrt({
+	cues,
+	preserveOverlaps,
+}: {
+	cues: SrtCue[];
+	preserveOverlaps: boolean;
+}): string {
 	const blocks: string[] = [];
 	let previousEnd = 0;
 	for (const cue of cues) {
 		if (!cue.text) continue;
-		const start = Math.max(previousEnd, Math.round(cue.start * 1000));
+		const start = Math.max(preserveOverlaps ? 0 : previousEnd, Math.round(cue.start * 1000));
 		const end = Math.max(start + 1, Math.round(cue.end * 1000));
 		previousEnd = end;
 		blocks.push(

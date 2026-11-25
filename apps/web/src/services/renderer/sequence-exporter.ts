@@ -19,6 +19,8 @@ import { TICKS_PER_SECOND } from "@/wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
 import type { ExportFormat, ExportQuality } from "@/export";
+import { createCanvasSurface } from "./canvas-utils";
+import type { TCanvasSize } from "@/project/types";
 import { CanvasRenderer } from "./canvas-renderer";
 import { writeOutput } from "./export-output";
 import { VideoCache } from "@/services/video-cache/service";
@@ -26,6 +28,7 @@ import { VideoCache } from "@/services/video-cache/service";
 type ExportParams = {
 	width: number;
 	height: number;
+	outputSize?: TCanvasSize;
 	fps: FrameRate;
 	format: ExportFormat;
 	quality: ExportQuality;
@@ -52,6 +55,7 @@ export type SequenceExporterEvents = {
 
 export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 	private renderer: CanvasRenderer;
+	private outputSize?: TCanvasSize;
 	private format: ExportFormat;
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
@@ -62,6 +66,7 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 	constructor({
 		width,
 		height,
+		outputSize,
 		fps,
 		format,
 		quality,
@@ -80,6 +85,11 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			videoCache: new VideoCache({ signal }),
 		});
 
+		if (
+			outputSize &&
+			(outputSize.width !== width || outputSize.height !== height)
+		)
+			this.outputSize = outputSize;
 		this.format = format;
 		this.quality = quality;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
@@ -120,7 +130,18 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 			target: new BufferTarget(),
 		});
 
-		const videoSource = new CanvasSource(this.renderer.getOutputCanvas(), {
+		const outputCanvas = this.renderer.getOutputCanvas();
+		const scaled = this.outputSize && createCanvasSurface(this.outputSize);
+		// Keep the saved composition's aspect ratio on legacy custom canvases.
+		const scale = scaled
+			? Math.min(
+					scaled.canvas.width / this.renderer.width,
+					scaled.canvas.height / this.renderer.height,
+				)
+			: 1;
+		const width = this.renderer.width * scale;
+		const height = this.renderer.height * scale;
+		const videoSource = new CanvasSource(scaled?.canvas ?? outputCanvas, {
 			codec: this.format === "webm" ? "vp9" : "avc",
 			bitrate: qualityMap[this.quality],
 		});
@@ -180,6 +201,17 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 							}
 						}
 						await this.renderer.render({ node: rootNode, time: timeTicks });
+						if (scaled) {
+							const { canvas, context } = scaled;
+							context.fillRect(0, 0, canvas.width, canvas.height);
+							context.drawImage(
+								outputCanvas,
+								(canvas.width - width) / 2,
+								(canvas.height - height) / 2,
+								width,
+								height,
+							);
+						}
 						await videoSource.add(timeSeconds, 1 / fpsFloat);
 
 						this.emit("progress", i / frameCount);

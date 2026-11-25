@@ -35,6 +35,8 @@ import {
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
 import { readBridgeToken } from "@/bridge/token";
+import { downloadBlob } from "@/utils/browser";
+import { CAPTION_TRACK_NAME } from "@/agent/short-captions";
 import { projectFormat } from "@/project/format";
 import { DeliveryPopover } from "./export-delivery";
 
@@ -51,15 +53,11 @@ export function ExportButton() {
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActiveOrNull());
 	const hasProject = !!activeProject;
-	// Horizontal exports publish an MP4/SRT pair through splice; without splice
-	// (or for a Short) the export downloads.
-	const deliversPair =
-		!!activeProject &&
-		projectFormat({ project: activeProject }) === "horizontal" &&
-		readBridgeToken() !== null;
+	// The bridge saves exports under Exports. Standalone editors download them.
+	const usesDelivery = hasProject && readBridgeToken() !== null;
 
 	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
-		if (!open && !deliversPair) {
+		if (!open && !usesDelivery) {
 			editor.project.cancelExport();
 			editor.project.clearExportState();
 		}
@@ -97,7 +95,7 @@ export function ExportButton() {
 				</button>
 			</PopoverTrigger>
 			{hasProject &&
-				(deliversPair ? (
+				(usesDelivery ? (
 					// Mounted only while open, so the history and the current edit's
 					// fingerprint are read fresh each time.
 					isExportPopoverOpen && <DeliveryPopover />
@@ -117,6 +115,21 @@ function ExportPopover({
 	const activeProject = useEditor((e) => e.project.getActive());
 	const exportState = useEditor((e) => e.project.getExportState());
 	const { isExporting, progress, result: exportResult } = exportState;
+	const isShort = projectFormat({ project: activeProject }) === "short";
+	const hasCaptions = useEditor((e) =>
+		e.sequences
+			.getActiveSequenceOrNull()
+			?.tracks.overlay.some(
+				(track) =>
+					track.type === "text" &&
+					track.name === CAPTION_TRACK_NAME &&
+					!track.hidden &&
+					track.clips.some(
+						(clip) => !clip.hidden && String(clip.params.content ?? "").trim(),
+					),
+			),
+	);
+	const [includeSrt, setIncludeSrt] = useState(false);
 	const [format, setFormat] = useState<ExportFormat>(
 		DEFAULT_EXPORT_OPTIONS.format,
 	);
@@ -130,20 +143,27 @@ function ExportPopover({
 	const handleExport = async () => {
 		if (!activeProject) return;
 
+		const deliveryFormat = isShort ? "mp4" : format;
 		await editor.project.export({
+			includeSrt: isShort && includeSrt && hasCaptions,
 			options: {
-				format,
+				format: deliveryFormat,
 				quality,
 				fps: activeProject.settings.fps,
 				includeAudio: shouldIncludeAudio,
 			},
 			// Called only while no other export has replaced this one.
-			onExported: ({ buffer }) => {
+			onExported: ({ buffer, srt }) => {
 				downloadBuffer({
 					buffer,
-					filename: `${activeProject.metadata.name}${getExportFileExtension({ format })}`,
-					mimeType: getExportMimeType({ format }),
+					filename: `${activeProject.metadata.name}${getExportFileExtension({ format: deliveryFormat })}`,
+					mimeType: getExportMimeType({ format: deliveryFormat }),
 				});
+				if (srt)
+					downloadBlob({
+						blob: new Blob([srt], { type: "application/x-subrip" }),
+						filename: `${activeProject.metadata.name}.srt`,
+					});
 				editor.project.clearExportState();
 				onOpenChange(false);
 			},
@@ -173,38 +193,42 @@ function ExportPopover({
 						{!isExporting && (
 							<>
 								<div className="flex flex-col">
-									<Section
-										collapsible
-										defaultOpen={false}
-										showTopBorder={false}
-									>
-										<SectionHeader>
-											<SectionTitle>Format</SectionTitle>
-										</SectionHeader>
-										<SectionContent>
-											<RadioGroup
-												value={format}
-												onValueChange={(value) => {
-													if (isExportFormat(value)) {
-														setFormat(value);
-													}
-												}}
-											>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="mp4" id="mp4" />
-													<Label htmlFor="mp4">
-														MP4 (H.264) - Better compatibility
-													</Label>
-												</div>
-												<div className="flex items-center space-x-2">
-													<RadioGroupItem value="webm" id="webm" />
-													<Label htmlFor="webm">
-														WebM (VP9) - Smaller file size
-													</Label>
-												</div>
-											</RadioGroup>
-										</SectionContent>
-									</Section>
+									{isShort ? (
+										<div className="px-3 py-2 text-sm">MP4 · 1080×1920</div>
+									) : (
+										<Section
+											collapsible
+											defaultOpen={false}
+											showTopBorder={false}
+										>
+											<SectionHeader>
+												<SectionTitle>Format</SectionTitle>
+											</SectionHeader>
+											<SectionContent>
+												<RadioGroup
+													value={format}
+													onValueChange={(value) => {
+														if (isExportFormat(value)) {
+															setFormat(value);
+														}
+													}}
+												>
+													<div className="flex items-center space-x-2">
+														<RadioGroupItem value="mp4" id="mp4" />
+														<Label htmlFor="mp4">
+															MP4 (H.264) - Better compatibility
+														</Label>
+													</div>
+													<div className="flex items-center space-x-2">
+														<RadioGroupItem value="webm" id="webm" />
+														<Label htmlFor="webm">
+															WebM (VP9) - Smaller file size
+														</Label>
+													</div>
+												</RadioGroup>
+											</SectionContent>
+										</Section>
+									)}
 
 									<Section collapsible defaultOpen={false}>
 										<SectionHeader>
@@ -241,25 +265,41 @@ function ExportPopover({
 										</SectionContent>
 									</Section>
 
-									<Section collapsible defaultOpen={false}>
-										<SectionHeader>
-											<SectionTitle>Audio</SectionTitle>
-										</SectionHeader>
-										<SectionContent>
-											<div className="flex items-center space-x-2">
-												<Checkbox
-													id="include-audio"
-													checked={shouldIncludeAudio}
-													onCheckedChange={(checked) =>
-														setShouldIncludeAudio(!!checked)
-													}
-												/>
-												<Label htmlFor="include-audio">
-													Include audio in export
-												</Label>
-											</div>
-										</SectionContent>
-									</Section>
+									{isShort ? (
+										<div className="flex items-center gap-2 p-3">
+											<Checkbox
+												id="include-short-srt"
+												disabled={!hasCaptions}
+												checked={includeSrt && !!hasCaptions}
+												onCheckedChange={(checked) =>
+													setIncludeSrt(checked === true)
+												}
+											/>
+											<Label htmlFor="include-short-srt">
+												Download a separate SRT
+											</Label>
+										</div>
+									) : (
+										<Section collapsible defaultOpen={false}>
+											<SectionHeader>
+												<SectionTitle>Audio</SectionTitle>
+											</SectionHeader>
+											<SectionContent>
+												<div className="flex items-center space-x-2">
+													<Checkbox
+														id="include-audio"
+														checked={shouldIncludeAudio}
+														onCheckedChange={(checked) =>
+															setShouldIncludeAudio(!!checked)
+														}
+													/>
+													<Label htmlFor="include-audio">
+														Include audio in export
+													</Label>
+												</div>
+											</SectionContent>
+										</Section>
+									)}
 								</div>
 
 								<div className="p-3 pt-0">

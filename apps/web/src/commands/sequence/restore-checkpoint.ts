@@ -16,7 +16,7 @@ export class RestoreCheckpointCommand extends Command {
 	private before: {
 		sequences: TSequence[];
 		captions: TProject["captions"];
-		background: TProject["settings"]["background"];
+		settings: TProject["settings"];
 	} | null = null;
 
 	constructor(
@@ -43,11 +43,16 @@ export class RestoreCheckpointCommand extends Command {
 		this.before = {
 			sequences,
 			captions: project.captions,
-			background: project.settings.background,
+			settings: project.settings,
 		};
+		if (checkpoint.shortStyle)
+			editor.project.buildShortStyleCommand({
+				style: checkpoint.shortStyle,
+				skipSequenceId: checkpoint.sequenceId,
+			})?.execute();
 		editor.sequences.setSequences({
 			sequences: updateSequenceInArray({
-				sequences,
+				sequences: editor.sequences.getSequences(),
 				sequenceId: checkpoint.sequenceId,
 				updates: {
 					tracks: structuredClone(checkpoint.tracks),
@@ -68,6 +73,7 @@ export class RestoreCheckpointCommand extends Command {
 				settings: {
 					...current.settings,
 					background: structuredClone(checkpoint.background),
+					...structuredClone(checkpoint.shortFrame),
 				},
 			},
 		});
@@ -79,13 +85,21 @@ export class RestoreCheckpointCommand extends Command {
 		const { editor } = this.options;
 		if (!this.before) return;
 		editor.sequences.setSequences({ sequences: this.before.sequences });
+		const project = editor.project.getActive();
+		const { settings } = this.before;
+		const { checkpoint } = this.options;
 		editor.project.setActiveProject({
 			project: {
-				...editor.project.getActive(),
+				...project,
 				captions: this.before.captions,
 				settings: {
-					...editor.project.getActive().settings,
-					background: this.before.background,
+					...project.settings,
+					background: settings.background,
+					...(checkpoint.shortStyle && { shortStyle: settings.shortStyle }),
+					...(checkpoint.shortFrame && {
+						canvasSize: settings.canvasSize,
+						fps: settings.fps,
+					}),
 				},
 			},
 		});

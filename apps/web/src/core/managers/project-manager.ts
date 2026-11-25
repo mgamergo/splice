@@ -1,4 +1,8 @@
-import { PROJECT_FORMATS, type ProjectFormat } from "@splice/bridge";
+import {
+	PROJECT_FORMATS,
+	type ProjectFormat,
+	type ShortStyle,
+} from "@splice/bridge";
 import type { EditorCore } from "@/core";
 import type { ApprovedCheckpoint } from "@/approval/types";
 import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
@@ -20,6 +24,7 @@ import { ExportJobs } from "@/export/export-jobs";
 import {
 	captureDelivery,
 	DeliveryError,
+	deliveryScene,
 	type DeliveryInput,
 	type DeliverySnapshot,
 	prepareDelivery,
@@ -42,7 +47,13 @@ import { DEFAULTS } from "@/timeline/defaults";
 import { getClipFontFamilies } from "@/timeline/clip-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
 import type { ProjectItem } from "@/media/types";
-import { projectFormat } from "@/project/format";
+import { projectFormat, projectShortStyle } from "@/project/format";
+import { BatchCommand } from "@/commands/batch-command";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
+import { syncGraphics } from "@/agent/graphics";
+import { fillExplainerPicture } from "@/agent/explainer-picture";
+import { layoutShort } from "@/agent/short-layout";
+import { shortSrt } from "@/export/short-srt";
 import { useCaptionsStore } from "@/captions/store";
 
 const IDLE_EXPORT_STATE: ExportState = {
@@ -80,9 +91,11 @@ export class ProjectManager {
 	async createNewProject({
 		name,
 		format = "horizontal",
+		shortStyle = "explainer",
 	}: {
 		name: string;
 		format?: ProjectFormat;
+		shortStyle?: ShortStyle;
 	}): Promise<string> {
 		const { width, height, fps } = PROJECT_FORMATS[format];
 		const mainSequence = buildDefaultSequence({
@@ -103,6 +116,7 @@ export class ProjectManager {
 			currentSequenceId: mainSequence.id,
 			settings: {
 				format,
+				...(format === "short" && { shortStyle }),
 				fps: { numerator: fps, denominator: 1 },
 				canvasSize: { width, height },
 				canvasSizeMode: "preset",
@@ -379,17 +393,44 @@ export class ProjectManager {
 	async export({
 		options,
 		onExported,
+		includeSrt = false,
 	}: {
 		options: ExportOptions;
-		onExported?: ({ buffer }: { buffer: ArrayBuffer }) => void;
+		onExported?: (files: { buffer: ArrayBuffer; srt?: string }) => void;
+		includeSrt?: boolean;
 	}): Promise<ExportResult> {
+		const project = this.active;
+		const sequence =
+			project && projectShortStyle({ project })
+				? this.editor.sequences.getActiveSequenceOrNull()
+				: null;
+		const scene =
+			project && sequence
+				? deliveryScene({
+						sequence,
+						projectItems: this.editor.media.getProjectItems(),
+						projectSources: project.captions?.sources,
+						background: project.settings.background,
+						shortCanvas: project.settings.canvasSize,
+					})
+				: undefined;
+		const srt =
+			scene && includeSrt ? shortSrt({ tracks: scene.tracks }) : undefined;
 		this.exportState = { isExporting: true, progress: 0, result: null };
 		// Register the job before notifying, so a subscriber that cancels on
 		// seeing the export start cancels this one.
 		const job = this.exportJobs.start({
 			run: ({ signal, isCurrent }) =>
 				this.editor.renderer.exportProject({
-					options,
+					options: scene
+						? {
+								...options,
+								format: "mp4",
+								includeAudio: true,
+								fps: options.fps ?? project?.settings.fps,
+							}
+						: options,
+					scene,
 					signal,
 					onProgress: ({ progress }) => {
 						if (!isCurrent()) return;
@@ -409,14 +450,13 @@ export class ProjectManager {
 		// A subscriber can start another export from inside notify().
 		if (!isCurrent()) return { success: false, cancelled: true };
 		if (result.success && result.buffer) {
-			onExported?.({ buffer: result.buffer });
+			onExported?.({ buffer: result.buffer, ...(srt && { srt }) });
 		}
 		return result;
 	}
 
 	/**
-	 * Captures the approved Horizontal edit, then loads the saved spellings,
-	 * renders the MP4 at 1080p30 and publishes it with the SRT under Exports.
+	 * Captures the approved edit, renders it, and publishes the files under Exports.
 	 */
 	async deliver({
 		quality,
@@ -449,7 +489,7 @@ export class ProjectManager {
 		return this.runDelivery();
 	}
 
-	/** Retries a failed Horizontal export, reusing its snapshot and any finished render. */
+	/** Retries a failed export, reusing its snapshot and any finished render. */
 	retryDelivery(): Promise<ExportResult> {
 		if (!this.delivery)
 			return Promise.resolve({ success: false, error: "Nothing to retry." });
@@ -465,7 +505,7 @@ export class ProjectManager {
 			result: null,
 			step: delivery.video
 				? "upload-video"
-				: "srt" in delivery.input
+				: "srt" in delivery.input || delivery.input.shortStyle
 					? "render"
 					: "spellings",
 		};
@@ -846,6 +886,67 @@ export class ProjectManager {
 			});
 			throw error;
 		}
+	}
+
+	setShortStyle({ style }: { style: ShortStyle }): void {
+		const command = this.buildShortStyleCommand({ style });
+		if (command) this.editor.command.execute({ command });
+	}
+
+	buildShortStyleCommand({
+		style,
+		skipSequenceId,
+	}: {
+		style: ShortStyle;
+		skipSequenceId?: string;
+	}): BatchCommand | undefined {
+		const project = this.active;
+		if (
+			!project ||
+			!projectShortStyle({ project }) ||
+			project.settings.shortStyle === style
+		)
+			return;
+		const projectItems = this.editor.media.getProjectItems();
+		const canvas = project.settings.canvasSize;
+		const commands = this.editor.sequences
+			.getSequences()
+			.flatMap((sequence) => {
+				if (sequence.id === skipSequenceId) return [];
+				const framed =
+					style === "explainer"
+						? fillExplainerPicture({ tracks: sequence.tracks, canvas, projectItems })
+						: sequence.tracks;
+				const reframed = { ...sequence, tracks: framed };
+				const synced = syncGraphics({
+					sequence: reframed,
+					projectItems,
+					canvas,
+					shortStyle: style,
+				});
+				const tracks = layoutShort({
+					sequence: { ...reframed, ...synced },
+					style,
+					canvas,
+					projectItems,
+					updateHookVisibility: true,
+				});
+				return !synced && tracks === sequence.tracks
+					? []
+					: [
+							new UpdateSequenceCommand({
+								editor: this.editor,
+								sequenceId: sequence.id,
+								updates: { ...synced, tracks },
+								label: "Place Short graphics and captions",
+								keepSelection: true,
+							}),
+						];
+			});
+		return new BatchCommand([
+			new UpdateProjectSettingsCommand({ shortStyle: style }),
+			...commands,
+		]);
 	}
 
 	async updateSettings({

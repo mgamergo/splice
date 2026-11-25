@@ -5,7 +5,7 @@ import type { EditorApi } from "@/agent/editor-api";
 import { ApprovalApi } from "@/approval/api";
 import type { EditorCore } from "@/core";
 import { importDiskItems, summarizeItem } from "@/media/import-disk";
-import { projectFormat } from "@/project/format";
+import { projectFormat, projectShortStyle } from "@/project/format";
 
 export type TabHandlers = Record<TabMethod, (params: unknown) => unknown>;
 
@@ -49,6 +49,7 @@ export function createTabHandlers({
 							id: project.metadata.id,
 							name: project.metadata.name,
 							format: projectFormat({ project }),
+							shortStyle: projectShortStyle({ project }),
 						}
 					: null,
 				sequenceId: editor.sequences.getActiveSequenceOrNull()?.id ?? null,
@@ -85,6 +86,19 @@ export function createTabHandlers({
 			return api.graphicsApply(params);
 		},
 		"editor.graphicsList": (params) => api.graphicsList(params),
+		"editor.shortStyle": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.setShortStyle(params);
+		},
+		"editor.shortHook": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.setShortHook(params);
+		},
+		"editor.shortCaptionPlacement": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.setShortCaptionPlacement(params);
+		},
+		"editor.shortSrt": () => api.shortCaptionSrt(),
 		"editor.finalizeCut": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
 			return approval.finalizeCut(params);

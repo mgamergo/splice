@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SHORT_STYLES } from "./index";
 import { graphicsPassOpSchema } from "./graphics";
 import { expectedRevision } from "./revision";
 
@@ -297,6 +298,55 @@ export const captionStyleSchema = z.strictObject({
 		.optional()
 		.describe("Vertical placement (default bottom, clear of the Shorts UI)"),
 	uppercase: z.boolean().optional(),
+});
+
+export const shortStyleSchema = z.enum(SHORT_STYLES);
+
+export const shortStyleRequestSchema = z.strictObject({
+	style: shortStyleSchema,
+	expectedRevision,
+});
+
+export const shortCaptionPlacementRequestSchema = z.strictObject({
+	position: z
+		.enum(["auto", "top", "middle", "bottom"])
+		.describe(
+			"Auto starts centered for Explainer or lower for Raw and avoids action regions. Other values set a fixed placement on the active sequence.",
+		),
+	expectedRevision,
+});
+
+export const shortHookRequestSchema = z.strictObject({
+	hook: z
+		.strictObject({
+			text: z.string().trim().min(1).max(80),
+			demonstrationStart: z
+				.number()
+				.min(0.3)
+				.max(3)
+				.describe(
+					"Sequence seconds when the demonstration begins. The hook clears at this point.",
+				),
+			evidence: z.strictObject({
+				projectItemId: z.string().min(1),
+				time: z
+					.number()
+					.nonnegative()
+					.describe("Source seconds of the evidence in the opening footage"),
+				kind: z.enum(["narration", "footage"]),
+				detail: z
+					.string()
+					.trim()
+					.min(1)
+					.max(400)
+					.describe(
+						"The spoken words or visible detail you verified in the opening.",
+					),
+			}),
+		})
+		.nullable()
+		.describe("Pass null to remove the opening hook."),
+	expectedRevision,
 });
 
 export const captionsRequestSchema = z.strictObject({

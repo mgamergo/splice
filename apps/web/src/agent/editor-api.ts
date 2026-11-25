@@ -1,3 +1,4 @@
+import { fillExplainerPicture } from "@/agent/explainer-picture";
 import {
 	buildRawSequence,
 	buildRoughCut,
@@ -8,6 +9,8 @@ import {
 import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-sequence";
 import {
 	CaptionError,
+	recoverCaptionLayouts,
+	saveCaptionCorrections,
 	uncaptionedItemIds as uncaptionedRecordings,
 	withCaptionTrack,
 	withoutCaptionTrack,
@@ -36,6 +39,10 @@ import {
 	syncGraphics,
 	withoutGraphicClips,
 } from "@/agent/graphics";
+import { projectFormat, projectShortStyle } from "@/project/format";
+import { layoutShort } from "@/agent/short-layout";
+import { planShortHook } from "@/agent/short-hook";
+import { shortSrt } from "@/export/short-srt";
 import {
 	hasTranscriptWords,
 	sequenceTranscript,
@@ -50,7 +57,6 @@ import {
 	cutTranscriptRequestSchema,
 	transcriptSelectionRequestSchema,
 } from "@splice/bridge/transcript";
-import { projectFormat } from "@/project/format";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
 	applySourceGains,
@@ -97,6 +103,9 @@ import {
 	roughCutSourcesRequestSchema,
 	roughCutTabRequestSchema,
 	takesListRequestSchema,
+	shortStyleRequestSchema,
+	shortHookRequestSchema,
+	shortCaptionPlacementRequestSchema,
 } from "@splice/bridge/ops";
 import { formatSeconds, resolveTimeSpec, TimeSpecError } from "@/agent/time";
 import { Command, type CommandResult } from "@/commands/base-command";
@@ -335,9 +344,18 @@ export class EditorApi {
 					revision: this.getRevision(),
 					audioSources: collectAudioSources({ tracks, projectItems }),
 				};
-			const gained = sourceGains
+			const leveled = sourceGains
 				? applySourceGains({ tracks, projectItems, gains: sourceGains })
 				: tracks;
+			const project = this.editor.project.getActive();
+			const gained =
+				projectShortStyle({ project }) === "explainer"
+					? fillExplainerPicture({
+							tracks: leveled,
+							canvas: project.settings.canvasSize,
+							projectItems,
+						})
+					: leveled;
 			const captioned = captions
 				? withCaptionTrack({
 						tracks: gained,
@@ -374,7 +392,7 @@ export class EditorApi {
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const conflict = this.checkWrite(parsed.data);
 		if (conflict) return conflict;
-		const { sequenceId, sources, style } = parsed.data;
+		const { sequenceId, sources } = parsed.data;
 		const sequence = sequenceId
 			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
 			: this.editor.sequences.getActiveSequenceOrNull();
@@ -405,17 +423,38 @@ export class EditorApi {
 			};
 		}
 		try {
-			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
+			const style = { ...sequence.captions?.style, ...parsed.data.style };
+			const canvas = project.settings.canvasSize;
+			const previousTracks = recoverCaptionLayouts({
 				tracks: sequence.tracks,
-				captions: { sources, style },
-				canvasSize: this.editor.project.getActive().settings.canvasSize,
+				captions: sequence.captions,
+				canvasSize: canvas,
 			});
+			const previous = saveCaptionCorrections({
+				tracks: previousTracks,
+				captions: sequence.captions,
+			});
+			const captions = { ...previous, sources, style };
+			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
+				tracks: previousTracks,
+				captions,
+				canvasSize: canvas,
+			});
+			const shortStyle = projectShortStyle({ project });
+			const placed = shortStyle
+				? layoutShort({
+						sequence: { ...sequence, tracks, captions },
+						style: shortStyle,
+						canvas,
+						projectItems: this.editor.media.getProjectItems(),
+					})
+				: tracks;
 			const label = "Agent: captions";
 			this.editor.command.execute({
 				command: new UpdateSequenceCommand({
 					editor: this.editor,
 					sequenceId: sequence.id,
-					updates: { tracks, captions: { sources, style } },
+					updates: { tracks: placed, captions },
 					label,
 				}),
 			});
@@ -431,6 +470,104 @@ export class EditorApi {
 			if (!(error instanceof CaptionError)) throw error;
 			return this.invalidOp(error.message);
 		}
+	}
+
+	setShortStyle(request: unknown) {
+		const parsed = shortStyleRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		if (!projectShortStyle({ project: this.editor.project.getActive() }))
+			return this.invalidOp("Video style can be changed on a Short project.");
+		this.editor.project.setShortStyle({ style: parsed.data.style });
+		return {
+			ok: true as const,
+			style: parsed.data.style,
+			revision: this.getRevision(),
+		};
+	}
+
+	setShortCaptionPlacement(request: unknown) {
+		const parsed = shortCaptionPlacementRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const sequence = this.editor.sequences.getActiveSequence();
+		const project = this.editor.project.getActive();
+		if (!projectShortStyle({ project }) || !sequence.captions)
+			return this.invalidOp(
+				"Add burned-in captions to the Short sequence first.",
+			);
+		const position =
+			parsed.data.position === "auto" ? undefined : parsed.data.position;
+		this.editor.command.execute({
+			command: new UpdateSequenceCommand({
+				editor: this.editor,
+				sequenceId: sequence.id,
+				updates: {
+					tracks: recoverCaptionLayouts({
+						tracks: sequence.tracks,
+						captions: sequence.captions,
+						canvasSize: project.settings.canvasSize,
+					}),
+					captions: {
+						...sequence.captions,
+						style: { ...sequence.captions.style, position },
+					},
+				},
+				label: "Place Short captions",
+				keepSelection: true,
+			}),
+		});
+		return {
+			ok: true as const,
+			position: parsed.data.position,
+			revision: this.getRevision(),
+		};
+	}
+
+	setShortHook(request: unknown) {
+		const parsed = shortHookRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const project = this.editor.project.getActive();
+		if (projectShortStyle({ project }) !== "raw")
+			return this.invalidOp("An opening hook is for Raw Shorts.");
+		const sequence = this.editor.sequences.getActiveSequence();
+		const result = planShortHook({
+			sequence,
+			hook: parsed.data.hook,
+			canvas: project.settings.canvasSize,
+		});
+		if ("error" in result && result.error) return this.invalidOp(result.error);
+		if ("tracks" in result && result.tracks)
+			this.editor.command.execute({
+				command: new UpdateSequenceCommand({
+					editor: this.editor,
+					sequenceId: sequence.id,
+					updates: { tracks: result.tracks },
+					label: "Edit opening hook",
+					keepSelection: true,
+				}),
+			});
+		return {
+			ok: true as const,
+			status: result.status,
+			revision: this.getRevision(),
+		};
+	}
+
+	shortCaptionSrt() {
+		const project = this.editor.project.getActiveOrNull();
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		if (!project || !sequence || !projectShortStyle({ project }))
+			return this.invalidOp("Open the Short sequence whose captions you want.");
+		return {
+			ok: true as const,
+			revision: this.getRevision(),
+			srt: shortSrt({ tracks: sequence.tracks }),
+		};
 	}
 
 	/** The sequence a caption request names, or the active one. */
@@ -574,14 +711,18 @@ export class EditorApi {
 		prune: boolean;
 	}) {
 		const projectItems = this.editor.media.getProjectItems();
-		const canvas = this.editor.project.getActive().settings.canvasSize;
-		const current = syncGraphics({ sequence, projectItems, canvas }) ?? sequence;
+		const project = this.editor.project.getActive();
+		const canvas = project.settings.canvasSize;
+		const shortStyle = projectShortStyle({ project });
+		const current =
+			syncGraphics({ sequence, projectItems, canvas, shortStyle }) ?? sequence;
 		const plan = planGraphicsPass({
 			sequence: current,
 			planned: graphics,
 			prune,
 			projectItems,
 			canvas,
+			shortStyle,
 		});
 		const placed = syncGraphics({
 			sequence: {
@@ -593,6 +734,7 @@ export class EditorApi {
 			},
 			projectItems,
 			canvas,
+			shortStyle,
 		});
 		if (!placed) throw new Error("Graphics placement needs a graphics state");
 		// Report where each graphic landed once placed, with any flags.
