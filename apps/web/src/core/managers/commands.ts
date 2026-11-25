@@ -1,4 +1,8 @@
-import type { Correction } from "@splice/bridge/profile";
+import type {
+	Correction,
+	CorrectionEvent,
+	CorrectionStatusEvent,
+} from "@splice/bridge/profile";
 import { generateUUID } from "@/utils/id";
 import type { EditorCore } from "@/core";
 import {
@@ -17,6 +21,7 @@ interface CommandHistoryEntry {
 	sequenceId: string | undefined;
 	previousSelection: EditorSelectionSnapshot;
 	selectionOverride?: EditorSelectionSnapshot;
+	corrections?: Pick<Correction, "id" | "projectId" | "sequenceId">[];
 }
 
 export class CommandManager {
@@ -27,7 +32,7 @@ export class CommandManager {
 	private followUpProducers: Array<() => Command | null> = [];
 	/** Increments on every execute, undo and redo, so readers can detect change. */
 	private revision = 0;
-	private correctionListeners = new Set<(corrections: Correction[]) => void>();
+	private unsavedCorrections: CorrectionEvent[] = [];
 	private revisionListeners = new Set<(revision: number) => void>();
 
 	constructor(private editor: EditorCore) {}
@@ -49,21 +54,16 @@ export class CommandManager {
 		const followUps = this.runFollowUps();
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
-		this.history.push({
+		const entry: CommandHistoryEntry = {
 			command,
 			followUps,
 			sequenceId,
 			previousSelection,
 			selectionOverride,
-		});
+		};
+		this.history.push(entry);
 		this.redoStack = [];
-		this.bumpRevision();
-		if (
-			origin === "creator" &&
-			sequenceId &&
-			result?.corrections?.length &&
-			this.correctionListeners.size
-		) {
+		if (origin === "creator" && sequenceId && result?.corrections?.length) {
 			const projectId = this.editor.project.getActiveOrNull()?.metadata.id;
 			if (projectId) {
 				const timestamp = new Date().toISOString();
@@ -73,13 +73,21 @@ export class CommandManager {
 						id: generateUUID(),
 						projectId,
 						sequenceId,
-						revision: this.revision,
+						revision: this.revision + 1,
 						timestamp,
 					}),
 				);
-				for (const listener of this.correctionListeners) listener(corrections);
+				entry.corrections = corrections.map(
+					({ id, projectId, sequenceId }) => ({
+						id,
+						projectId,
+						sequenceId,
+					}),
+				);
+				this.unsavedCorrections.push(...corrections);
 			}
 		}
+		this.bumpRevision();
 		return command;
 	}
 
@@ -97,11 +105,43 @@ export class CommandManager {
 		this.bumpRevision();
 	}
 
-	subscribeCorrections(
-		listener: (corrections: Correction[]) => void,
-	): () => void {
-		this.correctionListeners.add(listener);
-		return () => this.correctionListeners.delete(listener);
+	getUnsavedCorrections({
+		projectId,
+	}: {
+		projectId: string;
+	}): CorrectionEvent[] {
+		return this.unsavedCorrections.filter(
+			(event) => event.projectId === projectId,
+		);
+	}
+
+	markCorrectionsSaved({ events }: { events: CorrectionEvent[] }): void {
+		const saved = new Set(events.map(({ id }) => id));
+		this.unsavedCorrections = this.unsavedCorrections.filter(
+			({ id }) => !saved.has(id),
+		);
+	}
+
+	private recordCorrectionStatus({
+		entry,
+		kind,
+	}: {
+		entry: CommandHistoryEntry;
+		kind: CorrectionStatusEvent["kind"];
+	}): void {
+		if (!entry.corrections?.length) return;
+		const timestamp = new Date().toISOString();
+		for (const { id, projectId, sequenceId } of entry.corrections) {
+			this.unsavedCorrections.push({
+				id: generateUUID(),
+				correctionId: id,
+				kind,
+				projectId,
+				sequenceId,
+				timestamp,
+				revision: this.revision + 1,
+			});
+		}
 	}
 
 	registerReactor(reactor: () => void): void {
@@ -136,6 +176,7 @@ export class CommandManager {
 				});
 			}
 			this.redoStack.push(entry);
+			this.recordCorrectionStatus({ entry, kind: "cancel" });
 			this.bumpRevision();
 		}
 	}
@@ -159,12 +200,11 @@ export class CommandManager {
 		this.runReactors();
 
 		this.history.push({
-			command: entry.command,
-			followUps: entry.followUps,
-			sequenceId: entry.sequenceId,
+			...entry,
 			previousSelection,
 			selectionOverride,
 		});
+		this.recordCorrectionStatus({ entry, kind: "reactivate" });
 		this.bumpRevision();
 	}
 
@@ -226,6 +266,7 @@ export class CommandManager {
 	clear(): void {
 		this.history = [];
 		this.redoStack = [];
+		this.unsavedCorrections = [];
 	}
 
 	private getSelectionSnapshot(): EditorSelectionSnapshot {

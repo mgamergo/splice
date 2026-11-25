@@ -11,7 +11,8 @@ import {
 	useAgentBridgeStore,
 } from "./bridge-store";
 import { createTabHandlers } from "./handlers";
-import { flushCorrections, reportCorrections } from "./report-corrections";
+import { storageService } from "@/services/storage/service";
+import { flushCorrections } from "./report-corrections";
 import { ensureMediaSession } from "./media-session";
 import { captureBridgeToken, readBridgeToken } from "./token";
 
@@ -94,9 +95,11 @@ export function useAgentBridge(): void {
 			recordRevisionFloor(revision);
 			client.notifyRevision(revision);
 		});
-		const stopReporting =
-			editor.command.subscribeCorrections(reportCorrections);
+		const stopReporting = storageService.subscribeCorrectionOutbox(() => {
+			void flushCorrections();
+		});
 		client.start();
+		void flushCorrections();
 		client.notifyRevision(api.getRevision());
 
 		return () => {

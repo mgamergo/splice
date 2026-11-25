@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { correctionSchema, type Correction } from "@splice/bridge/profile";
+import { correctionEventSchema } from "@splice/bridge/profile";
 import { EditorApi } from "@/agent/editor-api";
 import { s, setUpEditor } from "@/agent/__tests__/fixtures";
 import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
@@ -33,16 +33,18 @@ function setup() {
 	expect(
 		api.rawSequence({ projectItemIds: ["rec"], expectedRevision: 0 }),
 	).toMatchObject({ ok: true });
-	const corrections: Correction[] = [];
-	editor.command.subscribeCorrections((records) =>
-		corrections.push(...correctionSchema.array().parse(records)),
-	);
+	const events = () =>
+		correctionEventSchema
+			.array()
+			.parse(editor.command.getUnsavedCorrections({ projectId: "project-1" }));
+	const corrections = () =>
+		events().filter((event) => !("correctionId" in event));
 	const active = () => editor.sequences.getActiveSequence();
-	return { editor, api, active, corrections };
+	return { editor, api, active, corrections, events };
 }
 
 test("creator Swap records the displaced source and preserves the original agent ranking across later swaps", () => {
-	const { editor, api, active, corrections } = setup();
+	const { editor, api, active, corrections, events } = setup();
 	const best = {
 		...range([10, 15]),
 		ranking: { completeness: 0.9, fluency: 0.8, pacing: 0.7 },
@@ -67,7 +69,7 @@ test("creator Swap records the displaced source and preserves the original agent
 		trimEnd: s(0),
 		duration: s(9),
 	});
-	expect(corrections).toEqual([]);
+	expect(corrections()).toEqual([]);
 
 	const swap = () =>
 		editor.command.execute({
@@ -77,7 +79,7 @@ test("creator Swap records the displaced source and preserves the original agent
 			}),
 		});
 	swap();
-	expect(corrections).toMatchObject([
+	expect(corrections()).toMatchObject([
 		{
 			kind: "swap_take",
 			projectId: "project-1",
@@ -94,14 +96,20 @@ test("creator Swap records the displaced source and preserves the original agent
 		},
 	]);
 	swap();
-	expect(corrections[1]).toMatchObject({
+	expect(corrections()[1]).toMatchObject({
 		before: [recording([2, 7])],
 		after: [recording([10, 15])],
 		decision: { agentBestTake: best },
 	});
 	editor.command.undo();
 	editor.command.redo();
-	expect(corrections).toHaveLength(2);
+	expect(corrections()).toHaveLength(2);
+	const correctionId = corrections()[1].id;
+	expect(events().slice(2)).toMatchObject([
+		{ kind: "cancel", correctionId },
+		{ kind: "reactivate", correctionId },
+	]);
+	expect(new Set(events().map(({ id }) => id)).size).toBe(4);
 });
 
 test("creator Restore captures only the restored ranges, and the same op in an agent batch is ignored", () => {
@@ -127,14 +135,14 @@ test("creator Restore captures only the restored ranges, and the same op in an a
 			ops: [{ op: "restore_takes", markerId, takeIndex: 0 }],
 		}),
 	).toMatchObject({ ok: true });
-	expect(corrections).toEqual([]);
+	expect(corrections()).toEqual([]);
 	editor.command.execute({
 		command: new EditRemovalMarkerCommand({
 			editor,
 			edit: { op: "restore_takes", markerId },
 		}),
 	});
-	expect(corrections).toMatchObject([
+	expect(corrections()).toMatchObject([
 		{
 			kind: "restore_takes",
 			before: [],
@@ -173,7 +181,7 @@ test.each([
 			startTime: s(cutIn - 0.3),
 			duration: s(20 - cutOut + 0.3),
 		});
-		expect(corrections).toMatchObject([
+		expect(corrections()).toMatchObject([
 			{
 				kind: "retrim",
 				before: [recording([cutOut, 20])],
@@ -193,7 +201,7 @@ test.each([
 			trimEnd: left.trimEnd,
 			duration: s(cutIn - 0.5),
 		});
-		expect(corrections).toHaveLength(1);
+		expect(corrections()).toHaveLength(1);
 	},
 );
 
@@ -216,7 +224,7 @@ test("a razor keeps provenance only on the existing cut edges", () => {
 	const [first, second] = active().tracks.audio[0].clips;
 	expect(first.tighteningOut).toBeUndefined();
 	expect(second.tighteningOut?.kind).toBe("false_start");
-	expect(corrections).toEqual([]);
+	expect(corrections()).toEqual([]);
 });
 
 test("a false-start edge keeps its provenance when it snaps into a pause", () => {
@@ -235,7 +243,7 @@ test("a false-start edge keeps its provenance when it snaps into a pause", () =>
 		trimEnd: s(16),
 		duration: s(4),
 	});
-	expect(corrections).toMatchObject([
+	expect(corrections()).toMatchObject([
 		{
 			kind: "retrim",
 			before: [recording([0, 4.2])],
