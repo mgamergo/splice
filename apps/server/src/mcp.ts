@@ -1,5 +1,9 @@
 import { briefSetRequestSchema } from "@splice/bridge/brief";
 import {
+	storageCleanupSchema,
+	storageSelectionSchema,
+} from "@splice/bridge/storage";
+import {
 	applyStyleUpdateSchema,
 	revertFramingPreferenceSchema,
 	setStyleDefaultsSchema,
@@ -59,6 +63,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { SpliceConfig } from "./config";
+import { invalidParams } from "./transcription";
 import { createRpcClient, RpcCallError, type RpcCall } from "./rpc-client";
 import { readSession } from "./session";
 import { startDetached } from "./background";
@@ -1107,6 +1112,34 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					await rpc({ method: "editor.transcriptSelection", params: args }),
 				),
 			),
+	);
+
+	server.registerTool(
+		"storage_report",
+		{
+			title: "Report Splice disk storage",
+			description:
+				"Reports reclaimable disk bytes by cache category and what Splice keeps, with reasons. Optional filters restrict the preview to selected categories or older files. Returns a previewToken for a confirmed cleanup.",
+			inputSchema: storageSelectionSchema.shape,
+		},
+		(args) =>
+			guard(async () => text(await rpc({ method: "storage.report", params: args }))),
+	);
+
+	server.registerTool(
+		"storage_cleanup",
+		{
+			title: "Clean up Splice disk storage",
+			description:
+				"Previews cleanup by default. Show the creator the preview from storage_report or a dry run. After they confirm, pass dryRun: false and its previewToken to remove only the unchanged entries they reviewed. You can narrow the confirmed categories. New or changed data needs a fresh preview and confirmation.",
+			inputSchema: storageCleanupSchema.shape,
+		},
+		(args) =>
+			guard(async () => {
+				if (!args.dryRun && !args.previewToken)
+					throw invalidParams("Get a fresh storage preview before applying cleanup.");
+				return text(await rpc({ method: "storage.cleanup", params: args }));
+			}),
 	);
 
 	server.registerTool(

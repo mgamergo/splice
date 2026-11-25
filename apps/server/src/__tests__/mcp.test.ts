@@ -94,6 +94,8 @@ describe("splice mcp tools", () => {
 			"short_hook",
 			"short_srt",
 			"short_style",
+			"storage_cleanup",
+			"storage_report",
 			"style_defaults_get",
 			"style_defaults_set",
 			"style_update_apply",
@@ -291,6 +293,43 @@ describe("splice mcp tools", () => {
 			await client.close();
 			await server.stop();
 			await rm(root, { force: true, recursive: true });
+		}
+	});
+
+	test("storage tools default to dry run and require a preview token to apply", async () => {
+		const previewToken = randomUUID();
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			return { freedBytes: 0 };
+		});
+		try {
+			for (const request of [
+				{ name: "storage_report", arguments: { olderThanDays: 7 } },
+				{ name: "storage_cleanup" },
+				{
+					name: "storage_cleanup",
+					arguments: { dryRun: false, previewToken, categories: ["pauses"] },
+				},
+			]) {
+				expect((await client.callTool(request)).isError).toBeFalsy();
+			}
+			expect(
+				(await client.callTool({
+					name: "storage_cleanup",
+					arguments: { dryRun: false },
+				})).isError,
+			).toBe(true);
+			expect(calls).toEqual([
+				["storage.report", { olderThanDays: 7 }],
+				["storage.cleanup", { dryRun: true }],
+				[
+					"storage.cleanup",
+					{ dryRun: false, previewToken, categories: ["pauses"] },
+				],
+			]);
+		} finally {
+			await client.close();
 		}
 	});
 

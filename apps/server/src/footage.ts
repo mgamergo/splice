@@ -160,10 +160,12 @@ export function serveFile({
 	request,
 	absolutePath,
 	contentType,
+	onClose,
 }: {
 	request: Request;
 	absolutePath: string;
 	contentType: string;
+	onClose?: () => void;
 }): Response {
 	const file = Bun.file(absolutePath);
 	const size = file.size;
@@ -174,11 +176,56 @@ export function serveFile({
 		"x-content-type-options": "nosniff",
 		"last-modified": new Date(file.lastModified).toUTCString(),
 	});
+	function respond({
+		status,
+		blob,
+	}: {
+		status: number;
+		blob: Blob | null;
+	}): Response {
+		if (!onClose) return new Response(blob, { status, headers });
+		if (!blob) {
+			onClose();
+			return new Response(null, { status, headers });
+		}
+
+		// Keep a cached render leased until Bun finishes or cancels the body.
+		const reader = blob.stream().getReader();
+		let remaining = blob.size;
+		const body = new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				try {
+					const { done, value } = await reader.read();
+					if (!done) {
+						controller.enqueue(value);
+						remaining -= value.byteLength;
+					}
+					if (done || remaining === 0) {
+						await reader.cancel();
+						onClose();
+						controller.close();
+					}
+				} catch (error) {
+					onClose();
+					throw error;
+				}
+			},
+			async cancel(reason) {
+				try {
+					await reader.cancel(reason);
+				} finally {
+					onClose();
+				}
+			},
+		});
+		return new Response(body, { status, headers });
+	}
+
 	const range = request.headers.get("range");
 	const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
 	if (range && !match) {
 		headers.set("content-range", `bytes */${size}`);
-		return new Response(null, { status: 416, headers });
+		return respond({ status: 416, blob: null });
 	}
 	if (match) {
 		const [, startText, endText] = match;
@@ -195,18 +242,18 @@ export function serveFile({
 		}
 		if (!Number.isFinite(start) || start > end || start >= size) {
 			headers.set("content-range", `bytes */${size}`);
-			return new Response(null, { status: 416, headers });
+			return respond({ status: 416, blob: null });
 		}
 		headers.set("content-range", `bytes ${start}-${end}/${size}`);
 		headers.set("content-length", String(end - start + 1));
-		return new Response(
-			request.method === "HEAD" ? null : file.slice(start, end + 1),
-			{ status: 206, headers },
-		);
+		return respond({
+			status: 206,
+			blob: request.method === "HEAD" ? null : file.slice(start, end + 1),
+		});
 	}
 	headers.set("content-length", String(size));
-	return new Response(request.method === "HEAD" ? null : file, {
+	return respond({
 		status: 200,
-		headers,
+		blob: request.method === "HEAD" ? null : file,
 	});
 }

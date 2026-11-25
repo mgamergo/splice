@@ -3,6 +3,7 @@ import {
 	type AutomaticSpeechRecognitionPipeline,
 	type AutomaticSpeechRecognitionOutput,
 } from "@huggingface/transformers";
+import { loadWithModelCache } from "./model-cache";
 import type { TranscriptionSegment } from "@/transcription/types";
 import {
 	DEFAULT_CHUNK_LENGTH_SECONDS,
@@ -57,7 +58,7 @@ async function handleInit({ modelId }: { modelId: string }) {
 	fileBytes.clear();
 
 	try {
-		transcriber = (await pipeline("automatic-speech-recognition", modelId, {
+		const load = () => pipeline("automatic-speech-recognition", modelId, {
 			dtype: "q4",
 			device: "auto",
 			progress_callback: (progressInfo: {
@@ -105,7 +106,8 @@ async function handleInit({ modelId }: { modelId: string }) {
 					} satisfies WorkerResponse);
 				}
 			},
-		})) as unknown as AutomaticSpeechRecognitionPipeline;
+		});
+		transcriber = (await loadWithModelCache(load)) as unknown as AutomaticSpeechRecognitionPipeline;
 
 		self.postMessage({ type: "init-complete" } satisfies WorkerResponse);
 	} catch (error) {

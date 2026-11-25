@@ -55,6 +55,8 @@ import { createProfileProviders } from "./profile-provider";
 import { createProfileStore } from "./profile";
 import { createStyleProfile } from "./style-profile";
 import { createSpellingStore } from "./spellings";
+import { createCacheUse } from "./cache-use";
+import { createStorage } from "./storage";
 
 const TAB_AUTH_TIMEOUT_MS = 5_000;
 const MAX_RPC_BODY_BYTES = 4 * 1024 * 1024;
@@ -183,14 +185,17 @@ export function startServer({
 	openFolder,
 }: StartServerOptions): RunningServer {
 	const bridge: TabBridge = new TabBridge(() => profileAgent.activity());
-	const transcription = createTranscriptionJobs({ root });
+	const cacheUse = createCacheUse();
+	const transcription = createTranscriptionJobs({ root, cacheUse });
 	const pauses = createPauseDetector({
 		root,
+		cacheUse,
 		readTranscript: transcription.cached,
 	});
-	const noiseReduction = createNoiseReducer({ root });
-	const loudness = createLoudnessMeter({ root, noiseReduction });
+	const noiseReduction = createNoiseReducer({ root, cacheUse });
+	const loudness = createLoudnessMeter({ root, cacheUse, noiseReduction });
 	const exportStore = createExportStore({ root, openFolder });
+	const storage = createStorage({ root, cacheUse, exportStore });
 	const spellings = createSpellingStore({ root });
 	const profile = createProfileStore({ root });
 	const providers = createProfileProviders({ root });
@@ -235,6 +240,8 @@ export function startServer({
 		"exports.publish": (params) => exportStore.publish(params),
 		"exports.abort": (params) => exportStore.abort(params),
 		"exports.open": () => exportStore.open(),
+		"storage.report": storage.report,
+		"storage.cleanup": storage.cleanup,
 	};
 	// `signal` aborts when the caller hangs up, so FFmpeg work nobody waits
 	// for stops.
@@ -256,6 +263,8 @@ export function startServer({
 		["framing.list", style.listFraming],
 		["framing.revert", ({ params }) => style.revertFraming(params)],
 		["exports.list", ({ params }) => exportStore.list(params)],
+		["storage.report", ({ params }) => storage.report(params)],
+		["storage.cleanup", ({ params }) => storage.cleanup(params)],
 	]);
 	// What the media cookie carries: it only opens footage, never the RPC endpoint,
 	// since browsers share cookies across ports on the same host. New each start.
@@ -617,19 +626,24 @@ export function startServer({
 			if (contentHash) response.headers.set(MEDIA_CONTENT_HEADER, contentHash);
 			return response;
 		}
+		const release = await cacheUse.acquire("noise-reduction");
 		try {
 			const { file } = await noiseReduction.ensure({
 				path,
 				signal: request.signal,
 			});
-			if (version && (await footageVersion({ absolutePath })) !== version)
+			if (version && (await footageVersion({ absolutePath })) !== version) {
+				release();
 				return changed();
+			}
 			return serveFile({
 				request,
 				absolutePath: file,
 				contentType: "audio/wav",
+				onClose: release,
 			});
 		} catch (error) {
+			release();
 			const message = error instanceof Error ? error.message : String(error);
 			return new Response(`Couldn't reduce noise: ${message}`, {
 				// Invalid params: not a recording, e.g. an image.
@@ -905,6 +919,7 @@ export function startServer({
 				profile.stop(),
 				loudness.stop(),
 				noiseReduction.stop(),
+				storage.stop(),
 			]);
 		},
 	};

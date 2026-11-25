@@ -1,3 +1,4 @@
+import { createCacheUse, type CacheUse } from "./cache-use";
 import type { Transcript, TranscriptWord } from "@splice/bridge";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
@@ -386,8 +387,10 @@ const roundRange = ({ start, end }: TimeRange): TimeRange => ({
 export function createPauseDetector({
 	root,
 	readTranscript,
+	cacheUse = createCacheUse(),
 }: {
 	root: string;
+	cacheUse?: CacheUse;
 	readTranscript: (input: { path: string }) => Promise<Transcript | null>;
 }) {
 	const stop = new AbortController();
@@ -418,44 +421,48 @@ export function createPauseDetector({
 				.catch(() => null),
 		);
 		if (cached.success) return { scan: cached.data, cached: true };
-		const work = async (jobSignal: AbortSignal) => {
-			const command = await findFfmpeg({ root });
-			const probe = await probeRecording({
-				command,
-				source,
-				signal: jobSignal,
+		const work = (jobSignal: AbortSignal) =>
+			cacheUse.use({
+				cache: "pauses",
+				operation: async () => {
+					const command = await findFfmpeg({ root });
+					const probe = await probeRecording({
+						command,
+						source,
+						signal: jobSignal,
+					});
+					let result: Scan;
+					if (parseHasAudio({ output: probe })) {
+						const lines: string[] = [];
+						await run({
+							command,
+							args: silencedetectArgs({ source, noiseDb }),
+							signal: jobSignal,
+							onLine: (line) => lines.push(line),
+						});
+						result = {
+							...parseSilencedetect({ output: lines.join("\n") }),
+							hasAudio: true,
+						};
+					} else {
+						const { durationSeconds } = parseSilencedetect({ output: probe });
+						result = { durationSeconds, hasAudio: false, silences: [] };
+					}
+					const current = await resolveRecording({ root, path });
+					if (!sameFileIdentity({ a: current.info, b: info }))
+						throw new Error("Footage changed while finding pauses. Try again.");
+					await mkdir(cacheDir, { recursive: true });
+					const temporary = await mkdtemp(join(cacheDir, ".scan-"));
+					try {
+						const file = join(temporary, "scan.json");
+						await Bun.write(file, JSON.stringify(result));
+						await rename(file, cachePath);
+					} finally {
+						await rm(temporary, { recursive: true, force: true });
+					}
+					return result;
+				},
 			});
-			let result: Scan;
-			if (parseHasAudio({ output: probe })) {
-				const lines: string[] = [];
-				await run({
-					command,
-					args: silencedetectArgs({ source, noiseDb }),
-					signal: jobSignal,
-					onLine: (line) => lines.push(line),
-				});
-				result = {
-					...parseSilencedetect({ output: lines.join("\n") }),
-					hasAudio: true,
-				};
-			} else {
-				const { durationSeconds } = parseSilencedetect({ output: probe });
-				result = { durationSeconds, hasAudio: false, silences: [] };
-			}
-			const current = await resolveRecording({ root, path });
-			if (!sameFileIdentity({ a: current.info, b: info }))
-				throw new Error("Footage changed while finding pauses. Try again.");
-			await mkdir(cacheDir, { recursive: true });
-			const temporary = await mkdtemp(join(cacheDir, ".scan-"));
-			try {
-				const file = join(temporary, "scan.json");
-				await Bun.write(file, JSON.stringify(result));
-				await rename(file, cachePath);
-			} finally {
-				await rm(temporary, { recursive: true, force: true });
-			}
-			return result;
-		};
 		return { scan: await scans.run({ key, signal, work }), cached: false };
 	}
 
@@ -475,7 +482,10 @@ export function createPauseDetector({
 		} = parsed.data;
 		const [{ scan: result, cached }, { transcript, transcriptError }] =
 			await Promise.all([
-				scan({ path, noiseDb, signal }),
+				cacheUse.use({
+					cache: "pauses",
+					operation: () => scan({ path, noiseDb, signal }),
+				}),
 				// Pause edges come from the audio, and the transcript only joins
 				// silences and finds fillers, so a transcript that can't be read
 				// leaves the audio's pauses.
