@@ -58,19 +58,23 @@ function kWeighting(sampleRate: number) {
 
 /** Half the taps either side of the point a true-peak sample is read at. */
 const INTERPOLATION_HALF_TAPS = 6;
-/** BS.1770 reads true peak from 4× oversampling: three points between each pair. */
-const INTERPOLATION_PHASES = [0.25, 0.5, 0.75].map((fraction) => {
-	const taps: number[] = [];
-	for (let j = 1 - INTERPOLATION_HALF_TAPS; j <= INTERPOLATION_HALF_TAPS; j++) {
-		const t = fraction - j;
-		const sinc = Math.sin(Math.PI * t) / (Math.PI * t);
-		const window =
-			0.5 * (1 + Math.cos((Math.PI * t) / INTERPOLATION_HALF_TAPS));
-		taps.push(sinc * window);
-	}
-	const sum = taps.reduce((total, tap) => total + tap, 0);
-	return taps.map((tap) => tap / sum);
-});
+// Order-48, four-phase FIR from ITU-R BS.1770-4, Annex 2 (also in BS.1770-5).
+const PHASE_0 = [
+	0.001708984375, 0.010986328125, -0.0196533203125, 0.033203125,
+	-0.0594482421875, 0.1373291015625, 0.97216796875, -0.102294921875,
+	0.047607421875, -0.026611328125, 0.014892578125, -0.00830078125,
+];
+const PHASE_1 = [
+	-0.0291748046875, 0.029296875, -0.0517578125, 0.089111328125, -0.16650390625,
+	0.465087890625, 0.77978515625, -0.2003173828125, 0.1015625, -0.0582275390625,
+	0.0330810546875, -0.0189208984375,
+];
+const INTERPOLATION_PHASES = [
+	PHASE_0,
+	PHASE_1,
+	[...PHASE_1].reverse(),
+	[...PHASE_0].reverse(),
+];
 /** No interpolated point can exceed the largest sample nearby by more than this. */
 const INTERPOLATION_BOUND = Math.max(
 	...INTERPOLATION_PHASES.map((taps) =>
@@ -125,7 +129,7 @@ function maxMagnitude({
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /** Points either side of a sample whose 4× oversampled peak can be read. */
-const HISTORY = 2 * INTERPOLATION_HALF_TAPS;
+const HISTORY = 2 * INTERPOLATION_HALF_TAPS - 1;
 
 /**
  * Measures loudness and true peak of audio fed to it a slice at a time, so a
@@ -221,7 +225,7 @@ export class MixMeter {
 			maxMagnitude({ data, from: 0, to: data.length }),
 			truePeakBetween({
 				data: joined,
-				from: INTERPOLATION_HALF_TAPS,
+				from: INTERPOLATION_HALF_TAPS - 1,
 				to: joined.length - INTERPOLATION_HALF_TAPS,
 				floor: this.peak,
 			}),
@@ -233,7 +237,7 @@ export class MixMeter {
 		// Silence after the end lets the last points be read.
 		const tail = Array.from(
 			{ length: this.history.length },
-			() => new Float32Array(INTERPOLATION_HALF_TAPS),
+			() => new Float32Array(HISTORY),
 		);
 		tail.forEach((data, channel) => this.readPeak({ channel, data }));
 		const stepsPerBlock = Math.round(BLOCK_SECONDS / STEP_SECONDS);
@@ -319,21 +323,129 @@ export async function measureMix({
 	return meter.finish();
 }
 
-/** Look-ahead of the ceiling: it starts lowering the gain this early. */
-const LOOKAHEAD_SECONDS = 0.005;
-/** How fast the ceiling lets the gain recover after a peak. */
-const RELEASE_DB_PER_SECOND = 20;
-/** Room for the gain changing between samples. */
-const CEILING_MARGIN_DB = 0.1;
+// The envelope is aligned to the sequence sample grid. Each knot sees both
+// adjacent intervals, and recovers to unity in a finite number of intervals.
+const CONTROL_SECONDS = 0.005;
+const RELEASE_INTERVALS = 50;
+const CEILING_MARGIN_DB = 0.35;
 
-/**
- * The gain of each sample once `gainDb` is applied and the true peak is held
- * at or under `ceilingDbtp`, a slice at a time. The gain dips ahead of each
- * peak over a short look-ahead and recovers gently after it, so loud passages
- * keep their shape instead of being clipped.
- */
-async function* mixGains({
-	audio: { channels, sampleRate },
+export type SampleRange = { start: number; end: number };
+export type ReadMixSamples = (range: SampleRange) => Promise<Float32Array[]>;
+
+function controlLength(sampleRate: number): number {
+	return Math.max(1, Math.round(CONTROL_SECONDS * sampleRate));
+}
+
+/** The unmastered samples needed to render any output span independently. */
+export function limiterInputRange({
+	start,
+	end,
+	sampleRate,
+	length,
+}: SampleRange & { sampleRate: number; length: number }): SampleRange {
+	const step = controlLength(sampleRate);
+	return {
+		start: Math.max(
+			0,
+			(Math.floor(start / step) - RELEASE_INTERVALS - 1) * step - 2 * HISTORY,
+		),
+		end: Math.min(length, (Math.ceil(end / step) + 1) * step + 2 * HISTORY),
+	};
+}
+
+function limitRange({
+	input,
+	inputStart,
+	start,
+	end,
+	sampleRate,
+	gainDb,
+	ceilingDbtp,
+}: SampleRange & {
+	input: Float32Array[];
+	inputStart: number;
+	sampleRate: number;
+	gainDb: number;
+	ceilingDbtp: number;
+}): Float32Array[] {
+	const step = controlLength(sampleRate);
+	const gain = dbToLinear(gainDb);
+	const ceiling = dbToLinear(ceilingDbtp - CEILING_MARGIN_DB);
+	const first = Math.floor(start / step);
+	const last = Math.ceil(end / step);
+	const firstInterval = first - RELEASE_INTERVALS - 1;
+	const caps = new Float64Array(last - firstInterval + 1);
+	for (let interval = firstInterval; interval <= last; interval++) {
+		// Include nearby FIR points so smoothing cannot lift a sample that
+		// contributes to a peak just across a control interval boundary.
+		const from = interval * step - inputStart - INTERPOLATION_HALF_TAPS;
+		const to = (interval + 1) * step - inputStart + INTERPOLATION_HALF_TAPS;
+		let peak = ceiling / gain;
+		for (const data of input) {
+			const samplePeak = maxMagnitude({ data, from, to });
+			peak = truePeakBetween({
+				data,
+				from,
+				to,
+				floor: Math.max(peak, samplePeak),
+			});
+		}
+		caps[interval - firstInterval] = Math.min(1, ceiling / (peak * gain));
+	}
+	const knots = new Float64Array(last - first + 1);
+	for (let knot = first; knot <= last; knot++) {
+		let cap = 1;
+		for (let age = 0; age < RELEASE_INTERVALS; age++) {
+			const index = knot - age - firstInterval;
+			const minimum = Math.min(caps[index - 1], caps[index]);
+			cap = Math.min(cap, minimum + ((1 - minimum) * age) / RELEASE_INTERVALS);
+		}
+		knots[knot - first] = cap * gain;
+	}
+	return input.map((data) => {
+		const output = new Float32Array(end - start);
+		for (let index = start; index < end; index++) {
+			const knot = Math.floor(index / step) - first;
+			const fraction = (index % step) / step;
+			const scale = knots[knot] + (knots[knot + 1] - knots[knot]) * fraction;
+			output[index - start] = data[index - inputStart] * scale;
+		}
+		return output;
+	});
+}
+
+/** Render the same master at any playhead, with bounded past and future input. */
+export async function readMasteredSamples({
+	read,
+	start,
+	end,
+	length,
+	sampleRate,
+	gainDb,
+	ceilingDbtp,
+}: SampleRange & {
+	read: ReadMixSamples;
+	length: number;
+	sampleRate: number;
+	gainDb: number;
+	ceilingDbtp: number;
+}): Promise<Float32Array[]> {
+	const range = limiterInputRange({ start, end, length, sampleRate });
+	const input = await read(range);
+	return limitRange({
+		input,
+		inputStart: range.start,
+		start,
+		end,
+		sampleRate,
+		gainDb,
+		ceilingDbtp,
+	});
+}
+
+/** Applies the same master as preview and export, in place. */
+export async function applyMixGain({
+	audio,
 	gainDb,
 	ceilingDbtp,
 	signal,
@@ -342,134 +454,71 @@ async function* mixGains({
 	gainDb: number;
 	ceilingDbtp: number;
 	signal?: AbortSignal;
-}): AsyncGenerator<{ start: number; end: number; gains: Float32Array }> {
+}): Promise<void> {
+	const { channels, sampleRate } = audio;
 	const length = channels[0]?.length ?? 0;
-	const gain = dbToLinear(gainDb);
-	const ceiling = dbToLinear(ceilingDbtp - CEILING_MARGIN_DB);
-	const lookahead = Math.max(1, Math.round(LOOKAHEAD_SECONDS * sampleRate));
-	const releasePerSample = RELEASE_DB_PER_SECOND / sampleRate;
-
-	// The look-ahead's lowest needed gain, as a monotonic queue of (index, gain).
-	const queueIndex = new Int32Array(lookahead + 2);
-	const queueGain = new Float32Array(lookahead + 2);
-	let head = 0;
-	let tail = 0;
-	const size = queueIndex.length;
-	// Averaging the released gain over the look-ahead keeps it from stepping.
-	const released = new Float32Array(lookahead).fill(1);
-	let releasedSum = lookahead;
-	let releasedDb = 0;
-	let pushed = 0;
-
+	let previous: { start: number; channels: Float32Array[] } | undefined;
 	for (const { start, end } of slices({ length })) {
 		signal?.throwIfAborted();
-		// What each sample needs: no point between it and either neighbour over the ceiling.
-		const from = Math.max(0, start - 1);
-		const to = Math.min(length, end + lookahead + 1);
-		const peaks = new Float32Array(to - from);
-		const chunk = 256;
-		for (let chunkStart = from; chunkStart < to; chunkStart += chunk) {
-			const chunkEnd = Math.min(to, chunkStart + chunk);
-			for (const data of channels) {
-				const nearby = maxMagnitude({
-					data,
-					from: chunkStart - INTERPOLATION_HALF_TAPS,
-					to: chunkEnd + INTERPOLATION_HALF_TAPS,
-				});
-				if (nearby * gain * INTERPOLATION_BOUND <= ceiling) continue;
-				for (let index = chunkStart; index < chunkEnd; index++) {
-					const peak =
-						Math.max(Math.abs(data[index]), interpolatedPeak({ data, index })) *
-						gain;
-					if (peak > peaks[index - from]) peaks[index - from] = peak;
-				}
-			}
-		}
-		const needed = (index: number) => {
-			const peak = Math.max(
-				peaks[index - from],
-				index - 1 >= from ? peaks[index - 1 - from] : 0,
+		const output = await readMasteredSamples({
+			read: async (range) =>
+				channels.map((data) => data.subarray(range.start, range.end)),
+			start,
+			end,
+			length,
+			sampleRate,
+			gainDb,
+			ceilingDbtp,
+		});
+		// The next block needs the dry tail of this block.
+		if (previous) {
+			const ready = previous;
+			channels.forEach((data, channel) =>
+				data.set(ready.channels[channel], ready.start),
 			);
-			return peak > ceiling ? ceiling / peak : 1;
-		};
-		if (start === 0) {
-			// Before the first sample, the average already has to cover the
-			// look-ahead's lowest need.
-			let lowest = 1;
-			for (let index = 0; index < Math.min(length, lookahead); index++)
-				lowest = Math.min(lowest, needed(index));
-			released.fill(lowest);
-			releasedSum = lowest * lookahead;
-			releasedDb = toDb(lowest);
 		}
-		const gains = new Float32Array(end - start);
-		for (let index = start; index < end; index++) {
-			// The window holds this sample and the look-ahead after it.
-			for (; pushed < Math.min(length, index + lookahead); pushed++) {
-				const gainNeeded = needed(pushed);
-				while (tail > head && queueGain[(tail - 1) % size] >= gainNeeded)
-					tail--;
-				queueIndex[tail % size] = pushed;
-				queueGain[tail % size] = gainNeeded;
-				tail++;
-			}
-			while (queueIndex[head % size] < index) head++;
-			const lowest = queueGain[head % size];
-			releasedDb = Math.min(
-				lowest >= 1 ? 0 : toDb(lowest),
-				releasedDb + releasePerSample,
-			);
-			const slot = index % lookahead;
-			const value = dbToLinear(releasedDb);
-			releasedSum += value - released[slot];
-			released[slot] = value;
-			// Every average covers the sample that needs it, so none passes the ceiling.
-			gains[index - start] = gain * Math.min(1, releasedSum / lookahead);
-		}
-		yield { start, end, gains };
+		previous = { start, channels: output };
 		await pause();
 	}
-}
-
-/** Applies `gainDb` and the true-peak ceiling to the mix, in place. */
-export async function applyMixGain(options: {
-	audio: MixAudio;
-	gainDb: number;
-	ceilingDbtp: number;
-	signal?: AbortSignal;
-}): Promise<void> {
-	const iterator = mixGains(options);
-	let slice = await iterator.next();
-	while (!slice.done) {
-		// The next slice still needs the original samples at this boundary.
-		const next = await iterator.next();
-		const { start, end, gains } = slice.value;
-		for (const data of options.audio.channels)
-			for (let index = start; index < end; index++)
-				data[index] *= gains[index - start];
-		slice = next;
+	if (previous) {
+		const ready = previous;
+		channels.forEach((data, channel) =>
+			data.set(ready.channels[channel], ready.start),
+		);
 	}
-	options.signal?.throwIfAborted();
+	signal?.throwIfAborted();
 }
 
-/** Measures the mix as `applyMixGain` would leave it, without changing it. */
-async function measureWithGain(options: {
-	audio: MixAudio;
-	gainDb: number;
-	ceilingDbtp: number;
+export async function measureMixBlocks({
+	read,
+	length,
+	sampleRate,
+	channelCount,
+	master,
+	signal,
+}: {
+	read: ReadMixSamples;
+	length: number;
+	sampleRate: number;
+	channelCount: number;
+	master?: { gainDb: number; ceilingDbtp: number };
 	signal?: AbortSignal;
 }): Promise<MixMeasurement> {
-	const { channels, sampleRate } = options.audio;
-	const meter = new MixMeter({ sampleRate, channelCount: channels.length });
-	for await (const { start, end, gains } of mixGains(options)) {
+	const meter = new MixMeter({ sampleRate, channelCount });
+	for (const range of slices({ length })) {
+		signal?.throwIfAborted();
 		meter.add(
-			channels.map((data) => {
-				const slice = data.slice(start, end);
-				for (let index = 0; index < slice.length; index++)
-					slice[index] *= gains[index];
-				return slice;
-			}),
+			master
+				? await readMasteredSamples({
+						...range,
+						read,
+						length,
+						sampleRate,
+						...master,
+					})
+				: await read(range),
 		);
+		await pause();
 	}
 	return meter.finish();
 }
@@ -484,20 +533,38 @@ const MAX_MIX_GAIN_DB = 40;
  */
 export async function planMixGain({
 	audio,
-	targetLufs,
-	ceilingDbtp,
 	signal,
+	...options
 }: {
 	audio: MixAudio;
 	targetLufs: number;
 	ceilingDbtp: number;
 	signal?: AbortSignal;
+}) {
+	return planMixGainFromBlocks({
+		...options,
+		signal,
+		sampleRate: audio.sampleRate,
+		channelCount: audio.channels.length,
+		length: audio.channels[0]?.length ?? 0,
+		read: async ({ start, end }) =>
+			audio.channels.map((data) => data.subarray(start, end)),
+	});
+}
+
+export async function planMixGainFromBlocks({
+	targetLufs,
+	ceilingDbtp,
+	...input
+}: Omit<Parameters<typeof measureMixBlocks>[0], "master"> & {
+	targetLufs: number;
+	ceilingDbtp: number;
 }): Promise<{
 	gainDb: number;
 	measured: MixMeasurement;
 	expected: MixMeasurement;
 }> {
-	const measured = await measureMix({ audio, signal });
+	const measured = await measureMixBlocks(input);
 	if (measured.integratedLufs === null)
 		return { gainDb: 0, measured, expected: measured };
 	const clamp = (value: number) =>
@@ -505,12 +572,18 @@ export async function planMixGain({
 			Math.max(-MAX_MIX_GAIN_DB, Math.min(MAX_MIX_GAIN_DB, value)) * 100,
 		) / 100;
 	let gainDb = clamp(targetLufs - measured.integratedLufs);
-	let expected = await measureWithGain({ audio, gainDb, ceilingDbtp, signal });
+	let expected = await measureMixBlocks({
+		...input,
+		master: { gainDb, ceilingDbtp },
+	});
 	const shortfall =
 		expected.integratedLufs === null ? 0 : targetLufs - expected.integratedLufs;
 	if (Math.abs(shortfall) >= 0.1) {
 		gainDb = clamp(gainDb + shortfall);
-		expected = await measureWithGain({ audio, gainDb, ceilingDbtp, signal });
+		expected = await measureMixBlocks({
+			...input,
+			master: { gainDb, ceilingDbtp },
+		});
 	}
 	return { gainDb, measured, expected };
 }

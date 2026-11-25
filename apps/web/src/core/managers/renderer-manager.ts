@@ -5,7 +5,10 @@ import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SequenceExporter } from "@/services/renderer/sequence-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import {
+	createTimelineAudioBuffer,
+	createTimelineAudioReader,
+} from "@/media/audio";
 import { calculateTotalDuration } from "@/timeline";
 import type { SequenceTracks } from "@/timeline/types";
 import { formatTimecode } from "opencut-wasm";
@@ -180,9 +183,10 @@ export class RendererManager {
 
 			if (!scene) {
 				const sequence = this.editor.sequences.getActiveSequence();
+				const projectItems = this.editor.media.getProjectItems();
 				scene = {
 					tracks: sequence.tracks,
-					projectItems: this.editor.media.getProjectItems(),
+					projectItems,
 					canvasSize: activeProject.settings.canvasSize,
 					background: activeProject.settings.background,
 					master: sequence.mix?.loudness,
@@ -197,8 +201,17 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 
+			const reader =
+				includeAudio && master
+					? createTimelineAudioReader({
+							tracks,
+							projectItems,
+							duration,
+							signal,
+						})
+					: null;
 			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio) {
+			if (includeAudio && !master) {
 				onProgress?.({ progress: 0.05 });
 				audioBuffer = await createTimelineAudioBuffer({
 					tracks,
@@ -226,6 +239,7 @@ export class RendererManager {
 				quality,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
+				audioBlocks: master && reader ? reader.blocks({ master }) : undefined,
 				signal,
 			});
 

@@ -4,6 +4,7 @@ import {
 	type MixAudio,
 	measureMix,
 	planMixGain,
+	readMasteredSamples,
 } from "../loudness-meter";
 
 function sine({
@@ -177,3 +178,87 @@ describe("planMixGain", () => {
 		expect(plan.gainDb).toBe(0);
 	});
 });
+
+test("a random-access master uses a bounded input window and matches the whole render", async () => {
+	const audio = bursts({ seconds: 3 });
+	// A peak straddles the seek point and another falls inside its release history.
+	const start = audio.sampleRate + 17;
+	for (const channel of audio.channels) {
+		channel[start - 3] = 1;
+		channel[start + 5] = -1;
+	}
+	const end = start + audio.sampleRate;
+	const gain = { gainDb: 12, ceilingDbtp: -1 };
+	const formatted = {
+		...gain,
+		start,
+		end,
+		sampleRate: audio.sampleRate,
+	};
+	const length = audio.channels[0].length;
+	let maxRead = 0;
+	const read = async ({ start, end }: { start: number; end: number }) => {
+		maxRead = Math.max(maxRead, end - start);
+		return audio.channels.map((data) => data.subarray(start, end));
+	};
+	const block = await readMasteredSamples({ ...formatted, length, read });
+	await applyMixGain({ audio, ...gain });
+	expect(block[0]).toEqual(audio.channels[0].subarray(start, end));
+	const late = audio.sampleRate * 3597;
+	await readMasteredSamples({
+		...formatted,
+		start: late,
+		end: late + audio.sampleRate,
+		length: audio.sampleRate * 3600,
+		read: async (range) => {
+			maxRead = Math.max(maxRead, range.end - range.start);
+			expect(range.start).toBeGreaterThan(late - audio.sampleRate);
+			return [new Float32Array(range.end - range.start)];
+		},
+	});
+	expect(maxRead).toBeLessThan(audio.sampleRate * 1.3);
+});
+
+test.skipIf(!Bun.which("ffmpeg"))(
+	"limits the 14 kHz regression signal below -1 dBTP in FFmpeg",
+	async () => {
+		const data = sine({
+			frequency: 14000,
+			db: 20 * Math.log10(0.9),
+			phase: 0.63,
+			seconds: 1,
+			sampleRate: 44100,
+		});
+		await applyMixGain({
+			audio: { channels: [data], sampleRate: 44100 },
+			gainDb: 6,
+			ceilingDbtp: -1,
+		});
+		const ffmpeg = Bun.spawnSync(
+			[
+				"ffmpeg",
+				"-hide_banner",
+				"-nostats",
+				"-f",
+				"f32le",
+				"-ar",
+				"44100",
+				"-ac",
+				"1",
+				"-i",
+				"pipe:0",
+				"-af",
+				"ebur128=peak=true",
+				"-f",
+				"null",
+				"-",
+			],
+			{ stdin: data },
+		);
+		expect(ffmpeg.exitCode).toBe(0);
+		const report = ffmpeg.stderr.toString().split("True peak:").at(-1) ?? "";
+		const peak = report.match(/Peak:\s+(-?[\d.]+) dBFS/);
+		expect(peak).not.toBeNull();
+		expect(Number(peak?.[1])).toBeLessThanOrEqual(-1);
+	},
+);

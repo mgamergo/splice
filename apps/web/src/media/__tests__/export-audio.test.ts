@@ -3,14 +3,12 @@ import { denoisedAudioUrlForPath } from "@splice/bridge";
 import { audioClip, s, videoClip } from "@/agent/__tests__/fixtures";
 import type { ProjectItem } from "@/media/types";
 import {
-	recording,
-	restoreFetch,
-	stubFetch,
-	untilAborted,
-} from "./stub-fetch";
-import { createTimelineAudioBuffer } from "@/media/audio";
+	createTimelineAudioBuffer,
+	createTimelineAudioReader,
+} from "@/media/audio";
 import type { LibraryAudioClip, SequenceTracks } from "@/timeline";
 import { buildDefaultSequence } from "@/timeline/sequences";
+import { recording, restoreFetch, stubFetch, untilAborted } from "./stub-fetch";
 
 let fetchSpy: Mock<typeof fetch> | null = null;
 
@@ -100,7 +98,12 @@ test("the export decodes a noise-reduced clip's range from splice's WAV render",
 			...defaults.main,
 			clips: [
 				{
-					...videoClip({ id: "denoised", start: 0, duration: 2, trimStart: 10 }),
+					...videoClip({
+						id: "denoised",
+						start: 0,
+						duration: 2,
+						trimStart: 10,
+					}),
 					params: { noiseReduction: true },
 				},
 			],
@@ -114,7 +117,9 @@ test("the export decodes a noise-reduced clip's range from splice's WAV render",
 		hasAudio: true,
 		file: recording,
 	};
-	const { urls, firstRequest } = stubFetch((init) => untilAborted(init?.signal));
+	const { urls, firstRequest } = stubFetch((init) =>
+		untilAborted(init?.signal),
+	);
 
 	const controller = new AbortController();
 	const mix = createTimelineAudioBuffer({
@@ -131,4 +136,79 @@ test("the export decodes a noise-reduced clip's range from splice's WAV render",
 	const denoisedUrl = denoisedAudioUrlForPath(recording.path);
 	expect(urls.length).toBeGreaterThan(0);
 	expect(urls.every((url) => url.endsWith(denoisedUrl))).toBe(true);
+});
+
+test("a late seek and sequential export render the same samples with one-second PCM allocations", async () => {
+	const makeBuffer: BaseAudioContext["createBuffer"] = (
+		count,
+		length,
+		sampleRate,
+	) => {
+		const channels = Array.from(
+			{ length: count },
+			() => new Float32Array(length),
+		);
+		return {
+			duration: length / sampleRate,
+			length,
+			numberOfChannels: count,
+			sampleRate,
+			getChannelData: (index) => channels[index],
+			copyFromChannel: (destination, channel, start = 0) => {
+				destination.set(
+					channels[channel].subarray(start, start + destination.length),
+				);
+			},
+			copyToChannel: (source, channel, start = 0) => {
+				channels[channel].set(source, start);
+			},
+		};
+	};
+	const rate = 44100;
+	const buffer = makeBuffer(1, rate, rate);
+	const data = buffer.getChannelData(0);
+	for (let index = 0; index < data.length; index++)
+		data[index] = 0.8 * Math.sin((index * 2 * Math.PI * 997) / rate);
+	const { tracks } = buildDefaultSequence({
+		name: "Main sequence",
+		isMain: true,
+	});
+	tracks.audio.push({
+		id: "audio",
+		name: "Audio",
+		type: "audio",
+		muted: false,
+		clips: [{ ...librarySound({ id: "near-end", start: 3598 }), buffer }],
+	});
+	const allocations: number[] = [];
+	const reader = createTimelineAudioReader({
+		tracks,
+		projectItems: [],
+		duration: s(3600),
+		audioContext: {
+			sampleRate: rate,
+			createBuffer: (...args: Parameters<typeof makeBuffer>) => {
+				allocations.push(args[1]);
+				return makeBuffer(...args);
+			},
+		} as BaseAudioContext,
+	});
+	if (!reader) throw new Error("Expected an audio reader");
+	const master = { gainDb: 6, ceilingDbtp: -1 };
+	const exportBlocks = reader.blocks({ master, fromSeconds: 3597 });
+	await exportBlocks.next();
+	const full = await exportBlocks.next();
+	const seekBlocks = reader.blocks({ master, fromSeconds: 3598.25 });
+	const seek = await seekBlocks.next();
+	if (full.done || seek.done) throw new Error("Expected rendered blocks");
+	expect(seek.value.time).toBe(3598.25);
+	const samples = seek.value.buffer.getChannelData(0);
+	expect(samples.some((sample) => sample !== 0)).toBe(true);
+	expect(samples).toEqual(
+		full.value.buffer.getChannelData(0).subarray(rate / 4),
+	);
+	expect(allocations.length).toBeLessThanOrEqual(8);
+	expect(Math.max(...allocations)).toBeLessThanOrEqual(rate);
+	await seekBlocks.return();
+	await exportBlocks.return();
 });

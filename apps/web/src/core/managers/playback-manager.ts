@@ -12,6 +12,7 @@ import {
 export class PlaybackManager {
 	private isPlaying = false;
 	private previewPreparation: AbortController | null = null;
+	private resumePreviewAfterScrub = false;
 	private currentTime: MediaTime = ZERO_MEDIA_TIME;
 	private volume = 1;
 	private muted = false;
@@ -48,6 +49,8 @@ export class PlaybackManager {
 			this.editor.timeline.getTotalDuration() <= 0
 		)
 			return;
+		if (this.currentTime >= this.editor.timeline.getTotalDuration())
+			this.seek({ time: ZERO_MEDIA_TIME });
 		const preparation = new AbortController();
 		const preview = this.editor.audio.prepareFinalPreview({
 			signal: preparation.signal,
@@ -96,6 +99,7 @@ export class PlaybackManager {
 	}
 
 	pause(): void {
+		this.resumePreviewAfterScrub = false;
 		this.previewPreparation?.abort();
 		this.previewPreparation = null;
 		this.isPlaying = false;
@@ -112,6 +116,13 @@ export class PlaybackManager {
 	}
 
 	seek({ time }: { time: MediaTime }): void {
+		const restart =
+			!this.isScrubbing &&
+			(this.isPlaying || this.previewPreparation !== null) &&
+			!!this.editor.sequences.getActiveSequenceOrNull()?.mix?.loudness;
+		const resume =
+			restart || (!this.isScrubbing && this.resumePreviewAfterScrub);
+		if (restart) this.pause();
 		this.currentTime = this.clampTimeToTimeline(time);
 		if (this.isPlaying) {
 			this.playbackStartWallTime = performance.now();
@@ -119,6 +130,10 @@ export class PlaybackManager {
 		}
 		this.notify();
 		this.notifySeek(this.currentTime);
+		if (resume) {
+			this.resumePreviewAfterScrub = false;
+			this.play();
+		}
 	}
 
 	setVolume({ volume }: { volume: number }): void {
@@ -172,6 +187,10 @@ export class PlaybackManager {
 
 	setScrubbing({ isScrubbing }: { isScrubbing: boolean }): void {
 		this.isScrubbing = isScrubbing;
+		if (isScrubbing && this.previewPreparation) {
+			this.pause();
+			this.resumePreviewAfterScrub = true;
+		}
 		this.notify();
 	}
 
