@@ -1,3 +1,5 @@
+import { BASE_STYLE } from "@splice/bridge/style";
+import { StyleUpdateApi } from "@/agent/style-update";
 import {
 	afterEach,
 	beforeEach,
@@ -426,6 +428,26 @@ describe("after approval", () => {
 			placed: { clipId: clip.id },
 		});
 
+		const style = new StyleUpdateApi({
+			editor,
+			readDefaults: async () => ({
+				...BASE_STYLE,
+				revision: 2,
+				values: {
+					...BASE_STYLE.values,
+					highlight: { ...BASE_STYLE.values.highlight, stroke: "#ff0000" },
+				},
+			}),
+		});
+		const preview = await style.preview();
+		if (!preview) throw new Error("Expected a style preview");
+		expect(await style.apply({
+			request: { previewId: preview.id, expectedRevision: preview.revision },
+		})).toMatchObject({ ok: true });
+		expect(findGraphicClip({
+			tracks: editor.sequences.getActiveSequence().tracks, graphicId,
+		})?.clip.params.stroke).toBe("#ff0000");
+
 		rippleDelete({ editor, api });
 		expect(
 			editor.sequences.getActiveSequence().graphics?.records[0],
@@ -439,6 +461,8 @@ describe("after approval", () => {
 		availableRecording();
 		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
 		const restored = editor.sequences.getActiveSequence();
+		expect(restored.styleDefaults?.revision).toBe(1);
+		expect(editor.project.getActive().settings.styleDefaults?.revision).toBe(2);
 		expect(restored.graphics).toEqual(checkpoint.graphics);
 		expect(findGraphicClip({ tracks: restored.tracks, graphicId })).toEqual(
 			delivered,
