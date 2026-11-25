@@ -1,4 +1,5 @@
 import { normalizeProjectBrief, projectBriefSchema } from "@splice/bridge/brief";
+import { BASE_STYLE, styleDefaultsSchema } from "@splice/bridge/style";
 import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceMixSchema } from "@splice/bridge/mix";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
@@ -191,6 +192,7 @@ class StorageService {
 				}),
 				...(sequence.captions && { captions: sequence.captions }),
 				...(sequence.graphics && { graphics: sequence.graphics }),
+				...(sequence.styleDefaults && { styleDefaults: sequence.styleDefaults }),
 				...(sequence.mix && { mix: sequence.mix }),
 				createdAt: sequence.createdAt.toISOString(),
 				updatedAt: sequence.updatedAt.toISOString(),
@@ -267,6 +269,7 @@ class StorageService {
 					: undefined,
 				captions: savedShortCaptionsSchema.safeParse(sequence.captions).data,
 				graphics: sequenceGraphicsSchema.safeParse(sequence.graphics).data,
+				styleDefaults: styleDefaultsSchema.safeParse(sequence.styleDefaults).data,
 				mix: sequenceMixSchema.safeParse(sequence.mix).data,
 				createdAt: new Date(sequence.createdAt),
 				updatedAt: new Date(sequence.updatedAt),
@@ -287,7 +290,10 @@ class StorageService {
 			},
 			sequences,
 			currentSequenceId: serializedProject.currentSequenceId || "",
-			settings: serializedProject.settings,
+			settings: {
+				...serializedProject.settings,
+				styleDefaults: styleDefaultsSchema.safeParse(serializedProject.settings.styleDefaults).data ?? BASE_STYLE,
+			},
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
 			brief: normalizeProjectBrief(projectBriefSchema.safeParse(serializedProject.brief).data),

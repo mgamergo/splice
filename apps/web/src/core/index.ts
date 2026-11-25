@@ -47,7 +47,9 @@ export class EditorCore {
 		this.diagnostics = new DiagnosticsManager(this);
 		registerTranscriptionDiagnostics({ diagnostics: this.diagnostics });
 		this.playback.bindTimelineScope();
-		this.command.registerFollowUp(() => graphicsFollowUp({ editor: this }));
+		this.command.registerFollowUp((command) =>
+			graphicsFollowUp({ editor: this, recordFraming: !command.isAgentEdit }),
+		);
 		this.command.registerReactor(() => {
 			const activeSequence = this.sequences.getActiveSequenceOrNull();
 			if (!activeSequence) {

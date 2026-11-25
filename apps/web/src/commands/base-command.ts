@@ -22,6 +22,8 @@ export abstract class Command {
 	/** When true, CommandManager never applies ripple adjustments to this command. */
 	readonly ignoresRippleToggle: boolean = false;
 
+	readonly isAgentEdit: boolean = false;
+
 	abstract execute(): CommandResult | undefined;
 
 	undo(): void {

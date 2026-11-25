@@ -42,6 +42,8 @@ export const TAB_METHODS = [
 	"editor.addCaptions",
 	"editor.captionCues",
 	"editor.correctCaption",
+	"editor.styleUpdatePreview",
+	"editor.styleUpdateApply",
 	"editor.graphicsPlan",
 	"editor.graphicsApply",
 	"editor.graphicsList",

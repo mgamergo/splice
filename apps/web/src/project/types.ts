@@ -1,3 +1,4 @@
+import type { StyleDefaults } from "@splice/bridge/style";
 import type { FrameRate } from "opencut-wasm";
 import type { ProjectFormat, ShortStyle } from "@splice/bridge";
 import type { ProjectBrief } from "@splice/bridge/brief";
@@ -34,6 +35,7 @@ export interface TProjectSettings {
 	/** Chosen at creation. Projects saved before formats existed are horizontal. */
 	format?: ProjectFormat;
 	shortStyle?: ShortStyle;
+	styleDefaults?: StyleDefaults;
 	fps: FrameRate;
 	canvasSize: TCanvasSize;
 	canvasSizeMode?: "preset" | "custom";
