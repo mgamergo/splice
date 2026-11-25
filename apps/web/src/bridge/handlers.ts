@@ -2,6 +2,7 @@ import type { EditorState, ItemSummary, TabMethod } from "@splice/bridge";
 import { mixLoudnessRequestSchema } from "@splice/bridge/mix";
 import { z } from "zod";
 import type { EditorApi } from "@/agent/editor-api";
+import { ApprovalApi } from "@/approval/api";
 import type { EditorCore } from "@/core";
 import { importDiskItems, summarizeItem } from "@/media/import-disk";
 import { projectFormat } from "@/project/format";
@@ -34,6 +35,7 @@ export function createTabHandlers({
 	api: EditorApi;
 	isBlocked: () => boolean;
 }): TabHandlers {
+	const approval = new ApprovalApi({ editor, api });
 	const checkAgentAllowed = () => {
 		if (isBlocked()) throw new AgentBlockedError();
 	};
@@ -77,13 +79,27 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.correctCaption(params);
 		},
+		"editor.finalizeCut": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return approval.finalizeCut(params);
+		},
+		"editor.checkpointStatus": () => approval.checkpointStatus(),
+		"editor.checkpointCompare": (params) => approval.checkpointCompare(params),
+		"editor.issuesList": (params) => approval.issuesList(params),
+		"editor.dismissIssue": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return approval.dismissIssue(params);
+		},
 		"editor.addMusic": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.addMusic({ request: params, beforeWrite: checkAgentAllowed });
 		},
 		"editor.updateMusic": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
-			return api.updateMusic({ request: params, beforeWrite: checkAgentAllowed });
+			return api.updateMusic({
+				request: params,
+				beforeWrite: checkAgentAllowed,
+			});
 		},
 		"editor.removeMusic": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();
@@ -91,9 +107,15 @@ export function createTabHandlers({
 		},
 		"editor.mixLoudness": (params) => {
 			// Measuring only reads; saving the gain is a write.
-			if (isBlocked() && mixLoudnessRequestSchema.safeParse(params).data?.apply !== false)
+			if (
+				isBlocked() &&
+				mixLoudnessRequestSchema.safeParse(params).data?.apply !== false
+			)
 				throw new AgentBlockedError();
-			return api.mixLoudness({ request: params, beforeWrite: checkAgentAllowed });
+			return api.mixLoudness({
+				request: params,
+				beforeWrite: checkAgentAllowed,
+			});
 		},
 		"editor.mixStatus": (params) => api.mixStatus(params),
 		"editor.cutTranscript": (params) => api.cutTranscript(params),

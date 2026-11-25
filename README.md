@@ -38,7 +38,7 @@ To let an agent edit, register `splice mcp` as a stdio MCP server in your agent 
 }
 ```
 
-`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe`, `transcribe_status`, `detect_pauses`, `raw_sequence`, `rough_cut`, `takes_list`, `captions_add`, `captions_list`, `captions_correct`, `cut_transcript`, `transcript_selection`, `exports_list`, `measure_loudness`, `normalize_loudness` and `noise_reduction`.
+`splice mcp` connects to the running `splice` and starts it in the background if it isn't running. Its tools are `editor_status`, `sequence_get`, `sequence_apply`, `footage_list`, `items_list`, `items_import`, `transcribe`, `transcribe_status`, `detect_pauses`, `raw_sequence`, `rough_cut`, `takes_list`, `captions_add`, `captions_list`, `captions_correct`, `cut_transcript`, `transcript_selection`, `exports_list`, `measure_loudness`, `normalize_loudness` and `noise_reduction`. Use `cut_finalize` to save the reviewed revision, `checkpoint_status` and `checkpoint_compare` to inspect it, and `issues_list` and `issue_dismiss` to work through export review.
 
 Put recordings in the `Footage` folder. `items_import` adds them to the open project as project items that reference the files in place; nothing is copied into the browser. Files you drop or upload in the editor are still stored in the browser, as before. `bun run splice link` prints the editor link of a running `splice`, for example one that `splice mcp` started. The editor header shows whether an agent is connected, and **Stop agent** refuses its edits until you allow them again.
 

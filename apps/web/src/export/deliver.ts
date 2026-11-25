@@ -9,12 +9,17 @@ import { PROJECT_FORMATS } from "@splice/bridge";
 import type { FrameRate } from "opencut-wasm";
 import { z } from "zod";
 import { callSplice, uploadExportFile } from "@/bridge/splice-api";
-import { buildCaptionCues, cuesToSrt } from "@/captions/cues";
+import { buildCaptionCues, type CaptionCue, cuesToSrt } from "@/captions/cues";
 import { sequenceEndSeconds } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
-import type { TCanvasSize } from "@/project/types";
+import type { TBackground, TCanvasSize } from "@/project/types";
+import {
+	pinRenderMedia,
+	recordingIdentity,
+	referencedMedia,
+} from "@/media/sequence-media";
 import { isMixLoudnessStale } from "@/mix/final-mix";
 import { tracksWithMusicDucking } from "@/mix/music";
 import { generateUUID } from "@/utils/id";
@@ -37,15 +42,42 @@ export const DELIVERY_FORMAT = {
 export interface DeliverySnapshot {
 	/** Names this Export click, so a retry can't publish a second pair. */
 	deliveryId: string;
+	/** The live edit at the Export click, even when exporting a past checkpoint. */
+	requestedRevision?: number;
 	scene: ExportScene;
 	fps: FrameRate;
 	srt: string;
 	source: Omit<ExportSource, "fingerprint">;
 }
 
-export interface DeliveryInput extends Omit<DeliverySnapshot, "srt" | "source"> {
+export interface DeliveryInput extends Omit<
+	DeliverySnapshot,
+	"srt" | "source"
+> {
 	captions: ProjectCaptions | undefined;
 	source: Omit<DeliverySnapshot["source"], "cueCount">;
+}
+
+/** Builds the render inputs from the selected edit and pins its media. */
+export function deliveryScene({
+	sequence,
+	projectItems,
+	projectSources,
+	background,
+}: Parameters<typeof tracksWithMusicDucking>[0] & {
+	background: TBackground;
+}): ExportScene {
+	const loudness = sequence.mix?.loudness;
+	return {
+		tracks: tracksWithMusicDucking({ sequence, projectItems, projectSources }),
+		projectItems: pinRenderMedia({ projectItems }),
+		canvasSize: DELIVERY_FORMAT.canvasSize,
+		background,
+		master: loudness && {
+			gainDb: loudness.gainDb,
+			ceilingDbtp: loudness.ceilingDbtp,
+		},
+	};
 }
 
 /** Captures the approved edit before an export waits for anything. */
@@ -58,8 +90,7 @@ export function captureDelivery({
 }): DeliveryInput {
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
-	const loudness = sequence.mix?.loudness;
-	const projectItems = [...editor.media.getProjectItems()];
+	const projectItems = editor.media.getProjectItems();
 	const projectSources = project.captions?.sources;
 	if (
 		approval &&
@@ -71,19 +102,12 @@ export function captureDelivery({
 		);
 	return {
 		deliveryId: generateUUID(),
-		scene: {
-			tracks: tracksWithMusicDucking({
-				sequence,
-				projectItems,
-				projectSources,
-			}),
+		scene: deliveryScene({
+			sequence,
 			projectItems,
-			canvasSize: DELIVERY_FORMAT.canvasSize,
+			projectSources,
 			background: project.settings.background,
-			...(loudness && {
-				master: { gainDb: loudness.gainDb, ceilingDbtp: loudness.ceilingDbtp },
-			}),
-		},
+		}),
 		fps: DELIVERY_FORMAT.fps,
 		captions: project.captions,
 		source: {
@@ -100,18 +124,20 @@ export function captureDelivery({
 function snapshotWithSpellings({
 	input,
 	spellings,
+	reviewedCues,
 }: {
 	input: DeliveryInput;
 	spellings: Replacement[];
+	reviewedCues?: CaptionCue[];
 }): DeliverySnapshot {
 	const { scene, fps, deliveryId, source, captions } = input;
-	const cues = buildCaptionCues({
+	const cues = (reviewedCues ?? buildCaptionCues({
 		tracks: scene.tracks,
 		captions,
 		spellings,
 		sequenceEnd: source.durationSeconds,
 		sequenceId: source.sequenceId,
-	}).filter(({ text }) => text);
+	})).filter(({ text }) => text.trim());
 	return {
 		deliveryId,
 		scene,
@@ -123,13 +149,20 @@ function snapshotWithSpellings({
 
 export function takeDeliverySnapshot({
 	editor,
+	cues,
 }: {
 	editor: EditorCore;
+	cues?: CaptionCue[];
 }): DeliverySnapshot {
-	return snapshotWithSpellings({
-		input: captureDelivery({ editor }),
-		spellings: useCaptionsStore.getState().spellings,
-	});
+	const input = captureDelivery({ editor });
+	return {
+		...snapshotWithSpellings({
+			input,
+			spellings: useCaptionsStore.getState().spellings,
+			reviewedCues: cues,
+		}),
+		requestedRevision: input.source.revision,
+	};
 }
 
 /** Applies the saved spellings to the cues of the approved edit. */
@@ -143,22 +176,25 @@ export async function prepareDelivery({
 }
 
 /** The files the tracks play, by what identifies them on disk. */
-function usedMedia({ tracks, projectItems }: ExportScene) {
-	const used = new Set(
-		[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
-			track.clips.flatMap((clip) => ("mediaId" in clip ? [clip.mediaId] : [])),
-		),
-	);
+function usedMedia({
+	scene: { tracks, projectItems },
+	legacyMedia,
+}: {
+	scene: ExportScene;
+	legacyMedia: boolean;
+}) {
+	const used = referencedMedia({ tracks });
 	return projectItems
 		.filter(({ id }) => used.has(id))
-		.map(({ id, type, file }) => ({
-			id,
-			type,
-			name: file.name,
-			size: file.size,
-			lastModified: file.lastModified,
-			...("kind" in file && { path: file.path }),
-		}))
+		.map(({ id, type, file }) => {
+			const identity = recordingIdentity({ file, legacy: legacyMedia });
+			return {
+				id,
+				type,
+				...(!("contentHash" in identity) && { name: file.name }),
+				...identity,
+			};
+		})
 		.sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -171,7 +207,10 @@ export async function deliveryFingerprint({
 	scene,
 	fps,
 	srt,
-}: Pick<DeliverySnapshot, "scene" | "fps" | "srt">): Promise<string> {
+	legacyMedia = false,
+}: Pick<DeliverySnapshot, "scene" | "fps" | "srt"> & {
+	legacyMedia?: boolean;
+}): Promise<string> {
 	/* eslint-disable opencut/prefer-object-params -- JSON.stringify calls replacers with (key, value). */
 	const withoutBuffers = (key: string, value: unknown) =>
 		key === "buffer" ? undefined : value;
@@ -180,7 +219,7 @@ export async function deliveryFingerprint({
 		canvasSize: scene.canvasSize,
 		background: scene.background,
 		fps,
-		media: usedMedia(scene),
+		media: usedMedia({ scene, legacyMedia }),
 		master: scene.master,
 	};
 	const text = `${JSON.stringify(scene.tracks, withoutBuffers)}\n${JSON.stringify(render)}\n${srt}`;

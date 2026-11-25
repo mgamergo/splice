@@ -37,6 +37,11 @@ export const TAB_METHODS = [
 	"editor.addCaptions",
 	"editor.captionCues",
 	"editor.correctCaption",
+	"editor.finalizeCut",
+	"editor.checkpointStatus",
+	"editor.checkpointCompare",
+	"editor.issuesList",
+	"editor.dismissIssue",
 	"editor.addMusic",
 	"editor.updateMusic",
 	"editor.removeMusic",
@@ -123,6 +128,11 @@ export function isFootagePath(path: string): boolean {
 export function mediaUrlForPath(path: string): string {
 	return `${BRIDGE_PATHS.media}${path.split("/").map(encodeURIComponent).join("/")}`;
 }
+
+/** The media route's verified file version and optional SHA-256 of its bytes. */
+export const MEDIA_VERSION_HEADER = "x-splice-media-version";
+export const MEDIA_CONTENT_HEADER = "x-splice-media-sha256";
+export const MEDIA_VERSION_PARAM = "version";
 
 /** The `audio` query value that asks `splice` for a file's audio with noise reduction, as WAV. */
 export const DENOISED_AUDIO = "denoised";

@@ -969,7 +969,8 @@ export class EditorApi {
 		};
 	}
 
-	private checkWrite({
+	/** Refuses a write without a project, during a drag, or after the revision moved on. */
+	checkWrite({
 		expectedRevision,
 	}: {
 		expectedRevision: number;

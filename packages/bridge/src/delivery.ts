@@ -45,6 +45,8 @@ export const projectCaptionsSchema = z.strictObject({
 	cueEdits: z.array(cueEditSchema).default([]),
 	/** Corrections the creator applied across the project. */
 	replacements: z.array(replacementSchema).default([]),
+	/** The reusable spellings restored with an approved cut. */
+	spellings: z.array(replacementSchema).optional(),
 });
 
 /**
@@ -73,6 +75,9 @@ export function parseProjectCaptions(value: unknown): ProjectCaptions | undefine
 		sources: valid({ schema: captionSourceSchema, entries: saved.sources }),
 		cueEdits: valid({ schema: cueEditSchema, entries: saved.cueEdits }),
 		replacements: valid({ schema: replacementSchema, entries: saved.replacements }),
+		...(Array.isArray(saved.spellings) && {
+			spellings: valid({ schema: replacementSchema, entries: saved.spellings }),
+		}),
 	};
 }
 
@@ -141,7 +146,8 @@ export const exportSourceSchema = z.strictObject({
 	projectName: z.string().min(1).max(200),
 	sequenceId: z.string().min(1).max(200),
 	sequenceName: z.string().max(200),
-	/** The editor's command revision when the export started. */
+	checkpointId: z.string().min(1).max(200).optional(),
+	/** The editor's command revision when the cut was approved. */
 	revision: z.number().int().nonnegative(),
 	/** A hash of the exported sequence and its captions, stable across reloads. */
 	fingerprint: z.string().regex(/^[0-9a-f]{8,64}$/),

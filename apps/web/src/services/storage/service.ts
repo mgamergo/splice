@@ -1,6 +1,7 @@
 import { sequenceMixSchema } from "@splice/bridge/mix";
 import { captionsRequestSchema } from "@splice/bridge/ops";
 import { parseProjectCaptions } from "@splice/bridge/delivery";
+import { parseProjectApproval } from "@/approval/checkpoint";
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
 import { removalMarkerDataSchema } from "@splice/bridge/ops";
@@ -202,6 +203,7 @@ class StorageService {
 			version: project.version,
 			timelineViewState: project.timelineViewState,
 			...(project.captions && { captions: project.captions }),
+			...(project.approval && { approval: project.approval }),
 		};
 
 		await this.projectsAdapter.set({
@@ -272,6 +274,10 @@ class StorageService {
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
 			captions: parseProjectCaptions(serializedProject.captions),
+			approval: parseProjectApproval({
+				raw: serializedProject.approval,
+				parseMarkers: (raw) => normalizeMarkers({ raw }),
+			}),
 		};
 
 		return { project };

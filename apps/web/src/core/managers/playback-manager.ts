@@ -1,4 +1,5 @@
 import type { EditorCore } from "@/core";
+import type { TSequence } from "@/timeline/types";
 import { toast } from "sonner";
 import {
 	addMediaTime,
@@ -26,7 +27,17 @@ export class PlaybackManager {
 	private playbackStartTime: MediaTime = ZERO_MEDIA_TIME;
 	private timelineScopeBound = false;
 
-	constructor(private editor: EditorCore) {}
+	constructor(
+		private editor: {
+			timeline: Pick<EditorCore["timeline"], "getTotalDuration" | "subscribe">;
+			sequences: {
+				subscribe: EditorCore["sequences"]["subscribe"];
+				getActiveSequenceOrNull: () => Pick<TSequence, "mix"> | null;
+			};
+			audio: Pick<EditorCore["audio"], "prepareFinalPreview">;
+			project: Pick<EditorCore["project"], "getActive">;
+		},
+	) {}
 
 	bindTimelineScope(): void {
 		if (this.timelineScopeBound) {
@@ -289,9 +300,9 @@ export class PlaybackManager {
 			this.pause();
 			this.currentTime = maxTime;
 			this.notify();
-		this.notifySeek(maxTime);
-		this.dispatchSeekEvent(maxTime);
-		return;
+			this.notifySeek(maxTime);
+			this.dispatchSeekEvent(maxTime);
+			return;
 		}
 
 		this.currentTime = newTime;

@@ -1,5 +1,6 @@
 import { Command, type CommandResult } from "@/commands/base-command";
 import { isDiskMedia } from "@/media/media-data";
+import { toast } from "sonner";
 import { EditorCore } from "@/core";
 import type { ProjectItem } from "@/media/types";
 import { buildWaveformSourceKey } from "@/media/waveform-summary";
@@ -31,6 +32,19 @@ export class RemoveProjectItemCommand extends Command {
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
+		if (
+			editor.project.isCheckpointMedia({
+				projectId: this.projectId,
+				id: this.projectItemId,
+			})
+		) {
+			this.savedTracks = null;
+			this.removedProjectItem = null;
+			toast.error(
+				"This media is used by an approved cut and must stay in the library.",
+			);
+			return;
+		}
 		const projectItems = editor.media.getProjectItems();
 
 		this.savedProjectItems = [...projectItems];
@@ -60,7 +74,9 @@ export class RemoveProjectItemCommand extends Command {
 		});
 
 		editor.media.setProjectItems({
-			projectItems: projectItems.filter((media) => media.id !== this.projectItemId),
+			projectItems: projectItems.filter(
+				(media) => media.id !== this.projectItemId,
+			),
 		});
 
 		const clipsToRemove: Array<{ trackId: string; clipId: string }> = [];

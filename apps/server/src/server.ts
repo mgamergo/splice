@@ -1,4 +1,7 @@
 import {
+	MEDIA_CONTENT_HEADER,
+	MEDIA_VERSION_HEADER,
+	MEDIA_VERSION_PARAM,
 	BRIDGE_PATHS,
 	isRpcRequest,
 	isServerMethod,
@@ -26,6 +29,8 @@ import {
 import type { Server, ServerWebSocket } from "bun";
 import {
 	FOOTAGE_FOLDER,
+	footageContentHash,
+	footageVersion,
 	listFootage,
 	mediaTypeForPath,
 	resolveFootagePath,
@@ -544,13 +549,39 @@ export function startServer({
 		if (!contentType || !absolutePath) {
 			return new Response("Not found", { status: 404 });
 		}
-		if (!wantsDenoisedAudio(url))
-			return serveFile({ request, absolutePath, contentType });
+		const denoised = wantsDenoisedAudio(url);
+		const expected = url.searchParams.get(MEDIA_VERSION_PARAM);
+		const probe = request.method === "HEAD" && !denoised;
+		const changed = () =>
+			new Response("The recording changed on disk.", { status: 412 });
+		let version: string | undefined;
+		let contentHash: string | undefined;
+		if (expected !== null || probe) {
+			try {
+				version = await footageVersion({ absolutePath });
+				if (expected !== null && expected !== version) return changed();
+				if (probe && request.headers.get(MEDIA_CONTENT_HEADER) === "1")
+					contentHash = await footageContentHash({ absolutePath, version });
+				// The path can be replaced while a content hash is computed.
+				if ((await footageVersion({ absolutePath })) !== version)
+					return changed();
+			} catch {
+				return changed();
+			}
+		}
+		if (!denoised) {
+			const response = serveFile({ request, absolutePath, contentType });
+			if (version) response.headers.set(MEDIA_VERSION_HEADER, version);
+			if (contentHash) response.headers.set(MEDIA_CONTENT_HEADER, contentHash);
+			return response;
+		}
 		try {
 			const { file } = await noiseReduction.ensure({
 				path,
 				signal: request.signal,
 			});
+			if (version && (await footageVersion({ absolutePath })) !== version)
+				return changed();
 			return serveFile({
 				request,
 				absolutePath: file,
@@ -737,7 +768,11 @@ export function startServer({
 			}
 			if (url.pathname.startsWith(BRIDGE_PATHS.media)) {
 				// The first request for denoised audio renders it, which takes a while.
-				if (wantsDenoisedAudio(url)) srv.timeout(request, 0);
+				if (
+					wantsDenoisedAudio(url) ||
+					request.headers.get(MEDIA_CONTENT_HEADER) === "1"
+				)
+					srv.timeout(request, 0);
 				return handleMedia({ request, url, port: actualPort });
 			}
 			if (url.pathname.startsWith("/splice/")) {
