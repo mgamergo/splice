@@ -23,7 +23,7 @@ import { GraphicNode } from "@/services/renderer/nodes/graphic-node";
 import { TextNode } from "@/services/renderer/nodes/text-node";
 import { VideoNode } from "@/services/renderer/nodes/video-node";
 import type { TimelineClip } from "@/timeline";
-import { buildEmptyTrack } from "@/timeline/placement";
+import { pictureRepairs } from "@/mix/picture-repair";
 import { mediaTimeToSeconds } from "@/wasm";
 
 let editor: EditorCore;
@@ -294,26 +294,25 @@ describe("graphics pass", () => {
 			{ ...highlight, passage: zoom.passage, action: zoom.action },
 		];
 		expect(apply({ planned })).toMatchObject({ ok: true });
-		const replacement = {
-			...buildEmptyTrack({ id: "upper", type: "video", name: "Picture" }),
-			muted: true,
-			clips: [
-				videoClip({ id: "replacement", start: 10, duration: 4, trimStart: 24 }),
-			],
-		};
-		editor.command.execute({
-			command: new UpdateSequenceCommand({
-				editor,
+		expect(
+			api.apply({
 				sequenceId: sequence().id,
+				expectedRevision: api.getRevision(),
 				label: "Replace picture",
-				updates: {
-					tracks: {
-						...sequence().tracks,
-						overlay: [replacement, ...sequence().tracks.overlay],
+				ops: [
+					{
+						op: "picture_repair",
+						at: { seconds: 10 },
+						duration: { seconds: 4 },
+						projectItemId: "rec",
+						sourceIn: 24,
 					},
-				},
+				],
 			}),
-		});
+		).toMatchObject({ ok: true });
+		const repair = pictureRepairs({ tracks: sequence().tracks })[0];
+		if (!repair) throw new Error("Expected a picture repair");
+		expect(repair.clip.isSourceAudioEnabled).toBe(false);
 		expect(sequence().tracks.main.clips[0]).toMatchObject({
 			id: "screen",
 			duration: s(30),
@@ -344,8 +343,8 @@ describe("graphics pass", () => {
 			command: new UpdateClipsCommand({
 				updates: [
 					{
-						trackId: replacement.id,
-						clipId: "replacement",
+						trackId: repair.trackId,
+						clipId: repair.clip.id,
 						patch: { params: { opacity: 0.5 } },
 					},
 				],
