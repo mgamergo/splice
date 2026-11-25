@@ -1,14 +1,14 @@
 # Continue here
 
-Where the Splice build stands, and what to do next. Last updated 2026-11-24.
+Where the Splice build stands, and what to do next. Last updated 2026-11-25.
 
 ## Progress
 
 ```
 Core editor and agent pipeline  [####################] 100%  Phases 0–3b, range export
-Horizontal workflow (H1–H6)     [###-----------------]  15%  H1 built, in review
+Horizontal workflow (H1–H6)     [####################] 100%  H1–H6 merged
 Laptop and real-footage checks  [##------------------]  10%  needs the laptop
-Whole plan                      [########------------] ~40%
+Whole plan                      [##############------] ~70%
 ```
 
 The percentages are estimates by the size of each piece, not measurements.
@@ -27,44 +27,38 @@ The percentages are estimates by the size of each piece, not measurements.
 | #17 | Horizontal workflow decisions (`docs/decisions.md`) |
 | #18 | Off-by-default noise reduction |
 | #19 | Export and playback decode only the source ranges the sequence uses |
+| #20, #21 | H1: horizontal SRT captions, three correction scopes, MP4/SRT pairs published as one folder rename, idempotent Retry |
+| #22 | H6: cut transcript panel, `cut_transcript` and `transcript_selection` |
+| #23 | Loudness test tolerance with FFmpeg installed |
+| #24 | H2: approved checkpoints, compare and restore, review issues with dismissals, export gate, reopen summary |
+| #25 | H3: editable zooms, highlights and glass cards, MCP graphics pass, reruns keep creator edits, flags in review |
+| #26 | H4: music, ducking with app-sound overrides, picture-only repair, mastered mix (−14 LUFS, −1 dBTP) in bounded blocks |
+| #27 | H5: Short styles Explainer and Raw, opening hook, caption placement, vertical MP4 with optional SRT |
 
-## In progress
+## Known limitations (from the PRs)
 
-**PR #20, H1: horizontal captions and MP4/SRT export pairs** (branch `feat/h1-captions-export`)
-
-- [x] Built: SRT cues from audible words, caption list with play and correct, three correction scopes, MP4+SRT pair into `Exports/`, retry, export history, MCP tools.
-- [x] CI and CodeRabbit pass; 507 tests pass; browser e2e passes on the devbox.
-- [ ] **Round 2: fix the 7 P2 issues from the Codex review** (details with file:line in `logbook.md`, entry 16:00 on 2026-11-24):
-  1. Publish both files in one step (stage in a per-export folder, one rename); make retry recover a committed pair instead of duplicating it.
-  2. A cue-only correction or hide must affect only that placement, not every reuse of the same source words.
-  3. A second project correction of an already-corrected word must take effect.
-  4. Validate caption edits (the 1,000-character limit) before saving; bad saved data must not drop the whole captions block.
-  5. Load saved spellings at editor start and wait for them before export.
-  6. Fix horizontal delivery at 1920×1080, 30 fps, and capture all render inputs with the approved snapshot.
-  7. Stop phrase replacements at long pauses, sentence breaks and recording changes.
-- [ ] Codex re-verify (sol, medium), CodeRabbit final review, merge.
-- [ ] Known limitations to list in the PR: Windows reserved names like `CON.demo`; `captions_correct` checks the revision before it awaits the spelling load.
+- Windows reserved names like `CON.demo` in export stems.
+- After a razor split, a cue edit falls back to the transcript words if the same words are heard more than once.
+- Exports made before #21 stay as loose files in `Exports/`; legacy checkpoints use path, size and modification time until reapproved.
+- Graphics: no local vision or moving-target tracking yet; highlights sample the picture transform at their midpoint.
+- Final mix: older mixes keep baked-in ducking until refit; music stays ducked over untranscribed recordings.
+- Shorts: automatic caption placement uses H3 targets and presets, so crowded frames can need manual placement; legacy Raw hooks keep their timing until set again.
+- Headless Chromium renders black frames with `--disable-vulkan-surface`; that is the environment, not Splice.
 
 ## Left to do
 
 | Step | Status | What |
 |---|---|---|
-| H1 | Round 2 | Captions and export pairs (above) |
-| H2 | Not started | "Finalize cut" checkpoints, compare with the approved cut, review issues you fix or dismiss, export gate, reopen summary |
-| H3 | Not started | Basic graphics pass: zooms, highlights and glass cards as editable edits; manual changes survive reruns and take swaps. The largest piece. |
-| H4 | Not started | Final mix: optional music fitted and faded, ducking under speech, whole-mix −14 LUFS with a peak ceiling, picture-only repairs mute replacement audio |
-| H5 | Not started | Short styles: Explainer and Raw, caption placement, opening hook |
-| H6 | Not started | Cut transcript panel |
+| CI | Broken | GitHub Actions stopped starting runs on 2026-11-24 16:39 (Actions enabled, status page green). Check the repo's Actions tab and account billing. Until then, merges use the local gate below. |
 | Laptop | Pending | AAC audio in Chrome, Open folder in File Explorer, SRT upload to YouTube, CUDA transcription, `splice mcp` surviving MCP restarts, a real 30–45 min recording on D: (see `LAPTOP-CHECKS.md`) |
-| Later | Needs real footage | Local vision comparison (Qwen vs Moondream), screenshot access, HyperFrames trial |
-
-Estimate at the current pace: about 5–8 days of running time for H1–H6.
+| Later | Needs real footage | Local vision comparison (Qwen vs Moondream), screenshot access, HyperFrames trial, real-footage pass over the H2–H5 flows |
 
 ## How the work runs
 
 - Each milestone is one PR, stacked on the one before it when it depends on it.
-- Claude subagents build. Codex (gpt-6.2-sol, medium effort) only reviews.
-- Merge bar: no P1 or P2 from Codex, CI green, no major CodeRabbit comments. P3s go into the PR's known limitations.
-- Develop and verify on a boxes.dev devbox: lint, typecheck, tests (run from the repo root so `bunfig.toml` preloads the wasm loader), `build:web`, and a headless browser run.
+- Codex gpt-6.2-sol workers (high effort) build and fix; this thread only orchestrates. At most 3 workers at a time, and each worker's T3 worktree is deleted when it finishes (T3 never deletes them).
+- One Codex review round per PR (gpt-6.2-sol, medium). Workers fix the P1/P2s, then the PR merges without a second review and without waiting for CodeRabbit. P3s go into the PR's known limitations.
+- If gpt-6.2-sol is missing, update the Codex CLI (`npm i -g @openai/codex@latest`; 0.160.0 lacked it).
+- Local CI gate (while Actions is down): a clean detached worktree at the PR head, `bun install --frozen-lockfile`, `typecheck`, `lint` (0 errors), `bun test` from the repo root, `build:web`. Heavy steps share `flock /data/tmp/claude-1000/locks/heavy.lock` on the 4 vCPU / 8 GB instabox.
 - No co-author trailers. Never commit `AGENTS.md` or `CLAUDE.md`. Never push to `main`; merge through PRs.
 - `logbook.md` holds every decision and review round in detail.
