@@ -73,6 +73,25 @@ export function createTabHandlers({
 			if (isBlocked()) throw new AgentBlockedError();
 			return api.correctCaption(params);
 		},
+		"editor.addMusic": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.addMusic(params);
+		},
+		"editor.updateMusic": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.updateMusic(params);
+		},
+		"editor.removeMusic": (params) => {
+			if (isBlocked()) throw new AgentBlockedError();
+			return api.removeMusic(params);
+		},
+		"editor.mixLoudness": (params) => {
+			// Measuring only reads; saving the gain is a write.
+			if (isBlocked() && (params as { apply?: unknown } | null)?.apply !== false)
+				throw new AgentBlockedError();
+			return api.mixLoudness(params);
+		},
+		"editor.mixStatus": (params) => api.mixStatus(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>

@@ -3,6 +3,7 @@ import {
 	type ExportSource,
 	exportRecordSchema,
 } from "@splice/bridge/delivery";
+import type { SequenceMix } from "@splice/bridge/mix";
 import { z } from "zod";
 import { callSplice, uploadExportFile } from "@/bridge/splice-api";
 import { cuesToSrt } from "@/captions/cues";
@@ -20,6 +21,8 @@ import type { DeliveryStep } from "./index";
  */
 export interface DeliverySnapshot {
 	tracks: SequenceTracks;
+	/** The final mix: music settings and the whole-mix gain export applies. */
+	mix?: SequenceMix;
 	srt: string;
 	source: Omit<ExportSource, "fingerprint">;
 }
@@ -36,6 +39,7 @@ export function takeDeliverySnapshot({
 	);
 	return {
 		tracks: sequence.tracks,
+		...(sequence.mix && { mix: sequence.mix }),
 		srt: cuesToSrt(cues),
 		source: {
 			projectId: project.metadata.id,
@@ -55,13 +59,18 @@ export function takeDeliverySnapshot({
  */
 export async function deliveryFingerprint({
 	tracks,
+	mix,
 	srt,
-}: Pick<DeliverySnapshot, "tracks" | "srt">): Promise<string> {
+}: Pick<DeliverySnapshot, "tracks" | "mix" | "srt">): Promise<string> {
 	/* eslint-disable opencut/prefer-object-params -- JSON.stringify calls replacers with (key, value). */
 	const withoutBuffers = (key: string, value: unknown) =>
 		key === "buffer" ? undefined : value;
 	/* eslint-enable opencut/prefer-object-params */
-	const text = `${JSON.stringify(tracks, withoutBuffers)}\n${srt}`;
+	// The mix gain changes the MP4's audio; a mix never set keeps old fingerprints.
+	const gain = mix?.loudness
+		? `\n${JSON.stringify([mix.loudness.gainDb, mix.loudness.ceilingDbtp])}`
+		: "";
+	const text = `${JSON.stringify(tracks, withoutBuffers)}\n${srt}${gain}`;
 	const digest = await crypto.subtle.digest(
 		"SHA-256",
 		new TextEncoder().encode(text),

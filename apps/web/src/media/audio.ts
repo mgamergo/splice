@@ -7,7 +7,9 @@ import type {
 } from "@/timeline";
 import { shouldMaintainPitch } from "@/retime/rate";
 import type { MediaData, ProjectItem } from "@/media/types";
-import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
+import { MAX_TRUE_PEAK_DBTP } from "@splice/bridge/ops";
+import type { MixLoudness } from "@splice/bridge/mix";
+import { applyMixGain } from "@/mix/loudness-meter";
 import type { AudioCapableClip } from "@/timeline/audio-state";
 import {
 	hasAnimatedVolume,
@@ -677,7 +679,12 @@ export async function collectAudioClipSources({
 	return clips;
 }
 
-/** Mixes the sequence's audio for export; rejects with `signal`'s reason once it aborts. */
+/**
+ * Mixes the sequence's audio for export; rejects with `signal`'s reason once
+ * it aborts. The final mix's gain applies, and the true peak is held under
+ * its ceiling (or the default one). `master: false` leaves the mix as the
+ * clips sum, to measure it.
+ */
 export async function createTimelineAudioBuffer({
 	tracks,
 	projectItems,
@@ -685,6 +692,7 @@ export async function createTimelineAudioBuffer({
 	sampleRate = EXPORT_SAMPLE_RATE,
 	audioContext,
 	signal,
+	master,
 }: {
 	tracks: SequenceTracks;
 	projectItems: ProjectItem[];
@@ -692,6 +700,7 @@ export async function createTimelineAudioBuffer({
 	sampleRate?: number;
 	audioContext?: AudioContext;
 	signal?: AbortSignal;
+	master?: Pick<MixLoudness, "gainDb" | "ceilingDbtp"> | false;
 }): Promise<AudioBuffer | null> {
 	signal?.throwIfAborted();
 	const context = audioContext ?? createAudioContext({ sampleRate });
@@ -740,7 +749,20 @@ export async function createTimelineAudioBuffer({
 
 	signal?.throwIfAborted();
 	if (!outputBuffer) return null;
-	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
+	if (master === false) return outputBuffer;
+	const mixed = outputBuffer;
+	await applyMixGain({
+		audio: {
+			channels: Array.from({ length: mixed.numberOfChannels }, (_, channel) =>
+				mixed.getChannelData(channel),
+			),
+			sampleRate,
+		},
+		gainDb: master?.gainDb ?? 0,
+		ceilingDbtp: master?.ceilingDbtp ?? MAX_TRUE_PEAK_DBTP,
+		signal,
+	});
+	return outputBuffer;
 }
 
 function collectPeakRange({

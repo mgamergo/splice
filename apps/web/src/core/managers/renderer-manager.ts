@@ -4,6 +4,7 @@ import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SequenceExporter } from "@/services/renderer/sequence-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
+import type { SequenceMix } from "@splice/bridge/mix";
 import { createTimelineAudioBuffer } from "@/media/audio";
 import { calculateTotalDuration } from "@/timeline";
 import type { SequenceTracks } from "@/timeline/types";
@@ -146,12 +147,15 @@ export class RendererManager {
 		onProgress,
 		signal,
 		tracks: snapshot,
+		mix: mixSnapshot,
 	}: {
 		options: ExportOptions;
 		onProgress?: ({ progress }: { progress: number }) => void;
 		signal: AbortSignal;
 		/** The sequence's tracks as they were when the export was asked for. */
 		tracks?: SequenceTracks;
+		/** The final mix taken with `tracks`; without them, the active sequence's. */
+		mix?: SequenceMix;
 	}): Promise<ExportResult> {
 		const { format, quality, fps, includeAudio } = options;
 
@@ -159,6 +163,9 @@ export class RendererManager {
 			signal.throwIfAborted();
 			const tracks =
 				snapshot ?? this.editor.sequences.getActiveSequence().tracks;
+			const mix = snapshot
+				? mixSnapshot
+				: this.editor.sequences.getActiveSequence().mix;
 			const projectItems = this.editor.media.getProjectItems();
 			const activeProject = this.editor.project.getActive();
 
@@ -182,6 +189,7 @@ export class RendererManager {
 					projectItems,
 					duration,
 					signal,
+					master: mix?.loudness,
 				});
 			}
 			signal.throwIfAborted();

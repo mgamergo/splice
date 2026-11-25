@@ -59,6 +59,11 @@ describe("splice mcp tools", () => {
 			"items_import",
 			"items_list",
 			"measure_loudness",
+			"mix_loudness",
+			"mix_status",
+			"music_add",
+			"music_adjust",
+			"music_remove",
 			"noise_reduction",
 			"normalize_loudness",
 			"raw_sequence",
@@ -1272,5 +1277,74 @@ describe("noise reduction tools", () => {
 			...applyDefaults,
 			tightening,
 		});
+	});
+});
+
+describe("final mix tools", () => {
+	test("music_add imports a Footage track the project lacks, then fits it", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.listItems")
+				return [{ id: "rec", type: "video", path: "take.mp4", missing: false }];
+			if (method === "editor.importItems")
+				return { imported: [{ id: "song" }], failed: [] };
+			return { ok: true, revision: 4 };
+		});
+		const result = await client.callTool({
+			name: "music_add",
+			arguments: { path: "music/song.mp3", expectedRevision: 3, duckDb: -18 },
+		});
+		expect(result.isError).toBeFalsy();
+		expect(calls).toEqual([
+			["editor.listItems", undefined],
+			["editor.importItems", { paths: ["music/song.mp3"] }],
+			[
+				"editor.addMusic",
+				{ expectedRevision: 3, duckDb: -18, projectItemId: "song" },
+			],
+		]);
+	});
+
+	test("music_add reuses an item already in the project", async () => {
+		const calls: string[] = [];
+		const client = await connect(async ({ method }) => {
+			calls.push(method);
+			return method === "editor.listItems"
+				? [{ id: "song", type: "audio", path: "song.mp3", missing: false }]
+				: { ok: true };
+		});
+		await client.callTool({
+			name: "music_add",
+			arguments: { path: "song.mp3", expectedRevision: 1 },
+		});
+		expect(calls).toEqual(["editor.listItems", "editor.addMusic"]);
+	});
+
+	test("music_add takes a path or a project item, not both", async () => {
+		const client = await connect(async () => ({ ok: true }));
+		const result = await client.callTool({
+			name: "music_add",
+			arguments: { path: "song.mp3", projectItemId: "song", expectedRevision: 1 },
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("either path or projectItemId");
+	});
+
+	test("mix_loudness and mix_status reach the editor", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			return { ok: true };
+		});
+		await client.callTool({
+			name: "mix_loudness",
+			arguments: { expectedRevision: 2 },
+		});
+		await client.callTool({ name: "mix_status", arguments: {} });
+		expect(calls).toEqual([
+			["editor.mixLoudness", { expectedRevision: 2, apply: true }],
+			["editor.mixStatus", {}],
+		]);
 	});
 });

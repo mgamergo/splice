@@ -32,6 +32,28 @@ import {
 	LoudnessError,
 } from "@/agent/loudness";
 import { setNoiseReduction } from "@/agent/noise-reduction";
+import {
+	addMusicRequestSchema,
+	mixLoudnessRequestSchema,
+	removeMusicRequestSchema,
+	updateMusicRequestSchema,
+} from "@splice/bridge/mix";
+import {
+	addMusic,
+	isMixLoudnessStale,
+	measureMixLoudness,
+	MusicError,
+	type MusicReport,
+	removeMusic,
+	saveMixLoudness,
+	updateMusic,
+} from "@/mix/final-mix";
+import {
+	PictureRepairError,
+	pictureRepairs,
+	withPictureRepair,
+	withRepairSound,
+} from "@/mix/picture-repair";
 import { UpdateClipsCommand } from "@/commands/timeline/clip/update-clips";
 import { isDiskMedia } from "@/media/media-data";
 import { canClipHaveAudio, hasMediaId } from "@/timeline/clip-utils";
@@ -93,6 +115,13 @@ export type ApplyResult =
 	| EditorError;
 
 class InvalidOpError extends Error {}
+
+/** Carries a refused write out of a music edit that was still awaiting. */
+class WriteConflict extends Error {
+	constructor(readonly result: EditorError) {
+		super(result.message);
+	}
+}
 
 function toClipRef({ trackId, clipId }: ClipRef): ClipRef {
 	return { trackId, clipId };
@@ -507,6 +536,187 @@ export class EditorApi {
 		};
 	}
 
+	/** The sequence a mix request names, or the active one. */
+	private mixSequence({ sequenceId }: { sequenceId?: string }) {
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		return (
+			sequence ??
+			this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			)
+		);
+	}
+
+	/** Runs a music edit that awaits before applying, refusing it if the sequence changed meanwhile. */
+	private async musicEdit({
+		expectedRevision,
+		edit,
+	}: {
+		expectedRevision: number;
+		edit: (check: () => void) => Promise<MusicReport>;
+	}) {
+		try {
+			const report = await edit(() => {
+				const conflict = this.checkWrite({ expectedRevision });
+				if (conflict) throw new WriteConflict(conflict);
+			});
+			return { ok: true as const, revision: this.getRevision(), ...report };
+		} catch (error) {
+			if (error instanceof WriteConflict) return error.result;
+			if (!(error instanceof MusicError)) throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	/** Fits an audio item to the sequence as its music: trimmed or looped, faded and ducked under speech. */
+	async addMusic(request: unknown) {
+		const parsed = addMusicRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const sequence = this.mixSequence(parsed.data);
+		if ("ok" in sequence) return sequence;
+		const { projectItemId, label = "Agent: add music", expectedRevision, sequenceId: _id, ...options } =
+			parsed.data;
+		return this.musicEdit({
+			expectedRevision,
+			edit: (check) =>
+				addMusic({
+					editor: this.editor,
+					sequenceId: sequence.id,
+					projectItemId,
+					options,
+					label,
+					check,
+				}),
+		});
+	}
+
+	/** Changes the music's levels, fades and overrides, and reducks it under the current speech. */
+	async updateMusic(request: unknown) {
+		const parsed = updateMusicRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const sequence = this.mixSequence(parsed.data);
+		if ("ok" in sequence) return sequence;
+		const { label = "Agent: adjust music", expectedRevision, sequenceId: _id, ...options } =
+			parsed.data;
+		return this.musicEdit({
+			expectedRevision,
+			edit: (check) =>
+				updateMusic({
+					editor: this.editor,
+					sequenceId: sequence.id,
+					options,
+					label,
+					check,
+				}),
+		});
+	}
+
+	removeMusic(request: unknown) {
+		const parsed = removeMusicRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const sequence = this.mixSequence(parsed.data);
+		if ("ok" in sequence) return sequence;
+		const label = parsed.data.label ?? "Agent: remove music";
+		try {
+			removeMusic({ editor: this.editor, sequenceId: sequence.id, label });
+		} catch (error) {
+			if (!(error instanceof MusicError)) throw error;
+			return this.invalidOp(error.message);
+		}
+		return { ok: true as const, revision: this.getRevision(), label };
+	}
+
+	/**
+	 * Measures the whole mix and, unless only measuring, saves the gain that
+	 * brings it to the target under the true-peak ceiling.
+	 */
+	async mixLoudness(request: unknown) {
+		const parsed = mixLoudnessRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const { apply, expectedRevision, targetLufs, ceilingDbtp } = parsed.data;
+		if (apply && expectedRevision === undefined)
+			return this.invalidOp(
+				"Pass expectedRevision to save the gain, or apply: false to only measure.",
+			);
+		if (apply && expectedRevision !== undefined) {
+			const conflict = this.checkWrite({ expectedRevision });
+			if (conflict) return conflict;
+		}
+		const sequence = this.mixSequence(parsed.data);
+		if ("ok" in sequence) return sequence;
+		try {
+			const { loudness } = await measureMixLoudness({
+				editor: this.editor,
+				sequenceId: sequence.id,
+				targetLufs,
+				ceilingDbtp,
+			});
+			const label = parsed.data.label ?? "Agent: mix loudness";
+			if (apply && expectedRevision !== undefined) {
+				const conflict = this.checkWrite({ expectedRevision });
+				if (conflict) return conflict;
+				saveMixLoudness({
+					editor: this.editor,
+					sequenceId: sequence.id,
+					loudness,
+					label,
+				});
+			}
+			return {
+				ok: true as const,
+				revision: this.getRevision(),
+				sequenceId: sequence.id,
+				applied: apply,
+				...(apply && { label }),
+				loudness,
+			};
+		} catch (error) {
+			if (!(error instanceof MusicError)) throw error;
+			return this.invalidOp(error.message);
+		}
+	}
+
+	/** The sequence's final mix: music settings, the saved gain and whether it's stale, and picture repairs. */
+	mixStatus(request: unknown) {
+		const parsed = removeMusicRequestSchema
+			.pick({ sequenceId: true })
+			.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const sequence = this.mixSequence(parsed.data);
+		if ("ok" in sequence) return sequence;
+		return {
+			ok: true as const,
+			sequenceId: sequence.id,
+			revision: this.getRevision(),
+			music: sequence.mix?.music ?? null,
+			loudness: sequence.mix?.loudness
+				? {
+						...sequence.mix.loudness,
+						stale: isMixLoudnessStale({ sequence }),
+					}
+				: null,
+			pictureRepairs: pictureRepairs({ tracks: sequence.tracks }).map(
+				({ clip }) => ({
+					clipId: clip.id,
+					projectItemId: clip.mediaId,
+					start: mediaTimeToSeconds({ time: clip.startTime }),
+					end: mediaTimeToSeconds({
+						time: addMediaTime({ a: clip.startTime, b: clip.duration }),
+					}),
+					sourceIn: mediaTimeToSeconds({ time: clip.trimStart }),
+				}),
+			),
+		};
+	}
+
 	audioSources(request: unknown) {
 		const parsed = audioSourcesRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
@@ -642,7 +852,8 @@ export class EditorApi {
 			if (
 				error instanceof InvalidOpError ||
 				error instanceof TimeSpecError ||
-				error instanceof RemovalTakeError
+				error instanceof RemovalTakeError ||
+				error instanceof PictureRepairError
 			) {
 				return {
 					ok: false,
@@ -812,6 +1023,52 @@ export class EditorApi {
 				return {
 					command: new UpdateClipsCommand({ updates }),
 					description: `turned noise reduction ${op.enabled ? "on" : "off"} for ${clips.length} clip(s)`,
+				};
+			}
+			case "picture_repair": {
+				const at = time(op.at);
+				const duration = time(op.duration);
+				const item = this.editor.media
+					.getProjectItems()
+					.find(({ id }) => id === op.projectItemId);
+				if (!item)
+					throw new InvalidOpError(
+						`picture_repair: unknown project item ${op.projectItemId}`,
+					);
+				const { tracks } = withPictureRepair({
+					tracks: sequence.tracks,
+					item,
+					at,
+					duration,
+					sourceIn: op.sourceIn,
+				});
+				return {
+					command: new UpdateSequenceCommand({
+						editor: this.editor,
+						sequenceId: sequence.id,
+						updates: { tracks },
+						label: "Picture repair",
+					}),
+					description: `repaired the picture ${formatSeconds({ time: at })}–${formatSeconds({ time: addMediaTime({ a: at, b: duration }) })} from ${item.name} at ${op.sourceIn.toFixed(2)} s, its audio muted`,
+				};
+			}
+			case "repair_sound": {
+				const start = time(op.start);
+				const end = time(op.end);
+				const { tracks } = withRepairSound({
+					tracks: sequence.tracks,
+					clipId: op.clipId,
+					start,
+					end,
+				});
+				return {
+					command: new UpdateSequenceCommand({
+						editor: this.editor,
+						sequenceId: sequence.id,
+						updates: { tracks },
+						label: "Bring in repair sound",
+					}),
+					description: `brought in the replacement take's sound ${formatSeconds({ time: start })}–${formatSeconds({ time: end })}`,
 				};
 			}
 			case "restore_takes":

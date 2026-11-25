@@ -301,6 +301,7 @@ export class ProjectManager {
 						},
 						signal,
 						tracks: delivery.snapshot.tracks,
+						mix: delivery.snapshot.mix,
 						// Rendering is most of the work; writing the files is the rest.
 						onProgress: ({ progress }) => update({ progress: progress * 0.9 }),
 					});

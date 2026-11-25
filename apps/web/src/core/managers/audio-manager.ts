@@ -12,6 +12,8 @@ import {
 	hasAnimatedVolume,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
+import { dbToLinear } from "@/mix/loudness-meter";
+import { MAX_TRUE_PEAK_DBTP } from "@splice/bridge/ops";
 import { createMediaSource } from "@/media/media-data";
 import { getClipSourceRange, type SourceRange } from "@/media/source-range";
 import {
@@ -29,6 +31,7 @@ import {
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
+	private limiter: DynamicsCompressorNode | null = null;
 	private playbackStartTime = 0;
 	private playbackStartContextTime = 0;
 	private scheduleTimer: number | null = null;
@@ -60,6 +63,8 @@ export class AudioManager {
 			this.editor.timeline.subscribe(this.handleTimelineChange),
 			this.editor.media.subscribe(this.handleTimelineChange),
 			this.editor.playback.onSeek(this.handleSeek),
+			// The final mix's gain changes with the sequence, not the clips.
+			this.editor.sequences.subscribe(this.updateGain),
 		);
 	}
 
@@ -75,6 +80,7 @@ export class AudioManager {
 			void this.audioContext.close();
 			this.audioContext = null;
 			this.masterGain = null;
+			this.limiter = null;
 		}
 	}
 
@@ -129,19 +135,27 @@ export class AudioManager {
 		if (typeof window === "undefined") return null;
 
 		this.audioContext = createAudioContext();
-		const { input } = createAudioMasteringChain({
+		const { input, limiter } = createAudioMasteringChain({
 			audioContext: this.audioContext,
 			destination: this.audioContext.destination,
 		});
 		this.masterGain = input;
-		this.masterGain.gain.value = this.lastVolume;
+		this.limiter = limiter;
+		this.updateGain();
 		return this.audioContext;
 	}
 
-	private updateGain(): void {
+	/** The playback volume, with the final mix's gain and ceiling, as export applies them. */
+	private updateGain = (): void => {
 		if (!this.masterGain) return;
-		this.masterGain.gain.value = this.lastVolume;
-	}
+		const loudness =
+			this.editor.sequences.getActiveSequenceOrNull()?.mix?.loudness;
+		this.masterGain.gain.value =
+			this.lastVolume * dbToLinear(loudness?.gainDb ?? 0);
+		if (this.limiter)
+			this.limiter.threshold.value =
+				loudness?.ceilingDbtp ?? MAX_TRUE_PEAK_DBTP;
+	};
 
 	private getPlaybackTime(): number {
 		if (!this.audioContext) return this.playbackStartTime;
