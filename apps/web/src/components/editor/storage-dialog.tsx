@@ -11,6 +11,7 @@ import { callSplice } from "@/bridge/splice-api";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -175,98 +176,100 @@ export function StorageDialog({ onClose }: { onClose: () => void }) {
 						Review temporary files and caches before cleaning up.
 					</DialogDescription>
 				</DialogHeader>
-				<fieldset disabled={busy}>
-					<legend className="mb-2 text-sm font-medium">Splice disk</legend>
-					{report?.categories.map(({ category, bytes, items }) => (
-						<label
-							key={category}
-							className="flex items-center gap-2 border-b py-1.5 text-sm"
-						>
+				<DialogBody>
+					<fieldset disabled={busy}>
+						<legend className="mb-2 text-sm font-medium">Splice disk</legend>
+						{report?.categories.map(({ category, bytes, items }) => (
+							<label
+								key={category}
+								className="flex items-center gap-2 border-b py-1.5 text-sm"
+							>
+								<input
+									type="checkbox"
+									checked={selection.includes(category)}
+									disabled={items === 0}
+									onChange={(event) => {
+										const checked = event.currentTarget.checked;
+										setSelection((current) =>
+											checked
+												? [...current, category]
+												: current.filter((item) => item !== category),
+										);
+									}}
+								/>
+								<span>{CATEGORY_LABELS[category]}</span>
+								<span className="ml-auto text-muted-foreground tabular-nums">
+									{formatBytes(bytes)}
+								</span>
+							</label>
+						))}
+						{report && (
+							<details className="mt-2 text-sm">
+								<summary className="cursor-pointer">Kept on disk</summary>
+								<ul className="mt-2 space-y-2 text-muted-foreground">
+									{report.kept.map(({ category, reason, bytes }) => (
+										<li key={`${category}/${reason}`}>
+											<span className="block text-foreground">
+												{category} · {formatBytes(bytes)}
+											</span>
+											{reason}
+										</li>
+									))}
+								</ul>
+							</details>
+						)}
+					</fieldset>
+					<fieldset disabled={busy}>
+						<legend className="mb-2 text-sm font-medium">This browser</legend>
+						<label className="flex items-center gap-2 border-b py-1.5 text-sm">
 							<input
 								type="checkbox"
-								checked={selection.includes(category)}
-								disabled={items === 0}
-								onChange={(event) => {
-									const checked = event.currentTarget.checked;
-									setSelection((current) =>
-										checked
-											? [...current, category]
-											: current.filter((item) => item !== category),
-									);
-								}}
+								checked={clearWaveforms}
+								disabled={waveforms.bytes === 0}
+								onChange={(event) =>
+									setClearWaveforms(event.currentTarget.checked)
+								}
 							/>
-							<span>{CATEGORY_LABELS[category]}</span>
+							<span>Waveforms in this tab</span>
 							<span className="ml-auto text-muted-foreground tabular-nums">
-								{formatBytes(bytes)}
+								{formatBytes(waveforms.bytes)}
 							</span>
 						</label>
-					))}
-					{report && (
-						<details className="mt-2 text-sm">
-							<summary className="cursor-pointer">Kept on disk</summary>
-							<ul className="mt-2 space-y-2 text-muted-foreground">
-								{report.kept.map(({ category, reason, bytes }) => (
-									<li key={`${category}/${reason}`}>
-										<span className="block text-foreground">
-											{category} · {formatBytes(bytes)}
-										</span>
-										{reason}
-									</li>
-								))}
-							</ul>
-						</details>
-					)}
-				</fieldset>
-				<fieldset disabled={busy}>
-					<legend className="mb-2 text-sm font-medium">This browser</legend>
-					<label className="flex items-center gap-2 border-b py-1.5 text-sm">
-						<input
-							type="checkbox"
-							checked={clearWaveforms}
-							disabled={waveforms.bytes === 0}
-							onChange={(event) =>
-								setClearWaveforms(event.currentTarget.checked)
-							}
-						/>
-						<span>Waveforms in this tab</span>
-						<span className="ml-auto text-muted-foreground tabular-nums">
-							{formatBytes(waveforms.bytes)}
-						</span>
-					</label>
-					{waveforms.busy > 0 && (
-						<p className="mt-1 text-xs text-muted-foreground">
-							{waveforms.busy} still building
+						{waveforms.busy > 0 && (
+							<p className="mt-1 text-xs text-muted-foreground">
+								{waveforms.busy} still building
+							</p>
+						)}
+						<label className="flex items-center gap-2 border-b py-1.5 text-sm">
+							<input
+								type="checkbox"
+								checked={clearModel}
+								disabled={!modelAvailable}
+								onChange={(event) => setClearModel(event.currentTarget.checked)}
+							/>
+							<span>Transcription model downloads</span>
+							<span className="ml-auto text-muted-foreground tabular-nums">
+								{modelSize(model)}
+							</span>
+						</label>
+						<p className="mt-2 text-xs text-muted-foreground">
+							Splice keeps browser projects, checkpoints, project items, and
+							their thumbnails.
 						</p>
+					</fieldset>
+					{errors.length > 0 && (
+						<ul className="max-h-32 overflow-auto text-sm text-destructive">
+							{errors.map((error) => (
+								<li key={error}>{error}</li>
+							))}
+						</ul>
 					)}
-					<label className="flex items-center gap-2 border-b py-1.5 text-sm">
-						<input
-							type="checkbox"
-							checked={clearModel}
-							disabled={!modelAvailable}
-							onChange={(event) => setClearModel(event.currentTarget.checked)}
-						/>
-						<span>Transcription model downloads</span>
-						<span className="ml-auto text-muted-foreground tabular-nums">
-							{modelSize(model)}
-						</span>
-					</label>
-					<p className="mt-2 text-xs text-muted-foreground">
-						Splice keeps browser projects, checkpoints, project items, and their
-						thumbnails.
+					<p aria-live="polite" className="text-sm">
+						{busy
+							? "Checking storage…"
+							: notice || `${formatBytes(diskBytes)} selected on disk`}
 					</p>
-				</fieldset>
-				{errors.length > 0 && (
-					<ul className="max-h-32 overflow-auto text-sm text-destructive">
-						{errors.map((error) => (
-							<li key={error}>{error}</li>
-						))}
-					</ul>
-				)}
-				<p aria-live="polite" className="text-sm">
-					{busy
-						? "Checking storage…"
-						: notice || `${formatBytes(diskBytes)} selected on disk`}
-				</p>
+				</DialogBody>
 				<DialogFooter>
 					<Button variant="outline" disabled={busy} onClick={() => void scan()}>
 						Refresh
