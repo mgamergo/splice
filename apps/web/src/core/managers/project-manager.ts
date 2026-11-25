@@ -1,3 +1,4 @@
+import { invalidateRecordingAnalysis } from "@/media/replacement-analysis";
 import { readStyleDefaults, sequenceStyle } from "@/agent/style-profile";
 import {
 	PROJECT_FORMATS,
@@ -6,7 +7,12 @@ import {
 } from "@splice/bridge";
 import type { EditorCore } from "@/core";
 import type { ApprovedCheckpoint } from "@/approval/types";
-import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
+import {
+	pinRenderMedia,
+	rebindRenderMedia,
+	referencedMedia,
+	verifySequenceMedia,
+} from "@/media/sequence-media";
 import type {
 	TProject,
 	TProjectMetadata,
@@ -287,6 +293,50 @@ export class ProjectManager {
 		}
 	}
 
+	/** Persist invalidation while the candidate is still unavailable to the editor. */
+	async discardRecordingAnalysis({
+		projectId,
+		projectItemId,
+	}: {
+		projectId: string;
+		projectItemId: string;
+	}): Promise<void> {
+		const generation = this.editor.media.getGeneration();
+		await this.queueProjectWrite({
+			write: async () => {
+				const project = this.getActive();
+				if (
+					project.metadata.id !== projectId ||
+					this.editor.media.getGeneration() !== generation
+				)
+					throw new Error("The project changed. Relink the recording again.");
+				const invalidated = () =>
+					invalidateRecordingAnalysis({
+						project: this.getActive(),
+						sequences: this.editor.sequences.getSequences(),
+						projectItemId,
+					});
+				const snapshot = {
+					...this.projectForStorage({ project }),
+					...invalidated(),
+				};
+				await this.saveProjectSnapshot({ project: snapshot });
+				if (
+					this.active?.metadata.id !== projectId ||
+					this.editor.media.getGeneration() !== generation
+				)
+					throw new Error("The project changed. Relink the recording again.");
+				const updated = invalidated();
+				this.setActiveProject({ project: { ...this.getActive(), ...updated } });
+				this.editor.sequences.setSequences({ sequences: updated.sequences });
+				// Older undo snapshots can still contain the discarded words.
+				this.editor.command.clearUndoHistory();
+				this.editor.command.bumpRevision();
+				this.editor.save.markDirty();
+			},
+		});
+	}
+
 	isCheckpointMedia({
 		projectId,
 		id,
@@ -504,6 +554,17 @@ export class ProjectManager {
 	retryDelivery(): Promise<ExportResult> {
 		if (!this.delivery)
 			return Promise.resolve({ success: false, error: "Nothing to retry." });
+		const { scene } = this.delivery.input;
+		const projectItems = rebindRenderMedia({
+			captured: scene.projectItems,
+			current: this.editor.media.getProjectItems(),
+		});
+		if (projectItems !== scene.projectItems) {
+			this.delivery.input = {
+				...this.delivery.input,
+				scene: { ...scene, projectItems: pinRenderMedia({ projectItems }) },
+			};
+		}
 		return this.runDelivery();
 	}
 

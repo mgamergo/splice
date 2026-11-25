@@ -13,7 +13,7 @@ import {
 	removalMarkerDataSchema,
 } from "@splice/bridge/ops";
 import { mediaUrlForPath } from "@splice/bridge";
-import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
+import { isDiskMedia } from "@/media/media-data";
 import type { DiskMedia, ProjectItem } from "@/media/types";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
 import { ProjectStorageAdapter } from "./project-storage-adapter";
@@ -71,15 +71,14 @@ export function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
  * Rebuilds a disk item from its stored path. A file that left the Footage folder
  * still loads, marked missing, so its clips stay in the sequence until it's relinked.
  */
-async function loadDiskProjectItem({
+function loadDiskProjectItem({
 	metadata,
 	diskPath,
 }: {
 	metadata: ProjectItemData;
 	diskPath: string;
-}): Promise<ProjectItem> {
-	const probed = await probeDiskMedia({ path: diskPath }).catch(() => null);
-	const file: DiskMedia = probed ?? {
+}): ProjectItem {
+	const file: DiskMedia = {
 		kind: "disk",
 		path: diskPath,
 		url: mediaUrlForPath(diskPath),
@@ -87,6 +86,8 @@ async function loadDiskProjectItem({
 		type: "application/octet-stream",
 		size: metadata.size,
 		lastModified: metadata.lastModified,
+		version: metadata.diskVersion,
+		contentHash: metadata.diskContentHash,
 	};
 	return {
 		id: metadata.id,
@@ -101,7 +102,9 @@ async function loadDiskProjectItem({
 		hasAudio: metadata.hasAudio,
 		thumbnailUrl: metadata.thumbnailUrl,
 		ephemeral: metadata.ephemeral,
-		missing: probed === null,
+		missing: true,
+		replacementId: metadata.replacementId,
+		originalLocation: metadata.originalLocation,
 	};
 }
 
@@ -424,7 +427,14 @@ class StorageService {
 			// The file stays on disk; only its path and metadata are stored.
 			await mediaMetadataAdapter.set({
 				key: projectItem.id,
-				value: { ...metadata, diskPath: data.path },
+				value: {
+					...metadata,
+					diskPath: data.path,
+					diskContentHash: data.contentHash,
+					diskVersion: data.version,
+					replacementId: projectItem.replacementId,
+					originalLocation: projectItem.originalLocation,
+				},
 			});
 			return;
 		}

@@ -217,12 +217,21 @@ function usedMedia({
 	const used = referencedMedia({ tracks });
 	return projectItems
 		.filter(({ id }) => used.has(id))
-		.map(({ id, type, file }) => {
-			const identity = recordingIdentity({ file, legacy: legacyMedia });
+		.map(({ id, type, file, originalLocation }) => {
+			const location = legacyMedia && originalLocation;
+			const identity = location
+				? {
+						size: location.size,
+						lastModified: location.lastModified,
+						path: location.path,
+					}
+				: recordingIdentity({ file, legacy: legacyMedia });
 			return {
 				id,
 				type,
-				...(!("contentHash" in identity) && { name: file.name }),
+				...(!("contentHash" in identity) && {
+					name: location ? location.path.split("/").at(-1) : file.name,
+				}),
 				...identity,
 			};
 		})

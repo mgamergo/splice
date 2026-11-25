@@ -1,3 +1,4 @@
+import { relinkItemInput } from "@splice/bridge/items";
 import { briefSetRequestSchema } from "@splice/bridge/brief";
 import {
 	storageCleanupSchema,
@@ -477,6 +478,31 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 			inputSchema: {},
 		},
 		() => guard(async () => text(await rpc({ method: "editor.listItems" }))),
+	);
+
+	server.registerTool(
+		"items_relink",
+		{
+			title: "Relink a recording",
+			description:
+				"Verify a Footage file against a project item's original content and relink it. Confirm with the creator before passing replace for changed or unverifiable content. Pass expectedVersion from the verification result to confirm the same file.",
+			inputSchema: relinkItemInput,
+		},
+		(args) =>
+			guard(async () =>
+				text(await rpc({ method: "editor.relinkItem", params: args })),
+			),
+	);
+
+	server.registerTool(
+		"items_verify",
+		{
+			title: "Verify project recordings",
+			description:
+				"Check all project items on disk. A changed recording stays unavailable until explicitly accepted with items_relink.",
+			inputSchema: {},
+		},
+		() => guard(async () => text(await rpc({ method: "editor.verifyItems" }))),
 	);
 
 	server.registerTool(

@@ -4,9 +4,10 @@ import type { EditorCore } from "@/core";
 import { createMediaSource, isDiskMedia, probeDiskMedia } from "./media-data";
 import { readVideoFile } from "./mediabunny";
 import { renderThumbnailDataUrl } from "./thumbnail";
+import { pinDiskMedia } from "./recording-verification";
 import type { DiskMedia, MediaType, ProjectItem } from "./types";
 
-function mediaTypeOf({ mime }: { mime: string }): MediaType | null {
+export function mediaTypeOf({ mime }: { mime: string }): MediaType | null {
 	if (mime.startsWith("video/")) return "video";
 	if (mime.startsWith("audio/")) return "audio";
 	if (mime.startsWith("image/")) return "image";
@@ -21,6 +22,7 @@ export function summarizeItem(item: ProjectItem): ItemSummary {
 		duration: item.duration ?? null,
 		path: isDiskMedia(item.file) ? item.file.path : null,
 		missing: item.missing ?? false,
+		...(item.recordingChange && { recordingChange: item.recordingChange.kind }),
 	};
 }
 
@@ -72,7 +74,7 @@ function readImage({
 	});
 }
 
-async function describe({
+export async function describeDiskMedia({
 	media,
 	type,
 }: {
@@ -112,10 +114,13 @@ const inFlight = new Map<string, Promise<ProjectItem>>();
 /** How an import reads a file; replaceable so tests don't need a server or decoder. */
 export interface ImportReaders {
 	probe: typeof probeDiskMedia;
-	describe: typeof describe;
+	describe: typeof describeDiskMedia;
 }
 
-const defaultReaders: ImportReaders = { probe: probeDiskMedia, describe };
+const defaultReaders: ImportReaders = {
+	probe: probeDiskMedia,
+	describe: describeDiskMedia,
+};
 
 async function importOne({
 	editor,
@@ -142,7 +147,10 @@ async function importOne({
 	if (!type) {
 		throw new Error(`Unsupported file type ${media.type}`);
 	}
-	const projectItem = await readers.describe({ media, type });
+	const projectItem = await readers.describe({
+		media: pinDiskMedia(media),
+		type,
+	});
 	// Probing takes a while; the creator may have stopped the agent or switched projects.
 	if (isBlocked()) {
 		throw new Error("The creator stopped the agent");

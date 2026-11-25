@@ -139,10 +139,12 @@ export async function probeDiskMedia({
 	path,
 	signal,
 	includeContentHash = true,
+	fullHash = false,
 }: {
 	path: string;
 	signal?: AbortSignal;
 	includeContentHash?: boolean;
+	fullHash?: boolean;
 }): Promise<DiskMedia | null> {
 	if (!isFootagePath(path)) {
 		return null;
@@ -154,7 +156,9 @@ export async function probeDiskMedia({
 			credentials: "same-origin",
 			cache: "no-store",
 			signal,
-			...(includeContentHash && { headers: { [MEDIA_CONTENT_HEADER]: "1" } }),
+			...(includeContentHash && {
+				headers: { [MEDIA_CONTENT_HEADER]: fullHash ? "1" : "sample" },
+			}),
 		});
 	let response = await head();
 	// The media cookie is missing (a new browser session): get one and try again.

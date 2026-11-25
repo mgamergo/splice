@@ -29,6 +29,12 @@ export interface ProjectItemData {
 	thumbnailUrl?: string;
 	/** Set for items that reference a file under Footage instead of a stored copy. */
 	diskPath?: string;
+	diskContentHash?: string;
+	diskVersion?: string;
+	/** Original location for legacy approval fingerprints, retained after a verified move. */
+	originalLocation?: { path: string; size: number; lastModified: number };
+	/** Changes with each confirmed replacement and stays stable through moves. */
+	replacementId?: string;
 }
 
 export type SerializedSequence = Omit<TSequence, "createdAt" | "updatedAt"> & {

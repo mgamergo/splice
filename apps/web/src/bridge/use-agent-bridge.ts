@@ -64,7 +64,11 @@ export function useAgentBridge(): void {
 				store.setStatus(status);
 				// A restarted splice has a new media key.
 				if (status === "connected") {
-					void ensureMediaSession();
+					void ensureMediaSession()
+						.then(() => editor.media.verifyRecordings())
+						.catch((error: unknown) =>
+							console.error("Failed to verify recordings:", error),
+						);
 					void flushCorrections();
 				}
 			},

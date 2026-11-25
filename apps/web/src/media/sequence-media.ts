@@ -1,3 +1,4 @@
+import type { FootageIdentity } from "@/approval/types";
 import type { MediaData, ProjectItem } from "@/media/types";
 import type { SequenceTracks } from "@/timeline/types";
 import { isDiskMedia, probeDiskMedia, versionedMediaUrl } from "./media-data";
@@ -98,7 +99,12 @@ export function pinRenderMedia({
 }): ProjectItem[] {
 	return projectItems.map((item) => {
 		const { file } = item;
-		if (!isDiskMedia(file) || !file.version) return item;
+		if (
+			!isDiskMedia(file) ||
+			!file.version ||
+			file.expectedVersion === file.version
+		)
+			return item;
 		const url = versionedMediaUrl({ url: file.url, version: file.version });
 		return {
 			...item,
@@ -106,4 +112,90 @@ export function pinRenderMedia({
 			file: { ...file, url, expectedVersion: file.version },
 		};
 	});
+}
+
+/** Retarget a captured edit only to verified copies of the same recording. */
+export function rebindRenderMedia({
+	captured,
+	current,
+}: {
+	captured: ProjectItem[];
+	current: ProjectItem[];
+}): ProjectItem[] {
+	const byId = new Map(current.map((item) => [item.id, item]));
+	const rebound = captured.map((item) => {
+		const replacement = byId.get(item.id);
+		const file = item.file;
+		if (
+			!replacement ||
+			replacement.missing ||
+			!isDiskMedia(file) ||
+			!isDiskMedia(replacement.file) ||
+			!file.contentHash ||
+			file.contentHash !== replacement.file.contentHash ||
+			(file.version === replacement.file.version &&
+				file.path === replacement.file.path)
+		)
+			return item;
+		return {
+			...item,
+			url: replacement.url,
+			file: replacement.file,
+			missing: false,
+		};
+	});
+	return rebound.some((item, index) => item !== captured[index])
+		? rebound
+		: captured;
+}
+
+export function matchesApprovedRecording({
+	item,
+	approved,
+}: {
+	item: ProjectItem;
+	approved: FootageIdentity;
+}): boolean {
+	if (item.missing || approved.missing) return false;
+	const { file } = item;
+	if (approved.contentHash)
+		return isDiskMedia(file) && approved.contentHash === file.contentHash;
+	const current = {
+		size: file.size,
+		lastModified: file.lastModified,
+		path: isDiskMedia(file) ? file.path : undefined,
+	};
+	const locations = item.originalLocation
+		? [current, item.originalLocation]
+		: [current];
+	return locations.some(
+		({ path, size, lastModified }) =>
+			approved.path === path &&
+			approved.size === size &&
+			approved.lastModified === lastModified,
+	);
+}
+
+export function unavailableApprovedRecording({
+	footage,
+	projectItems,
+}: {
+	footage: FootageIdentity[];
+	projectItems: ProjectItem[];
+}): FootageIdentity | undefined {
+	const items = new Map(projectItems.map((item) => [item.id, item]));
+	return footage.find((approved) => {
+		const item = items.get(approved.projectItemId);
+		return !item || !matchesApprovedRecording({ approved, item });
+	});
+}
+
+export function requireApprovedMedia(
+	input: Parameters<typeof unavailableApprovedRecording>[0],
+): void {
+	const unavailable = unavailableApprovedRecording(input);
+	if (unavailable)
+		throw new Error(
+			`${unavailable.name} is unavailable or differs from the approved recording.`,
+		);
 }

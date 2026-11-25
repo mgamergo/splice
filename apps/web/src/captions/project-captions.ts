@@ -112,6 +112,7 @@ export async function fetchTranscriptSources({
 	sources: CaptionsRequest["sources"];
 	withoutTranscript: string[];
 }> {
+	const before = editor.media.getProjectItems();
 	const items = recordings({ editor });
 	const paths = [...new Set(items.flatMap(({ path }) => (path ? [path] : [])))];
 	const wordsByPath = new Map<
@@ -128,6 +129,10 @@ export async function fetchTranscriptSources({
 		);
 		for (const { path, words } of transcripts) wordsByPath.set(path, words);
 	}
+	if (editor.media.getProjectItems() !== before)
+		throw new Error(
+			"Project items changed while loading caption words. Try again.",
+		);
 	const sources = items.flatMap(({ id, path }) => {
 		const words = path ? wordsByPath.get(path) : undefined;
 		return words?.length ? [{ projectItemId: id, words }] : [];

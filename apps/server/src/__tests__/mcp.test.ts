@@ -48,6 +48,46 @@ const tightenDefaults = {
 const { pauses: _auto, ...applyDefaults } = tightenDefaults;
 
 describe("splice mcp tools", () => {
+	test("forwards recording verification and explicit replacement to the editor", async () => {
+		const calls: Array<{ method: string; params: unknown }> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push({ method, params });
+			return method === "editor.verifyItems"
+				? []
+				: {
+						kind: "confirmation-required",
+						verification: "changed",
+						version: "new",
+					};
+		});
+		try {
+			const args = { projectItemId: "rec", path: "moved.wav" };
+			const preview = await client.callTool({
+				name: "items_relink",
+				arguments: args,
+			});
+			expect(JSON.parse(textOf(preview))).toMatchObject({
+				kind: "confirmation-required",
+				verification: "changed",
+			});
+			await client.callTool({
+				name: "items_relink",
+				arguments: { ...args, replace: true, expectedVersion: "new" },
+			});
+			await client.callTool({ name: "items_verify" });
+			expect(calls).toEqual([
+				{ method: "editor.relinkItem", params: args },
+				{
+					method: "editor.relinkItem",
+					params: { ...args, replace: true, expectedVersion: "new" },
+				},
+				{ method: "editor.verifyItems", params: undefined },
+			]);
+		} finally {
+			await client.close();
+		}
+	});
+
 	test("lists the tools", async () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
@@ -74,6 +114,8 @@ describe("splice mcp tools", () => {
 			"issues_list",
 			"items_import",
 			"items_list",
+			"items_relink",
+			"items_verify",
 			"measure_loudness",
 			"mix_loudness",
 			"mix_status",
@@ -1399,7 +1441,7 @@ describe("noise reduction tools", () => {
 		const root = await mkdtemp(join(tmpdir(), "splice-mcp-"));
 		await mkdir(join(root, "Footage"));
 		for (const name of ["quiet.wav", "loud.wav"])
-			await writeFile(join(root, "Footage", name), "audio");
+			await writeFile(join(root, "Footage", name), name);
 		// loud.wav leaves Footage once identified, before FFmpeg opens it.
 		const reducer = createNoiseReducer({
 			root,

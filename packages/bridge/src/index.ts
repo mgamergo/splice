@@ -34,6 +34,8 @@ export const TAB_METHODS = [
 	"editor.briefSet",
 	"editor.listItems",
 	"editor.importItems",
+	"editor.relinkItem",
+	"editor.verifyItems",
 	"editor.rawSequence",
 	"editor.roughCut",
 	"editor.roughCutSources",
@@ -156,7 +158,7 @@ export function mediaUrlForPath(path: string): string {
 	return `${BRIDGE_PATHS.media}${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-/** The media route's verified file version and optional SHA-256 of its bytes. */
+/** The media route's file version and optional content fingerprint. */
 export const MEDIA_VERSION_HEADER = "x-splice-media-version";
 export const MEDIA_CONTENT_HEADER = "x-splice-media-sha256";
 export const MEDIA_VERSION_PARAM = "version";
@@ -189,6 +191,7 @@ export interface ItemSummary {
 	path: string | null;
 	/** The file is no longer in Footage. */
 	missing: boolean;
+	recordingChange?: "changed" | "unverified";
 }
 
 export type { RoughCutSources } from "./ops";

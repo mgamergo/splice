@@ -1,3 +1,4 @@
+import { MEDIA_CONTENT_HEADER, MEDIA_VERSION_HEADER } from "@splice/bridge";
 import { BASE_STYLE } from "@splice/bridge/style";
 import { StyleUpdateApi } from "@/agent/style-update";
 import {
@@ -74,6 +75,14 @@ function recording({
 			lastModified: 0,
 		},
 	};
+}
+
+function mockFootageFetch(
+	respond: (...args: Parameters<typeof fetch>) => Promise<Response>,
+) {
+	spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(respond, { preconnect: fetch.preconnect }),
+	);
 }
 
 function availableRecording() {
@@ -845,6 +854,210 @@ describe("review issues", () => {
 		);
 		expect(await approval.checkpointStatus()).toMatchObject({
 			matchesApproved: true,
+		});
+	});
+
+	test("verifies moves, retains approval and quarantines changes at the saved path", async () => {
+		const { editor, api, approval } = setUp();
+		const save = spyOn(storageService, "saveProjectItem").mockResolvedValue(
+			undefined,
+		);
+		const item = recording();
+		const { file } = item;
+		if (file instanceof File) throw new Error("Expected disk recording");
+		const originalHash = "sample-v1:original";
+		const original = { ...item, file: { ...file, contentHash: originalHash } };
+		editor.media.setProjectItems({ projectItems: [original] });
+		applyHighlight({ editor, api });
+		const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+		const tracks = editor.sequences.getActiveSequence().tracks;
+		const movedPath = "Moved/rec.mov";
+		let content = originalHash;
+		let version = "copy";
+		mockFootageFetch(async (...[input]) => {
+			if (!String(input).endsWith(movedPath))
+				return new Response(null, { status: 404 });
+			return new Response(null, {
+				headers: {
+					"content-type": "video/quicktime",
+					"content-length": "100",
+					[MEDIA_CONTENT_HEADER]: content,
+					[MEDIA_VERSION_HEADER]: version,
+				},
+			});
+		});
+		const first = editor.media.verifyRecordings();
+		expect(editor.media.verifyRecordings()).toBe(first);
+		expect(await first).toMatchObject([{ verification: "missing" }]);
+		expect(
+			await editor.media.relinkRecording({
+				request: { projectItemId: "rec", path: movedPath },
+			}),
+		).toMatchObject({
+			kind: "relinked",
+			verification: "match",
+			item: { id: "rec", path: movedPath },
+		});
+		expect(save).toHaveBeenCalledTimes(1);
+		expect(editor.sequences.getActiveSequence().tracks).toBe(tracks);
+		expect(editor.project.getActive().captions?.sources).toEqual(
+			checkpoint.captions?.sources,
+		);
+		expect(await approval.checkpointStatus()).toMatchObject({
+			matchesApproved: true,
+		});
+
+		content = "sample-v1:replacement";
+		version = "replacement";
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "changed", item: { missing: true } },
+		]);
+		expect(sinceApprovalSummary(reviewState({ editor }))).toContain(
+			"needs confirmation",
+		);
+		expect(await approval.checkpointStatus()).toMatchObject({
+			matchesApproved: false,
+		});
+		expect(
+			await editor.media.relinkRecording({
+				request: { projectItemId: "rec", path: movedPath },
+			}),
+		).toEqual({
+			kind: "confirmation-required",
+			verification: "changed",
+			version,
+		});
+		expect(save).toHaveBeenCalledTimes(1);
+		const review = reviewState({ editor }).issues.filter(
+			({ kind }) => kind === "replacement-passage",
+		);
+		expect(review).toMatchObject([
+			{ start: 0, end: 4, title: "Review clip and captions" },
+			{ start: 4, end: 8, title: "Review clip and captions" },
+			{ title: "Review graphic evidence" },
+		]);
+	});
+
+	test("accepts a changed recording explicitly and discards its stored analysis", async () => {
+		const { editor } = setUp();
+		const save = spyOn(storageService, "saveProjectItem").mockResolvedValue(
+			undefined,
+		);
+		const item = recording();
+		const { file } = item;
+		if (file instanceof File) throw new Error("Expected disk recording");
+		editor.media.setProjectItems({
+			projectItems: [
+				{
+					...item,
+					type: "audio",
+					file: { ...file, path: "rec.wav", contentHash: "sample-v1:before" },
+				},
+			],
+		});
+		const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+		const tracks = editor.sequences.getActiveSequence().tracks;
+		// One second of mono PCM, served the same way as a Footage range.
+		const wav = Buffer.alloc(44 + 16000);
+		wav.write("RIFF");
+		wav.writeUInt32LE(wav.length - 8, 4);
+		wav.write("WAVEfmt ", 8);
+		wav.writeUInt32LE(16, 16);
+		wav.writeUInt16LE(1, 20);
+		wav.writeUInt16LE(1, 22);
+		wav.writeUInt32LE(8000, 24);
+		wav.writeUInt32LE(16000, 28);
+		wav.writeUInt16LE(2, 32);
+		wav.writeUInt16LE(16, 34);
+		wav.write("data", 36);
+		wav.writeUInt32LE(wav.length - 44, 40);
+		mockFootageFetch(
+			async (...[, init]) =>
+				new Response(init?.method === "HEAD" ? null : wav, {
+					headers: {
+						"content-type": "audio/wav",
+						"content-length": String(wav.length),
+						[MEDIA_CONTENT_HEADER]: "sample-v1:after",
+						[MEDIA_VERSION_HEADER]: "v2",
+					},
+				}),
+		);
+		const request = { projectItemId: "rec", path: "rec.wav" };
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "changed" },
+		]);
+		expect(await editor.media.relinkRecording({ request })).toMatchObject({
+			kind: "confirmation-required",
+			version: "v2",
+		});
+		expect(
+			await editor.media.relinkRecording({
+				request: { ...request, replace: true, expectedVersion: "stale" },
+			}),
+		).toMatchObject({ kind: "confirmation-required", version: "v2" });
+		expect(save).not.toHaveBeenCalled();
+		expect(
+			await editor.media.relinkRecording({
+				request: { ...request, replace: true, expectedVersion: "v2" },
+			}),
+		).toMatchObject({
+			kind: "relinked",
+			verification: "changed",
+			item: { id: "rec", missing: false, duration: 1 },
+		});
+		expect(editor.sequences.getActiveSequence().tracks).toBe(tracks);
+		expect(editor.project.getActive().captions?.sources).toEqual([]);
+		expect(checkpoint.captions?.sources).toHaveLength(1);
+		expect(approvedIssues({ editor, checkpoint })).toContainEqual(
+			expect.objectContaining({ kind: "changed-footage" }),
+		);
+		expect(
+			reviewState({ editor }).issues.filter(
+				({ kind }) => kind === "replacement-passage",
+			),
+		).toHaveLength(2);
+	});
+
+	test("backfills a legacy recording in place and keeps its fingerprint if it goes missing", async () => {
+		const { editor } = setUp();
+		const original = recording();
+		const save = spyOn(storageService, "saveProjectItem").mockResolvedValue(
+			undefined,
+		);
+		editor.media.setProjectItems({ projectItems: [original] });
+		let gone = false;
+		mockFootageFetch(async (...[input]) =>
+			gone && String(input).endsWith("Day%201/rec.mov")
+				? new Response(null, { status: 404 })
+				: new Response(null, {
+						headers: {
+							"content-type": "video/quicktime",
+							"content-length": "100",
+							[MEDIA_CONTENT_HEADER]: "sample-v1:original",
+							[MEDIA_VERSION_HEADER]: "v1",
+						},
+					}),
+		);
+		expect(
+			await editor.media.relinkRecording({
+				request: { projectItemId: "rec", path: "moved.mov" },
+			}),
+		).toMatchObject({
+			kind: "confirmation-required",
+			verification: "unverified",
+		});
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "backfilled" },
+		]);
+		expect(save.mock.calls[0][0].projectItem.file).toMatchObject({
+			contentHash: "sample-v1:original",
+		});
+		gone = true;
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "missing" },
+		]);
+		expect(editor.media.getProjectItems()[0].file).toMatchObject({
+			contentHash: "sample-v1:original",
 		});
 	});
 

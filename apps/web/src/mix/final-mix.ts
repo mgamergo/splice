@@ -88,9 +88,12 @@ export function mixFingerprint({
 				item?.id ?? null,
 				file
 					? [
-							isDiskMedia(file) ? file.path : file.name,
-							file.size,
-							file.lastModified,
+							isDiskMedia(file)
+								? (item?.originalLocation?.path ?? file.path)
+								: file.name,
+							item?.originalLocation?.size ?? file.size,
+							item?.originalLocation?.lastModified ?? file.lastModified,
+							...(item?.replacementId ? [item.replacementId] : []),
 						]
 					: "sourceUrl" in clip
 						? clip.sourceUrl

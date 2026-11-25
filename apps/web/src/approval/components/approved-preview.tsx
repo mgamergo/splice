@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { AudioManager } from "@/core/managers/audio-manager";
 import { PlaybackManager } from "@/core/managers/playback-manager";
+import { unavailableApprovedRecording } from "@/media/sequence-media";
 import { useEditor } from "@/editor/use-editor";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { buildScene } from "@/services/renderer/scene-builder";
@@ -62,22 +63,29 @@ function Playback({
 	passage?: { start: number; end: number };
 }) {
 	const editor = useEditor();
+	const projectItems = useEditor((e) => e.media.getProjectItems());
+	const unavailable = unavailableApprovedRecording({
+		footage: checkpoint.footage,
+		projectItems,
+	});
 	const canvasMountRef = useRef<HTMLDivElement>(null);
 	const playbackRef = useRef<PlaybackManager | null>(null);
 	const [playing, setPlaying] = useState(false);
 	const [caption, setCaption] = useState("");
-	const [error, setError] = useState<string | null>(null);
+	const [playbackError, setError] = useState<string | null>(null);
+	const error = unavailable
+		? `${unavailable.name} is unavailable or differs from the approved recording.`
+		: playbackError;
 	const { canvasSize, fps } = checkpoint.shortFrame ?? editor.project.getActive().settings;
 	const { width, height } = canvasSize;
 
 	useEffect(() => {
 		const mount = canvasMountRef.current;
-		if (!mount) return;
+		if (!mount || unavailable) return;
 		const sequence = checkpointSequence(checkpoint);
 		const { tracks } = sequence;
 		const duration = calculateTotalDuration({ tracks });
 		if (duration <= 0) return;
-		const projectItems = editor.media.getProjectItems();
 		const timeline = { getTotalDuration: () => duration, subscribe };
 		const sequences = {
 			getActiveSequence: () => sequence,
@@ -179,7 +187,16 @@ function Playback({
 			}
 			playbackRef.current = null;
 		};
-	}, [editor, checkpoint, passage, fps, width, height]);
+	}, [
+		editor,
+		checkpoint,
+		passage,
+		fps,
+		width,
+		height,
+		projectItems,
+		unavailable,
+	]);
 
 	return (
 		<div className="flex flex-col gap-2">
