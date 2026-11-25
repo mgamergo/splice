@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Download, FolderOpen, RotateCcw } from "lucide-react";
+import { Check, Copy, FolderOpen, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
 	Section,
@@ -23,7 +23,9 @@ import {
 	type ExportQuality,
 } from "@/export";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
+import { ExportGate } from "@/approval/components/export-gate";
 import {
+	type DeliverySnapshot,
 	deliveryFingerprint,
 	type ListedExport,
 	listExports,
@@ -99,9 +101,9 @@ export function DeliveryPopover() {
 		};
 	}, [editor, revision, spellings]);
 
-	const handleExport = async () => {
+	const handleExport = async (snapshot: DeliverySnapshot) => {
 		setFolderMessage(null);
-		const exported = await editor.project.deliver({ quality });
+		const exported = await editor.project.deliver({ quality, snapshot });
 		if (exported.success) void refreshHistory();
 	};
 
@@ -136,6 +138,7 @@ export function DeliveryPopover() {
 
 			{failed ? (
 				<ExportFailure
+					onStartOver={() => editor.project.clearExportState()}
 					step={
 						result.failedStep
 							? DELIVERY_STEP_LABELS[result.failedStep]
@@ -176,12 +179,14 @@ export function DeliveryPopover() {
 							<p className="text-muted-foreground text-xs break-all">
 								{record.stem}.mp4 and {record.stem}.srt
 							</p>
-							{record.revision !== revision && (
-								<p className="text-muted-foreground text-xs">
-									The sequence changed after this export started. Export
-									again to include the newer edit.
-								</p>
-							)}
+							{(result?.newerEdit ||
+								(currentFingerprint && record.fingerprint !== currentFingerprint)) && (
+									<p className="text-muted-foreground text-xs">
+										A newer edit is available. This export holds the
+										approved revision; export again to deliver the newer
+										edit.
+									</p>
+								)}
 						</div>
 					)}
 					<Section collapsible defaultOpen={false} showTopBorder={false}>
@@ -212,10 +217,7 @@ export function DeliveryPopover() {
 								? `1080p30 MP4 without burned-in captions, and an SRT with ${cueCount} cues, written together to Exports.`
 								: "No captions yet, so the SRT will be empty. Load transcripts in Captions first."}
 						</p>
-						<Button onClick={handleExport} className="w-full gap-2">
-							<Download className="size-4" />
-							Export
-						</Button>
+						<ExportGate onExport={handleExport} />
 					</div>
 				</div>
 			)}
@@ -235,10 +237,12 @@ function ExportFailure({
 	step,
 	error,
 	onRetry,
+	onStartOver,
 }: {
 	step: string;
 	error: string;
 	onRetry: () => void;
+	onStartOver: () => void;
 }) {
 	const [copied, setCopied] = useState(false);
 	return (
@@ -276,6 +280,7 @@ function ExportFailure({
 					Retry
 				</Button>
 			</div>
+			<Button variant="text" size="sm" onClick={onStartOver}>Back to export options</Button>
 		</div>
 	);
 }
@@ -328,7 +333,7 @@ function ExportHistory({
 								<time dateTime={entry.exportedAt} className="font-medium">
 									{new Date(entry.exportedAt).toLocaleString()}
 								</time>
-								{entry.fingerprint === currentFingerprint && (
+								{!entry.checkpointId && entry.fingerprint === currentFingerprint && (
 									<Badge variant="secondary" className="px-1.5 py-0 text-[0.65rem]">
 										Current edit
 									</Badge>
@@ -344,7 +349,7 @@ function ExportHistory({
 							</span>
 							<span className="text-muted-foreground">
 								{entry.projectName} · {entry.sequenceName} · revision{" "}
-								{entry.fingerprint.slice(0, 8)}
+								{entry.revision}
 							</span>
 							<span className="text-muted-foreground break-all">
 								{entry.files.mp4}, {entry.files.srt}

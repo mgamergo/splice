@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
 	ArrowRightDoubleIcon,
+	CheckmarkBadge01Icon,
 	ClosedCaptionIcon,
 	Folder03Icon,
 	Happy01Icon,
@@ -23,6 +24,7 @@ export const TAB_KEYS = [
 	"effects",
 	"transitions",
 	"captions",
+	"review",
 	"adjustment",
 	"settings",
 ] as const;
@@ -64,6 +66,10 @@ export const tabs = {
 	captions: {
 		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
 		label: "Captions",
+	},
+	review: {
+		icon: createHugeiconsIcon({ icon: CheckmarkBadge01Icon }),
+		label: "Review",
 	},
 	adjustment: {
 		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),
