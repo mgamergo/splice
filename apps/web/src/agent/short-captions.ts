@@ -1,4 +1,5 @@
 import type { ShortStyle } from "@splice/bridge";
+import { captionWordKey } from "@/agent/short-caption-corrections";
 import type { CaptionStyle } from "@splice/bridge/ops";
 import {
 	coversAction,
@@ -58,11 +59,27 @@ export function carryCaptionEdits({
 				: overlap && overlap.startTime < clipEnd(clip)
 					? overlap
 					: undefined;
-		const sameWords =
+		const previousParts = exact?.captionLayout?.parts;
+		const currentParts = clip.captionLayout?.parts;
+		const sameText =
 			exact?.captionLayout &&
 			plainText(exact.captionLayout.text) ===
 				plainText(clip.captionLayout?.text);
-		if (!manual && !sameWords) return clip;
+		const sameWords =
+			previousParts && currentParts
+				? JSON.stringify(
+						previousParts.flatMap(({ words }) => words.map(captionWordKey)),
+					) ===
+					JSON.stringify(
+						currentParts.flatMap(({ words }) => words.map(captionWordKey)),
+					)
+				: sameText;
+		const legacyText =
+			sameText &&
+			!previousParts &&
+			exact &&
+			plainText(exact.params.content) !== plainText(exact.captionLayout?.text);
+		if (!manual && !(sameWords && exact?.hidden) && !legacyText) return clip;
 		return {
 			...clip,
 			...(manual &&
@@ -77,11 +94,7 @@ export function carryCaptionEdits({
 					[POSITION_X]: manual.params[POSITION_X],
 					[POSITION_Y]: manual.params[POSITION_Y],
 				}),
-				...(sameWords &&
-					plainText(exact.params.content) !==
-						plainText(exact.captionLayout?.text) && {
-						content: exact.params.content,
-					}),
+				...(legacyText && { content: exact.params.content }),
 			},
 		};
 	});

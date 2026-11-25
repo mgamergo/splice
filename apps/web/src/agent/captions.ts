@@ -1,4 +1,9 @@
 import { CAPTION_TRACK_NAME, carryCaptionEdits } from "@/agent/short-captions";
+import {
+	applyCaptionCorrections,
+	recordCaptionCorrections,
+	type SavedShortCaptions,
+} from "@/agent/short-caption-corrections";
 import type { CaptionStyle, CaptionsRequest } from "@splice/bridge/ops";
 import { getClipTimeAtSourceTime, getSourceSpanAtClipTime } from "@/retime";
 import {
@@ -51,6 +56,8 @@ export interface TimelineWord {
 	text: string;
 	/** The transcript word it shows: its recording and position there. */
 	ref: { projectItemId: string; index: number };
+	/** Original word times, before trimming or retiming the recording. */
+	sourceRange: { start: number; end: number };
 	/** The clip it is heard through. */
 	clipId: string;
 }
@@ -144,6 +151,7 @@ export function mapWordsToTimeline({
 						end,
 						text,
 						ref: { projectItemId, index },
+						sourceRange: { start: word.start, end: word.end },
 						clipId: clip.id,
 					});
 				}
@@ -161,6 +169,18 @@ export function buildCaptionCues({
 	words: Array<Pick<TimelineWord, "start" | "end" | "text">>;
 	style?: CaptionStyle;
 }): SubtitleCue[] {
+	return groupCaptionCues({ words, style }).map(({ cue }) => cue);
+}
+
+function groupCaptionCues<
+	Word extends Pick<TimelineWord, "start" | "end" | "text">,
+>({
+	words,
+	style = {},
+}: {
+	words: Word[];
+	style?: CaptionStyle;
+}): Array<{ cue: SubtitleCue; parts: Word[] }> {
 	const limit = style.wordsPerCaption ?? DEFAULT_WORDS_PER_CAPTION;
 	const groups: (typeof words)[] = [];
 	let current: typeof words = [];
@@ -180,7 +200,7 @@ export function buildCaptionCues({
 	if (current.length) groups.push(current);
 
 	const overrides = styleOverrides({ style });
-	const cues: SubtitleCue[] = [];
+	const cues: Array<{ cue: SubtitleCue; parts: Word[] }> = [];
 	let index = 0;
 	while (index < groups.length) {
 		// whisper.cpp can stack several words on one time. Captions starting
@@ -204,19 +224,21 @@ export function buildCaptionCues({
 		);
 		const share = (end - start) / count;
 		for (let offset = 0; offset < count; offset++) {
-			const text = run
+			const parts = run
 				.slice(
 					Math.floor((offset * run.length) / count),
 					Math.floor(((offset + 1) * run.length) / count),
 				)
-				.flat()
-				.map(({ text }) => text)
-				.join(" ");
+				.flat();
+			const text = parts.map(({ text }) => text).join(" ");
 			cues.push({
-				text: style.uppercase ? text.toUpperCase() : text,
-				startTime: start + offset * share,
-				duration: share,
-				style: overrides,
+				parts,
+				cue: {
+					text: style.uppercase ? text.toUpperCase() : text,
+					startTime: start + offset * share,
+					duration: share,
+					style: overrides,
+				},
 			});
 		}
 		index = runEnd;
@@ -225,21 +247,29 @@ export function buildCaptionCues({
 }
 
 /** A caption too short to read joins the one that follows it straight away. */
-function mergeShortCues({ cues }: { cues: SubtitleCue[] }): SubtitleCue[] {
-	const merged: SubtitleCue[] = [];
-	for (const cue of cues) {
+function mergeShortCues<Word>({
+	cues,
+}: {
+	cues: Array<{ cue: SubtitleCue; parts: Word[] }>;
+}): typeof cues {
+	const merged: typeof cues = [];
+	for (const entry of cues) {
+		const { cue } = entry;
 		const previous = merged.at(-1);
 		if (
 			previous &&
-			previous.duration < MIN_CAPTION_SECONDS - 1e-9 &&
-			cue.startTime - (previous.startTime + previous.duration) < 1e-6
+			previous.cue.duration < MIN_CAPTION_SECONDS - 1e-9 &&
+			cue.startTime - (previous.cue.startTime + previous.cue.duration) < 1e-6
 		) {
 			merged[merged.length - 1] = {
-				...previous,
-				text: `${previous.text} ${cue.text}`,
-				duration: cue.startTime + cue.duration - previous.startTime,
+				cue: {
+					...previous.cue,
+					text: `${previous.cue.text} ${cue.text}`,
+					duration: cue.startTime + cue.duration - previous.cue.startTime,
+				},
+				parts: [...previous.parts, ...entry.parts],
 			};
-		} else merged.push(cue);
+		} else merged.push(entry);
 	}
 	return merged;
 }
@@ -298,7 +328,7 @@ function captionClips({
 	wordsUntil = until,
 }: {
 	content: SequenceTracks;
-	captions: CaptionsRequest;
+	captions: SavedShortCaptions;
 	canvasSize: { width: number; height: number };
 	from?: number;
 	/** Captions end by here. */
@@ -306,18 +336,26 @@ function captionClips({
 	/** Only words starting before here are captioned. */
 	wordsUntil?: number;
 }): TextTrack["clips"] {
-	const words = mapWordsToTimeline({
-		tracks: content,
-		sources: captions.sources,
+	const words = applyCaptionCorrections({
+		parts: mapWordsToTimeline({
+			tracks: content,
+			sources: captions.sources,
+		}).map(({ start, end, text, ref, sourceRange }) => ({
+			start,
+			end,
+			text,
+			words: [{ ...ref, ...sourceRange }],
+		})),
+		corrections: captions.corrections,
 	}).filter(({ start }) => start >= from && start < wordsUntil);
 	const end = Math.min(
 		until,
 		mediaTimeToSeconds({ time: calculateTotalDuration({ tracks: content }) }),
 	);
 	const ctx = createMeasurementContext();
-	return buildCaptionCues({ words, style: captions.style })
-		.filter((cue) => cue.startTime < end)
-		.map((cue, index) => {
+	return groupCaptionCues({ words, style: captions.style })
+		.filter(({ cue }) => cue.startTime < end)
+		.map(({ cue, parts }, index) => {
 			const clip = buildSubtitleTextClip({
 				index,
 				caption: {
@@ -333,23 +371,27 @@ function captionClips({
 				captionLayout: {
 					y: Number(clip.params["transform.positionY"]),
 					text: String(clip.params.content),
+					parts: parts.map(({ text, words }) => ({
+						text: captions.style?.uppercase ? text.toUpperCase() : text,
+						words,
+					})),
 				},
 			};
 		});
 }
 
-/** Recover the generated positions of older caption clips without changing their edits. */
+/** Recover the generated layout and word references of older caption clips. */
 export function recoverCaptionLayouts({
 	tracks,
 	captions,
 	canvasSize,
 }: {
 	tracks: SequenceTracks;
-	captions?: CaptionsRequest;
+	captions?: SavedShortCaptions;
 	canvasSize: { width: number; height: number };
 }): SequenceTracks {
 	const track = tracks.overlay.find(isCaptionTrack);
-	if (!captions || !track?.clips.some((clip) => !clip.captionLayout))
+	if (!captions || !track?.clips.some((clip) => !clip.captionLayout?.parts))
 		return tracks;
 	const original = captionClips({
 		content: withoutCaptionTrack({ tracks }),
@@ -358,12 +400,19 @@ export function recoverCaptionLayouts({
 	});
 	const byStart = new Map(original.map((clip) => [clip.startTime, clip]));
 	const clips = track.clips.map((clip) => {
-		if (clip.captionLayout) return clip;
+		if (clip.captionLayout?.parts) return clip;
 		const generated = byStart.get(clip.startTime);
-		if (!generated || generated.duration !== clip.duration) return clip;
+		const layout = generated?.captionLayout;
+		if (
+			!layout ||
+			(clip.captionLayout
+				? clip.captionLayout.text !== layout.text
+				: generated.duration !== clip.duration)
+		)
+			return clip;
 		return {
 			...clip,
-			captionLayout: generated.captionLayout,
+			captionLayout: { ...layout, ...clip.captionLayout },
 		};
 	});
 	return clips.some((clip, index) => clip !== track.clips[index])
@@ -374,6 +423,22 @@ export function recoverCaptionLayouts({
 				),
 			}
 		: tracks;
+}
+
+/** Records direct timeline text edits before a caption rebuild replaces clips. */
+export function saveCaptionCorrections({
+	tracks,
+	captions,
+}: {
+	tracks: SequenceTracks;
+	captions?: SavedShortCaptions;
+}) {
+	if (!captions) return captions;
+	const corrections = recordCaptionCorrections({
+		clips: tracks.overlay.find(isCaptionTrack)?.clips ?? [],
+		corrections: captions.corrections,
+	});
+	return corrections.length ? { ...captions, corrections } : captions;
 }
 
 /** Recordings on the timeline whose words weren't given, so got no captions. */
@@ -400,7 +465,7 @@ export function withCaptionTrack({
 	canvasSize,
 }: {
 	tracks: SequenceTracks;
-	captions: CaptionsRequest;
+	captions: SavedShortCaptions;
 	canvasSize: { width: number; height: number };
 }): {
 	tracks: SequenceTracks;

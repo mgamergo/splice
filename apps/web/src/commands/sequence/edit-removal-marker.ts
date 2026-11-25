@@ -1,4 +1,9 @@
-import { rebuildCaptions, withoutCaptionTrack } from "@/agent/captions";
+import {
+	rebuildCaptions,
+	recoverCaptionLayouts,
+	saveCaptionCorrections,
+	withoutCaptionTrack,
+} from "@/agent/captions";
 import type { EditOp } from "@splice/bridge/ops";
 import {
 	Command,
@@ -144,20 +149,30 @@ export class EditRemovalMarkerCommand extends Command {
 			})
 			.sort((a, b) => a.time - b.time);
 
+		const canvasSize = editor.project.getActive().settings.canvasSize;
+		const previousTracks = recoverCaptionLayouts({
+			tracks: sequence.tracks,
+			captions: sequence.captions,
+			canvasSize,
+		});
+		const captions = saveCaptionCorrections({
+			tracks: previousTracks,
+			captions: sequence.captions,
+		});
 		const tracks = rebuildCaptions({
-			sequence,
+			sequence: { ...sequence, captions, tracks: previousTracks },
 			tracks:
 				edit.op === "restore_takes" && (!chosen || remaining.length === 0)
 					? clearBestTake({ tracks: update.tracks, markerId: marker.id })
 					: update.tracks,
-			canvasSize: editor.project.getActive().settings.canvasSize,
+			canvasSize,
 			window: update,
 		});
 		this.before = editor.sequences.getSequences();
 		this.after = updateSequenceInArray({
 			sequences: this.before,
 			sequenceId: sequence.id,
-			updates: { tracks, markers },
+			updates: { tracks, markers, captions },
 		});
 		const remainingIds = new Set(
 			[

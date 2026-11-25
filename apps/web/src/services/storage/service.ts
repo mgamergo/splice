@@ -1,4 +1,4 @@
-import { captionsRequestSchema } from "@splice/bridge/ops";
+import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
 import { parseProjectCaptions } from "@splice/bridge/delivery";
 import type { TProject, TProjectMetadata } from "@/project/types";
@@ -247,7 +247,7 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: sequence.tracks,
 				markers: normalizeMarkers({ raw: sequence.markers }),
-				captions: captionsRequestSchema.safeParse(sequence.captions).data,
+				captions: savedShortCaptionsSchema.safeParse(sequence.captions).data,
 				graphics: sequenceGraphicsSchema.safeParse(sequence.graphics).data,
 				createdAt: new Date(sequence.createdAt),
 				updatedAt: new Date(sequence.updatedAt),

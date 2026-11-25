@@ -3,8 +3,9 @@ import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
 import type { SequenceGraphics } from "@splice/bridge/graphics";
-import type { CaptionsRequest, RemovalMarkerData } from "@splice/bridge/ops";
+import type { RemovalMarkerData } from "@splice/bridge/ops";
 import type { MediaTime } from "@/wasm";
+import type { CaptionPart, SavedShortCaptions } from "@/agent/short-caption-corrections";
 
 export type ClipRef = {
 	trackId: string;
@@ -34,7 +35,7 @@ export interface TSequence {
 	tracks: SequenceTracks;
 	markers: Marker[];
 	/** Transcript words and style the Captions track is rebuilt from. */
-	captions?: CaptionsRequest;
+	captions?: SavedShortCaptions;
 	/** The graphics pass: each graphic's evidence, plan and the creator's changes. */
 	graphics?: SequenceGraphics;
 	createdAt: Date;
@@ -158,10 +159,29 @@ export interface ImageClip extends BaseTimelineClip {
 	masks?: Mask[];
 }
 
+type ShortHookSourceAnchor = {
+	projectItemId: string;
+	sourceTime: number;
+	preferredClipId: string;
+};
+
+export interface ShortHookAnchors {
+	evidence: ShortHookSourceAnchor;
+	demonstration: ShortHookSourceAnchor;
+	picture: string;
+	unavailable?: true;
+}
+
 export interface TextClip extends BaseTimelineClip {
 	type: "text";
+	shortHook?: ShortHookAnchors;
 	/** Last generated caption values, used to detect direct clip edits. */
-	captionLayout?: { y: number; text: string; manualPosition?: true };
+	captionLayout?: {
+		y: number;
+		text: string;
+		parts?: CaptionPart[];
+		manualPosition?: true;
+	};
 	hidden?: boolean;
 	effects?: Effect[];
 }

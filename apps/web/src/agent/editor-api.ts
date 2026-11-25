@@ -10,6 +10,7 @@ import { AddPreparedSequenceCommand } from "@/commands/sequence/add-prepared-seq
 import {
 	CaptionError,
 	recoverCaptionLayouts,
+	saveCaptionCorrections,
 	uncaptionedItemIds as uncaptionedRecordings,
 	withCaptionTrack,
 	withoutCaptionTrack,
@@ -379,14 +380,19 @@ export class EditorApi {
 		}
 		try {
 			const style = { ...sequence.captions?.style, ...parsed.data.style };
-			const captions = { sources, style };
 			const canvas = project.settings.canvasSize;
+			const previousTracks = recoverCaptionLayouts({
+				tracks: sequence.tracks,
+				captions: sequence.captions,
+				canvasSize: canvas,
+			});
+			const previous = saveCaptionCorrections({
+				tracks: previousTracks,
+				captions: sequence.captions,
+			});
+			const captions = { ...previous, sources, style };
 			const { tracks, captionCount, uncaptionedItemIds } = withCaptionTrack({
-				tracks: recoverCaptionLayouts({
-					tracks: sequence.tracks,
-					captions: sequence.captions,
-					canvasSize: canvas,
-				}),
+				tracks: previousTracks,
 				captions,
 				canvasSize: canvas,
 			});
