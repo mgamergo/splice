@@ -23,6 +23,18 @@ import {
 	setCaptionSources,
 } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
+import {
+	graphicsApplyRequestSchema,
+	graphicsListRequestSchema,
+	graphicsPlanRequestSchema,
+} from "@splice/bridge/graphics";
+import {
+	type GraphicPlanEntry,
+	planGraphicsPass,
+	summarizeGraphics,
+	syncGraphics,
+	withoutGraphicClips,
+} from "@/agent/graphics";
 import { projectFormat } from "@/project/format";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
@@ -476,6 +488,157 @@ export class EditorApi {
 		}
 	}
 
+	/** The active sequence, which graphics passes place on. */
+	private graphicsSequence({
+		sequenceId,
+	}: {
+		sequenceId?: string;
+	}): { error: EditorError } | { error?: never; sequence: TSequence } {
+		const sequence = this.editor.sequences.getActiveSequenceOrNull();
+		if (!this.editor.project.getActiveOrNull() || !sequence)
+			return {
+				error: {
+					ok: false,
+					code: "NO_PROJECT",
+					message: "No project is open",
+					revision: this.getRevision(),
+				},
+			};
+		if (sequenceId && sequenceId !== sequence.id)
+			return {
+				error: this.invalidOp(
+					`Graphics go on the active sequence (${sequence.id}). Ask the creator to open ${sequenceId}, or plan against the active one.`,
+				),
+			};
+		return { sequence };
+	}
+
+	/**
+	 * A graphics pass as it would apply now: the creator's latest changes are
+	 * read first, then the plan merges in and every graphic is placed.
+	 */
+	private passResult({
+		sequence,
+		graphics,
+		prune,
+	}: {
+		sequence: TSequence;
+		graphics: Parameters<typeof planGraphicsPass>[0]["planned"];
+		prune: boolean;
+	}) {
+		const projectItems = this.editor.media.getProjectItems();
+		const canvas = this.editor.project.getActive().settings.canvasSize;
+		const current = syncGraphics({ sequence, projectItems, canvas }) ?? sequence;
+		const plan = planGraphicsPass({
+			sequence: current,
+			planned: graphics,
+			prune,
+			projectItems,
+			canvas,
+		});
+		const placed = syncGraphics({
+			sequence: {
+				tracks: withoutGraphicClips({
+					tracks: current.tracks,
+					graphicIds: plan.removedIds,
+				}),
+				graphics: plan.graphics,
+			},
+			projectItems,
+			canvas,
+		});
+		if (!placed) throw new Error("Graphics placement needs a graphics state");
+		// Report where each graphic landed once placed, with any flags.
+		const summaries = new Map(
+			summarizeGraphics({ sequence: placed }).map((graphic) => [
+				graphic.id,
+				graphic,
+			]),
+		);
+		const entries = plan.entries.map((entry): GraphicPlanEntry & {
+			flags?: string[];
+		} => {
+			const summary = entry.id ? summaries.get(entry.id) : undefined;
+			if (!summary || entry.status.startsWith("skip")) return entry;
+			const { start: _start, end: _end, ...rest } = entry;
+			return {
+				...rest,
+				...(summary.start !== undefined && {
+					start: summary.start,
+					end: summary.end,
+				}),
+				...(summary.flags.length > 0 && {
+					flags: summary.flags.map(({ message }) => message),
+				}),
+			};
+		});
+		return { placed, entries, removed: plan.removedIds.length };
+	}
+
+	/** What a graphics pass would do, without changing the sequence. */
+	graphicsPlan(request: unknown) {
+		const parsed = graphicsPlanRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const found = this.graphicsSequence(parsed.data);
+		if (found.error) return found.error;
+		const { entries, removed } = this.passResult({
+			sequence: found.sequence,
+			graphics: parsed.data.graphics,
+			prune: parsed.data.prune,
+		});
+		return {
+			ok: true as const,
+			sequenceId: found.sequence.id,
+			revision: this.getRevision(),
+			graphics: entries,
+			...(removed > 0 && { wouldRemove: removed }),
+		};
+	}
+
+	/** Applies a graphics pass as one undo step. */
+	graphicsApply(request: unknown) {
+		const parsed = graphicsApplyRequestSchema.safeParse(request);
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const conflict = this.checkWrite(parsed.data);
+		if (conflict) return conflict;
+		const found = this.graphicsSequence(parsed.data);
+		if (found.error) return found.error;
+		const { graphics, prune, expectedRevision } = parsed.data;
+		const label = parsed.data.label ?? "Agent: graphics pass";
+		let report: Pick<ReturnType<EditorApi["passResult"]>, "entries" | "removed"> | undefined;
+		const result = this.run({
+			request: {
+				sequenceId: found.sequence.id,
+				expectedRevision,
+				label,
+				ops: [{ op: "graphics_pass", graphics, prune }],
+			},
+			onGraphicsPass: (pass) => { report = pass; },
+		});
+		if (!result.ok) return result;
+		return {
+			...result,
+			sequenceId: found.sequence.id,
+			graphics: report?.entries ?? [],
+			...(report?.removed && { removed: report.removed }),
+		};
+	}
+
+	/** Every graphic on the active sequence, with its evidence, changes and flags. */
+	graphicsList(request: unknown) {
+		const parsed = graphicsListRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const found = this.graphicsSequence(parsed.data);
+		if (found.error) return found.error;
+		return {
+			ok: true as const,
+			sequenceId: found.sequence.id,
+			revision: this.getRevision(),
+			graphics: summarizeGraphics({ sequence: found.sequence }),
+			deletedByCreator: found.sequence.graphics?.tombstones.length ?? 0,
+		};
+	}
+
 	takesList(request: unknown) {
 		const parsed = takesListRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
@@ -622,12 +785,18 @@ export class EditorApi {
 		}
 	}
 
-	private run({ request }: { request: ApplyRequest }): ApplyResult {
+	private run({
+		request,
+		onGraphicsPass,
+	}: {
+		request: ApplyRequest;
+		onGraphicsPass?: (result: Pick<ReturnType<EditorApi["passResult"]>, "entries" | "removed">) => void;
+	}): ApplyResult {
 		const summary: string[] = [];
 		const commands = request.ops.map(
 			(op, index): Command =>
 				new DeferredOpCommand(() => {
-					const { command, description } = this.buildCommand({ op });
+					const { command, description } = this.buildCommand({ op, onGraphicsPass });
 					summary[index] = description;
 					return command;
 				}),
@@ -661,7 +830,13 @@ export class EditorApi {
 		};
 	}
 
-	private buildCommand({ op }: { op: EditOp }): {
+	private buildCommand({
+		op,
+		onGraphicsPass,
+	}: {
+		op: EditOp;
+		onGraphicsPass?: (result: Pick<ReturnType<EditorApi["passResult"]>, "entries" | "removed">) => void;
+	}): {
 		command: Command;
 		description: string;
 	} {
@@ -671,6 +846,23 @@ export class EditorApi {
 			resolveTimeSpec({ spec, fps });
 
 		switch (op.op) {
+			case "graphics_pass": {
+				const { placed, entries, removed } = this.passResult({
+					sequence,
+					graphics: op.graphics,
+					prune: op.prune,
+				});
+				onGraphicsPass?.({ entries, removed });
+				return {
+					command: new UpdateSequenceCommand({
+						editor: this.editor,
+						sequenceId: sequence.id,
+						updates: placed,
+						label: "Graphics pass",
+					}),
+					description: `placed ${entries.filter(({ status }) => status === "create" || status === "update").length} graphic(s), removed ${removed}`,
+				};
+			}
 			case "ripple_delete": {
 				const ranges = op.ranges.map((range) => {
 					const start = time(range.start);

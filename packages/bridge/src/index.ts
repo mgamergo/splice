@@ -37,6 +37,9 @@ export const TAB_METHODS = [
 	"editor.addCaptions",
 	"editor.captionCues",
 	"editor.correctCaption",
+	"editor.graphicsPlan",
+	"editor.graphicsApply",
+	"editor.graphicsList",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 

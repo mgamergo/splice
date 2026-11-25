@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { graphicsPassOpSchema } from "./graphics";
+import { expectedRevision } from "./revision";
+
+export { expectedRevision };
 
 export const timeSpecSchema = z.union([
 	z.strictObject({ seconds: z.number().nonnegative() }),
@@ -144,6 +148,7 @@ const gainDbSchema = z
 	.describe("Clip volume in dB; 0 plays the source at its own level");
 
 export const editOpSchema = z.discriminatedUnion("op", [
+	graphicsPassOpSchema,
 	z.strictObject({
 		op: z.literal("ripple_delete"),
 		ranges: z.array(rangeSchema).min(1),
@@ -203,11 +208,7 @@ export const applyRequestSchema = z.strictObject({
 		.describe(
 			"The id of the sequence the ops were planned against, from the digest",
 		),
-	expectedRevision: z
-		.number()
-		.int()
-		.nonnegative()
-		.describe("The revision the ops were planned against, from the digest"),
+	expectedRevision,
 	label: z
 		.string()
 		.min(1)
@@ -215,8 +216,6 @@ export const applyRequestSchema = z.strictObject({
 		.describe('Short undo label shown to the creator, e.g. "Remove bad takes"'),
 	ops: z.array(editOpSchema).min(1),
 });
-
-export const expectedRevision = applyRequestSchema.shape.expectedRevision;
 
 export const rawSequenceRequestSchema = z.strictObject({
 	expectedRevision,

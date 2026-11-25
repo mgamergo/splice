@@ -1,5 +1,7 @@
 import { Command, type CommandResult } from "@/commands/base-command";
 import type { SequenceTracks } from "@/timeline";
+import { tombstoneGraphics } from "@/agent/graphics";
+import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import { EditorCore } from "@/core";
 import type { TimelineTrack } from "@/timeline";
 
@@ -23,6 +25,7 @@ function removeTrackClips<TTrack extends TimelineTrack>({
 
 export class DeleteClipsCommand extends Command {
 	private savedState: SequenceTracks | null = null;
+	private deleteGraphics?: UpdateSequenceCommand;
 	private readonly clips: { trackId: string; clipId: string }[];
 
 	constructor({
@@ -36,7 +39,9 @@ export class DeleteClipsCommand extends Command {
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
-		this.savedState = editor.sequences.getActiveSequence().tracks;
+		const sequence = editor.sequences.getActiveSequence();
+		this.savedState = sequence.tracks;
+		this.deleteGraphics = undefined;
 
 		const updatedTracks: SequenceTracks = {
 			overlay: this.savedState.overlay.map((track) =>
@@ -51,7 +56,23 @@ export class DeleteClipsCommand extends Command {
 			),
 		};
 
-		editor.timeline.updateTracks(updatedTracks);
+		const graphicIds = sequence.graphics
+			? sequence.tracks.overlay.flatMap((track) =>
+					track.clips.flatMap((clip) => this.clips.some(({ trackId, clipId }) => trackId === track.id && clipId === clip.id) && clip.graphicId ? [clip.graphicId] : []),
+				)
+			: [];
+		const graphics = tombstoneGraphics({ graphics: sequence.graphics, graphicIds });
+		if (graphics !== sequence.graphics) {
+			this.deleteGraphics = new UpdateSequenceCommand({
+				editor,
+				sequenceId: sequence.id,
+				updates: { tracks: updatedTracks, graphics },
+				label: "Delete graphics",
+			});
+			this.deleteGraphics.execute();
+		} else {
+			editor.timeline.updateTracks(updatedTracks);
+		}
 
 		return {
 			selection: {
@@ -64,7 +85,9 @@ export class DeleteClipsCommand extends Command {
 	}
 
 	undo(): void {
-		if (this.savedState) {
+		if (this.deleteGraphics) {
+			this.deleteGraphics.undo();
+		} else if (this.savedState) {
 			const editor = EditorCore.getInstance();
 			editor.timeline.updateTracks(this.savedState);
 		}

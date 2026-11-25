@@ -12,8 +12,10 @@ export class UpdateSequenceCommand extends Command {
 		private readonly options: {
 			editor: EditorCore;
 			sequenceId: string;
-			updates: Partial<Pick<TSequence, "tracks" | "captions">>;
+			updates: Partial<Pick<TSequence, "tracks" | "captions" | "graphics">>;
 			label: string;
+			/** Leave the selection alone, for updates that follow the creator's own edit. */
+			keepSelection?: boolean;
 		},
 	) {
 		super();
@@ -33,7 +35,7 @@ export class UpdateSequenceCommand extends Command {
 				updates,
 			}),
 		});
-		return createClipSelectionResult([]);
+		return this.options.keepSelection ? undefined : createClipSelectionResult([]);
 	}
 
 	undo(): void {

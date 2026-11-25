@@ -6,6 +6,7 @@ import {
 	type CreateEffectClip,
 	type CreateGraphicClip,
 	type CreateTimelineClip,
+	type CreateTextClip,
 	type CreateVideoClip,
 	type CreateImageClip,
 	type CreateStickerClip,
@@ -104,8 +105,8 @@ export function buildTextClip({
 }: {
 	raw: Partial<Omit<TextClip, "type" | "id">>;
 	startTime: MediaTime;
-}): CreateTimelineClip {
-	const t = raw as Partial<TextClip>;
+}): CreateTextClip {
+	const t = raw;
 
 	return {
 		type: "text",
