@@ -9,6 +9,7 @@ import {
 	HeadphonesIcon,
 	MagicWand05Icon,
 	TextIcon,
+	TextAlignLeftIcon,
 	Settings01Icon,
 	SlidersHorizontalIcon,
 	ColorsIcon,
@@ -23,6 +24,7 @@ export const TAB_KEYS = [
 	"effects",
 	"transitions",
 	"captions",
+	"transcript",
 	"adjustment",
 	"settings",
 ] as const;
@@ -64,6 +66,10 @@ export const tabs = {
 	captions: {
 		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
 		label: "Captions",
+	},
+	transcript: {
+		icon: createHugeiconsIcon({ icon: TextAlignLeftIcon }),
+		label: "Transcript",
 	},
 	adjustment: {
 		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),

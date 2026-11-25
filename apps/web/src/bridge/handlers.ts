@@ -96,6 +96,8 @@ export function createTabHandlers({
 			return api.mixLoudness({ request: params, beforeWrite: checkAgentAllowed });
 		},
 		"editor.mixStatus": (params) => api.mixStatus(params),
+		"editor.cutTranscript": (params) => api.cutTranscript(params),
+		"editor.transcriptSelection": (params) => api.transcriptSelection(params),
 		"editor.takesList": (params) => api.takesList(params),
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>
