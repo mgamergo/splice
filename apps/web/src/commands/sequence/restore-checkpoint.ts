@@ -1,6 +1,7 @@
 import type { ApprovedCheckpoint } from "@/approval/types";
 import { Command, createClipSelectionResult } from "@/commands/base-command";
 import type { EditorCore } from "@/core";
+import { requireSequenceMedia } from "@/media/sequence-media";
 import type { TProject } from "@/project/types";
 import type { TSequence } from "@/timeline";
 import { updateSequenceInArray } from "@/timeline/sequences";
@@ -33,6 +34,10 @@ export class RestoreCheckpointCommand extends Command {
 
 	execute() {
 		const { editor, checkpoint } = this.options;
+		requireSequenceMedia({
+			tracks: checkpoint.tracks,
+			projectItems: editor.media.getProjectItems(),
+		});
 		const project = editor.project.getActive();
 		const sequences = editor.sequences.getSequences();
 		this.before = {

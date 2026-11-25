@@ -95,21 +95,28 @@ export class ApprovalApi {
 			origin: "agent",
 			note: parsed.data.note,
 		});
-		const { checkpoint, saved } = await commitApproval({
-			editor: this.editor,
-			capture,
-		});
-		const { unresolved } = reviewState({ editor: this.editor });
-		return {
-			ok: true as const,
-			revision: this.api.getRevision(),
-			saved,
-			checkpoint: summarize(checkpoint),
-			...(!saved && {
-				hint: "This edit was already the approved checkpoint, so nothing new was saved.",
-			}),
-			unresolvedIssues: unresolved.length,
-		};
+		try {
+			const { checkpoint, saved } = await commitApproval({
+				editor: this.editor,
+				capture,
+			});
+			const { unresolved } = reviewState({ editor: this.editor });
+			return {
+				ok: true as const,
+				revision: this.api.getRevision(),
+				saved,
+				checkpoint: summarize(checkpoint),
+				...(!saved && {
+					hint: "This edit was already the approved checkpoint, so nothing new was saved.",
+				}),
+				unresolvedIssues: unresolved.length,
+			};
+		} catch (failure) {
+			return this.error({
+				code: "INVALID_OP",
+				message: failure instanceof Error ? failure.message : String(failure),
+			});
+		}
 	}
 
 	/** The current edit, its last approved checkpoint and how they differ. */
@@ -124,6 +131,12 @@ export class ApprovalApi {
 			editor: this.editor,
 		});
 		const currentFingerprint = await deliveryFingerprint(snapshot);
+		const legacyMatch =
+			checkpoint &&
+			checkpoint.fingerprint !== currentFingerprint &&
+			checkpoint.footage.every(({ contentHash }) => !contentHash) &&
+			checkpoint.fingerprint ===
+				(await deliveryFingerprint({ ...snapshot, legacyMedia: true }));
 		return {
 			ok: true as const,
 			projectId: project.metadata.id,
@@ -134,7 +147,7 @@ export class ApprovalApi {
 			checkpoint: checkpoint ? summarize(checkpoint) : null,
 			matchesApproved: checkpoint
 				? !!comparison?.identical &&
-					checkpoint.fingerprint === currentFingerprint &&
+					(checkpoint.fingerprint === currentFingerprint || legacyMatch) &&
 					!issues.some(
 						({ kind }) =>
 							kind === "changed-footage" || kind === "missing-footage",

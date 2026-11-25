@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import { EditorApi } from "@/agent/editor-api";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { useCaptionsStore } from "@/captions/store";
@@ -6,7 +14,7 @@ import type { EditorCore } from "@/core";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
 import type { ProjectItem } from "@/media/types";
 import { buildDefaultSequence } from "@/timeline/sequences";
-import { normalizeMarkers } from "@/services/storage/service";
+import { normalizeMarkers, storageService } from "@/services/storage/service";
 import { ApprovalApi } from "../api";
 import {
 	captureApproval,
@@ -18,11 +26,21 @@ import {
 	parseProjectApproval,
 } from "../checkpoint";
 import { restoreCheckpoint } from "../playback";
-import { approvedIssues, reviewState } from "../review";
+import {
+	approvedIssues,
+	hasUnavailableExportMedia,
+	reviewState,
+	sinceApprovalSummary,
+} from "../review";
 
 const initialCaptionsState = useCaptionsStore.getState();
 
+beforeEach(() => {
+	spyOn(storageService, "saveProject").mockResolvedValue(undefined);
+});
+
 afterEach(() => {
+	mock.restore();
 	useCaptionsStore.setState(initialCaptionsState, true);
 });
 
@@ -37,6 +55,7 @@ function recording({
 		id: "rec",
 		name: "rec",
 		type: "video",
+		url: "/splice/media/Day%201/rec.mov",
 		duration: 60,
 		hasAudio: true,
 		missing,
@@ -47,9 +66,17 @@ function recording({
 			name: "rec.mov",
 			type: "video/quicktime",
 			size,
-			lastModified: 1,
+			lastModified: 0,
 		},
 	};
+}
+
+function availableRecording() {
+	spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response(null, {
+			headers: { "content-length": "100" },
+		}),
+	);
 }
 
 function setUp(): {
@@ -121,6 +148,70 @@ function rippleDelete({
 }
 
 describe("finalizing the cut", () => {
+	test("a rejected project write fails finalize and a retry saves the checkpoint", async () => {
+		const { editor, approval, api } = setUp();
+		const save = spyOn(storageService, "saveProject")
+			.mockRejectedValueOnce(new Error("Quota exceeded"))
+			.mockRejectedValueOnce(new Error("Transaction aborted"))
+			.mockResolvedValue(undefined);
+
+		await expect(finalizeCut({ editor, origin: "editor" })).rejects.toThrow(
+			"Quota exceeded",
+		);
+		expect(editor.project.getActive().approval).toBeUndefined();
+		expect(
+			await approval.finalizeCut({ expectedRevision: api.getRevision() }),
+		).toMatchObject({
+			ok: false,
+			code: "INVALID_OP",
+			message: expect.stringContaining("Transaction aborted"),
+		});
+		expect(editor.project.getActive().approval).toBeUndefined();
+
+		const result = await finalizeCut({ editor, origin: "editor" });
+		expect(save.mock.lastCall?.[0].project.approval?.checkpoints).toEqual([
+			result.checkpoint,
+		]);
+		expect(editor.project.getActive().approval?.checkpoints).toEqual([
+			result.checkpoint,
+		]);
+	});
+
+	test("serializes finalize with autosave and publishes the checkpoint only after its write", async () => {
+		const { editor } = setUp();
+		const { promise: autosave, resolve: finishAutosave } =
+			Promise.withResolvers<void>();
+		const { promise: checkpointWrite, resolve: finishCheckpoint } =
+			Promise.withResolvers<void>();
+		const { promise: checkpointStarted, resolve: startCheckpoint } =
+			Promise.withResolvers<void>();
+		const save = spyOn(storageService, "saveProject")
+			.mockImplementationOnce(() => autosave)
+			.mockImplementationOnce(() => {
+				startCheckpoint();
+				return checkpointWrite;
+			})
+			.mockResolvedValue(undefined);
+
+		const saving = editor.project.saveCurrentProject();
+		const approving = finalizeCut({ editor, origin: "editor" });
+		await Promise.resolve();
+		expect(save).toHaveBeenCalledTimes(1);
+		finishAutosave();
+		await saving;
+		await checkpointStarted;
+		expect(editor.project.getActive().approval).toBeUndefined();
+
+		const laterAutosave = editor.project.saveCurrentProject();
+		finishCheckpoint();
+		const { checkpoint } = await approving;
+		await laterAutosave;
+		expect(save).toHaveBeenCalledTimes(3);
+		expect(save.mock.lastCall?.[0].project.approval?.checkpoints).toEqual([
+			checkpoint,
+		]);
+	});
+
 	test("saves the exact edit with the fingerprint an export would record", async () => {
 		const { editor, approval, api } = setUp();
 		const stale = await approval.finalizeCut({
@@ -181,6 +272,7 @@ describe("finalizing the cut", () => {
 
 	test("a captured export keeps its approval, media and SRT when editing continues", async () => {
 		const { editor, api } = setUp();
+		availableRecording();
 		const capture = captureApproval({ editor, origin: "export" });
 		const committing = commitApproval({ editor, capture });
 		rippleDelete({ editor, api });
@@ -240,11 +332,81 @@ describe("after approval", () => {
 			sequenceId: editor.sequences.getActiveSequence().id,
 		})!;
 		const revision = api.getRevision();
-		expect(restoreCheckpoint({ editor, checkpoint })).toBe(true);
+		availableRecording();
+		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
 		expect(api.getRevision()).toBe(revision + 1);
 		expect(reviewState({ editor }).comparison?.identical).toBe(true);
 		editor.command.undo();
 		expect(reviewState({ editor }).comparison?.identical).toBe(false);
+	});
+
+	test("keeps an imported title image for old checkpoints and validates restore after reopen", async () => {
+		const { editor } = setUp();
+		const project = editor.project.getActive();
+		editor.project.setActiveProject({
+			project: {
+				...project,
+				metadata: { ...project.metadata, thumbnail: "existing" },
+			},
+		});
+		spyOn(storageService, "saveProjectItem").mockResolvedValue(undefined);
+		const remove = spyOn(storageService, "deleteProjectItem").mockResolvedValue(
+			undefined,
+		);
+		const image = await editor.media.addProjectItem({
+			projectId: project.metadata.id,
+			projectItem: {
+				name: "Title",
+				type: "image",
+				file: new File(["title"], "title.png", { type: "image/png" }),
+				url: "blob:title",
+			},
+		});
+		if (!image) throw new Error("Expected title image");
+		const { tracks } = editor.sequences.getActiveSequence();
+		editor.timeline.updateTracks({
+			...tracks,
+			main: {
+				...tracks.main,
+				clips: [
+					{
+						...videoClip({ id: "title", start: 0, duration: 4 }),
+						type: "image",
+						mediaId: image.id,
+					},
+				],
+			},
+		});
+		const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+		editor.timeline.updateTracks({
+			...tracks,
+			main: { ...tracks.main, clips: [] },
+		});
+		await finalizeCut({ editor, origin: "editor" });
+		editor.media.removeProjectItem({
+			projectId: project.metadata.id,
+			id: image.id,
+		});
+		expect(remove).not.toHaveBeenCalled();
+
+		const saved = editor.project.getActive();
+		spyOn(storageService, "loadProject").mockResolvedValue({ project: saved });
+		const loadMedia = spyOn(
+			storageService,
+			"loadAllProjectItems",
+		).mockResolvedValue([image]);
+		await editor.project.loadProject({ id: project.metadata.id });
+		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
+		expect(
+			editor.sequences.getActiveSequence().tracks.main.clips[0],
+		).toMatchObject({ mediaId: image.id });
+
+		loadMedia.mockResolvedValue([]);
+		await editor.project.loadProject({ id: project.metadata.id });
+		await expect(restoreCheckpoint({ editor, checkpoint })).rejects.toThrow(
+			"is unavailable",
+		);
+		expect(editor.sequences.getActiveSequence().tracks.main.clips).toEqual([]);
 	});
 
 	test("restoring the approved cut restores the reusable spellings it used", async () => {
@@ -254,7 +416,8 @@ describe("after approval", () => {
 			spellings: [{ from: "settings", to: "preferences" }],
 		});
 		expect(takeDeliverySnapshot({ editor }).srt).toContain("preferences");
-		expect(restoreCheckpoint({ editor, checkpoint })).toBe(true);
+		availableRecording();
+		expect(await restoreCheckpoint({ editor, checkpoint })).toBe(true);
 		expect(takeDeliverySnapshot({ editor }).srt).toBe(checkpoint.srt);
 		editor.command.undo();
 		expect(takeDeliverySnapshot({ editor }).srt).toContain("preferences");
@@ -406,6 +569,146 @@ describe("review issues", () => {
 				sequence: editor.sequences.getActiveSequence(),
 			}),
 		).toContainEqual(expect.objectContaining({ kind: "missing-footage" }));
+	});
+
+	test("dismissed missing media still blocks both export choices", async () => {
+		const { editor } = setUp();
+		const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+		editor.media.setProjectItems({
+			projectItems: [recording({ missing: true })],
+		});
+		const issue = reviewState({ editor }).issues.find(
+			({ kind }) => kind === "missing-footage",
+		);
+		if (!issue) throw new Error("Expected missing footage");
+		dismissIssue({
+			editor,
+			issueId: issue.id,
+			evidence: issue.evidence,
+			by: "creator",
+		});
+		const current = reviewState({ editor });
+		const approved = approvedIssues({
+			editor,
+			checkpoint,
+			sequence: current.sequence,
+		});
+		expect(current.unresolved).toEqual([]);
+		expect(approved).toContainEqual(
+			expect.objectContaining({ dismissed: expect.anything() }),
+		);
+		expect(
+			hasUnavailableExportMedia({ issues: current.issues, approved: false }),
+		).toBe(true);
+		expect(
+			hasUnavailableExportMedia({ issues: approved, approved: true }),
+		).toBe(true);
+
+		const capture = captureApproval({ editor, origin: "export" });
+		await expect(commitApproval({ editor, capture })).rejects.toThrow(
+			"is unavailable",
+		);
+		expect(editor.project.getActive().approval?.checkpoints).toEqual([
+			checkpoint,
+		]);
+	});
+
+	test("summarizes a dismissed same-path replacement and accepts a byte-identical relink", async () => {
+		const { editor, approval } = setUp();
+		const item = recording();
+		const { file } = item;
+		if (file instanceof File) throw new Error("Expected disk recording");
+		const original = { ...item, file: { ...file, contentHash: "original" } };
+		editor.media.setProjectItems({ projectItems: [original] });
+		await finalizeCut({ editor, origin: "editor" });
+
+		editor.media.setProjectItems({
+			projectItems: [
+				{ ...item, file: { ...file, contentHash: "replacement" } },
+			],
+		});
+		const changed = reviewState({ editor }).issues.find(
+			({ kind }) => kind === "changed-footage",
+		);
+		if (!changed) throw new Error("Expected changed footage");
+		dismissIssue({
+			editor,
+			issueId: changed.id,
+			evidence: changed.evidence,
+			by: "creator",
+		});
+		const review = reviewState({ editor });
+		expect(review.comparison?.identical).toBe(true);
+		expect(review.unresolved).toEqual([]);
+		expect(sinceApprovalSummary(review)).toContain(
+			"differs from the approved recording",
+		);
+
+		editor.media.setProjectItems({
+			projectItems: [
+				{
+					...original,
+					file: { ...original.file, path: "Moved/rec.mov", lastModified: 2000 },
+				},
+			],
+		});
+		expect(sinceApprovalSummary(reviewState({ editor }))).toContain(
+			"No changes",
+		);
+		expect(await approval.checkpointStatus()).toMatchObject({
+			matchesApproved: true,
+		});
+	});
+
+	test("caption coverage dismissals ignore framing but detect source ranges and replacement bytes", () => {
+		const { editor } = setUp();
+		const item = recording();
+		const { file } = item;
+		if (file instanceof File) throw new Error("Expected disk recording");
+		editor.media.setProjectItems({
+			projectItems: [{ ...item, file: { ...file, contentHash: "original" } }],
+		});
+		editor.project.setActiveProject({
+			project: { ...editor.project.getActive(), captions: undefined },
+		});
+		const issue = reviewState({ editor }).issues.find(
+			({ kind }) => kind === "no-captions",
+		);
+		if (!issue) throw new Error("Expected missing captions");
+		dismissIssue({
+			editor,
+			issueId: issue.id,
+			evidence: issue.evidence,
+			by: "creator",
+		});
+		const { tracks } = editor.sequences.getActiveSequence();
+		const frame = ({ offset }: { offset: number }) =>
+			editor.timeline.updateTracks({
+				...tracks,
+				main: {
+					...tracks.main,
+					clips: tracks.main.clips.map((clip) => ({
+						...clip,
+						params: { ...clip.params, opacity: 0.75 },
+						trimStart: s(offset + (clip.id === "b" ? 10 : 0)),
+					})),
+				},
+			});
+		frame({ offset: 0 });
+		expect(reviewState({ editor }).unresolved).toEqual([]);
+		frame({ offset: 1 });
+		expect(reviewState({ editor }).unresolved).toContainEqual(
+			expect.objectContaining({ kind: "no-captions" }),
+		);
+		frame({ offset: 0 });
+		editor.media.setProjectItems({
+			projectItems: [
+				{ ...item, file: { ...file, contentHash: "replacement" } },
+			],
+		});
+		expect(reviewState({ editor }).unresolved).toContainEqual(
+			expect.objectContaining({ kind: "no-captions" }),
+		);
 	});
 
 	test("adding another audible clip invalidates a caption-coverage dismissal", () => {

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { playCue } from "@/captions/project-captions";
 import { RestoreCheckpointCommand } from "@/commands/sequence/restore-checkpoint";
+import { verifySequenceMedia } from "@/media/sequence-media";
 import type { EditorCore } from "@/core";
 import type { ApprovedCheckpoint } from "./types";
 
@@ -60,13 +61,31 @@ export function watchApprovedCut({
 }
 
 /** Returns the checkpoint's sequence to the approved edit, as one undoable edit. */
-export function restoreCheckpoint({
+export async function restoreCheckpoint({
 	editor,
 	checkpoint,
 }: {
 	editor: EditorCore;
 	checkpoint: ApprovedCheckpoint;
-}): boolean {
+}): Promise<boolean> {
+	if (
+		!editor.sequences
+			.getSequences()
+			.some(({ id }) => id === checkpoint.sequenceId)
+	)
+		return false;
+	const generation = editor.media.getGeneration();
+	const projectItems = editor.media.getProjectItems();
+	await verifySequenceMedia({
+		tracks: checkpoint.tracks,
+		projectItems,
+		checkIdentity: false,
+	});
+	if (
+		generation !== editor.media.getGeneration() ||
+		projectItems !== editor.media.getProjectItems()
+	)
+		throw new Error("The project changed. Open Review and try again.");
 	if (
 		!editor.sequences
 			.getSequences()

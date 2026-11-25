@@ -15,6 +15,11 @@ import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { TCanvasSize } from "@/project/types";
+import {
+	pinRenderMedia,
+	recordingIdentity,
+	referencedMedia,
+} from "@/media/sequence-media";
 import { generateUUID } from "@/utils/id";
 import type { DeliveryStep } from "./index";
 
@@ -60,7 +65,9 @@ export function captureDelivery({
 		deliveryId: generateUUID(),
 		scene: {
 			tracks: sequence.tracks,
-			projectItems: [...editor.media.getProjectItems()],
+			projectItems: pinRenderMedia({
+				projectItems: editor.media.getProjectItems(),
+			}),
 			canvasSize: DELIVERY_FORMAT.canvasSize,
 			background: project.settings.background,
 		},
@@ -132,22 +139,25 @@ export async function prepareDelivery({
 }
 
 /** The files the tracks play, by what identifies them on disk. */
-function usedMedia({ tracks, projectItems }: ExportScene) {
-	const used = new Set(
-		[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
-			track.clips.flatMap((clip) => ("mediaId" in clip ? [clip.mediaId] : [])),
-		),
-	);
+function usedMedia({
+	scene: { tracks, projectItems },
+	legacyMedia,
+}: {
+	scene: ExportScene;
+	legacyMedia: boolean;
+}) {
+	const used = referencedMedia({ tracks });
 	return projectItems
 		.filter(({ id }) => used.has(id))
-		.map(({ id, type, file }) => ({
-			id,
-			type,
-			name: file.name,
-			size: file.size,
-			lastModified: file.lastModified,
-			...("kind" in file && { path: file.path }),
-		}))
+		.map(({ id, type, file }) => {
+			const identity = recordingIdentity({ file, legacy: legacyMedia });
+			return {
+				id,
+				type,
+				...(!("contentHash" in identity) && { name: file.name }),
+				...identity,
+			};
+		})
 		.sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -160,7 +170,10 @@ export async function deliveryFingerprint({
 	scene,
 	fps,
 	srt,
-}: Pick<DeliverySnapshot, "scene" | "fps" | "srt">): Promise<string> {
+	legacyMedia = false,
+}: Pick<DeliverySnapshot, "scene" | "fps" | "srt"> & {
+	legacyMedia?: boolean;
+}): Promise<string> {
 	/* eslint-disable opencut/prefer-object-params -- JSON.stringify calls replacers with (key, value). */
 	const withoutBuffers = (key: string, value: unknown) =>
 		key === "buffer" ? undefined : value;
@@ -169,7 +182,7 @@ export async function deliveryFingerprint({
 		canvasSize: scene.canvasSize,
 		background: scene.background,
 		fps,
-		media: usedMedia(scene),
+		media: usedMedia({ scene, legacyMedia }),
 	};
 	const text = `${JSON.stringify(scene.tracks, withoutBuffers)}\n${JSON.stringify(render)}\n${srt}`;
 	const digest = await crypto.subtle.digest(

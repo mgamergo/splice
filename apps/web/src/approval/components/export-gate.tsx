@@ -16,7 +16,11 @@ import {
 } from "../checkpoint";
 import { useApprovalSpellings, useReviewState } from "../hooks";
 import { watchApprovedCut } from "../playback";
-import { approvedIssues, reviewState } from "../review";
+import {
+	approvedIssues,
+	hasUnavailableExportMedia,
+	reviewState,
+} from "../review";
 import { IssueRow } from "./issue-row";
 import { formatApproved } from "./review-panel";
 
@@ -43,11 +47,10 @@ export function ExportGate({
 		? approvedIssues({ editor, checkpoint: approved, sequence })
 		: review.issues;
 	const blocking = issues.filter(({ dismissed }) => !dismissed);
-	const unavailable =
-		!!approved &&
-		issues.some(
-			({ kind }) => kind === "changed-footage" || kind === "missing-footage",
-		);
+	const unavailable = hasUnavailableExportMedia({
+		issues,
+		approved: !!approved,
+	});
 
 	const handleExport = async () => {
 		setError(null);
@@ -65,12 +68,8 @@ export function ExportGate({
 					sequence,
 				});
 				if (
-					issues.some(
-						({ dismissed, kind }) =>
-							!dismissed ||
-							kind === "changed-footage" ||
-							kind === "missing-footage",
-					)
+					issues.some(({ dismissed }) => !dismissed) ||
+					hasUnavailableExportMedia({ issues, approved: true })
 				)
 					throw new Error(
 						"Resolve the issues on the approved cut before exporting.",
@@ -81,7 +80,12 @@ export function ExportGate({
 				return;
 			}
 			const cues = sequenceCaptionCues({ editor, sequence });
-			if (reviewState({ editor, sequence, cues }).unresolved.length)
+			const current = reviewState({ editor, sequence, cues });
+			if (
+				hasUnavailableExportMedia({ issues: current.issues, approved: false })
+			)
+				throw new Error("Restore the missing recordings before exporting.");
+			if (current.unresolved.length)
 				throw new Error("Review the unresolved issues before exporting.");
 			const capture = captureApproval({ editor, origin: "export", cues });
 			const { snapshot } = await commitApproval({ editor, capture });
@@ -150,7 +154,9 @@ export function ExportGate({
 			)}
 			{unavailable && (
 				<p className="text-destructive text-xs" role="status">
-					Restore the approved cut’s recordings to export it.
+					{approved
+						? "Restore the approved cut’s recordings to export it."
+						: "Restore the missing recordings before exporting."}
 				</p>
 			)}
 			{spellings.error && !approved && (

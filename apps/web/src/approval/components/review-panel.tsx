@@ -115,11 +115,19 @@ export function ReviewPanel() {
 								size="sm"
 								variant="outline"
 								className="h-7"
-								onClick={() => {
-									if (restoreCheckpoint({ editor, checkpoint }))
-										toast.success(
-											"Returned to the approved cut. Undo to get the newer edit back.",
+								onClick={async () => {
+									try {
+										if (await restoreCheckpoint({ editor, checkpoint }))
+											toast.success(
+												"Returned to the approved cut. Undo to get the newer edit back.",
+											);
+									} catch (failure) {
+										toast.error(
+											failure instanceof Error
+												? failure.message
+												: String(failure),
 										);
+									}
 								}}
 							>
 								<RotateCcw />

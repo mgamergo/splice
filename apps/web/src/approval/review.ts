@@ -7,7 +7,11 @@ import type { EditorCore } from "@/core";
 import { projectFormat } from "@/project/format";
 import type { TSequence } from "@/timeline/types";
 import { approvedEdit, latestCheckpoint, projectApproval } from "./checkpoint";
-import { type CheckpointComparison, compareEdits } from "./compare";
+import {
+	type CheckpointComparison,
+	compareEdits,
+	describeChanges,
+} from "./compare";
 import { applyDismissals, collectIssues } from "./issues";
 import type { ApprovedCheckpoint } from "./types";
 
@@ -19,6 +23,40 @@ export interface ReviewState {
 	/** Every issue, dismissed ones marked. */
 	issues: ReviewIssue[];
 	unresolved: ReviewIssue[];
+}
+
+export function hasUnavailableExportMedia({
+	issues,
+	approved,
+}: {
+	issues: ReviewIssue[];
+	approved: boolean;
+}): boolean {
+	return issues.some(
+		({ kind }) =>
+			kind === "missing-footage" || (approved && kind === "changed-footage"),
+	);
+}
+
+/** The reopen summary includes media differences even when their issues were dismissed. */
+export function sinceApprovalSummary({
+	comparison,
+	issues,
+}: Pick<ReviewState, "comparison" | "issues">): string | null {
+	if (!comparison) return null;
+	const media = issues.filter(
+		({ kind }) => kind === "missing-footage" || kind === "changed-footage",
+	);
+	if (comparison.identical && media.length === 0)
+		return "No changes: the current edit is the approved cut.";
+	return [
+		...(!comparison.identical
+			? [
+					`${comparison.passages.length} passage(s) changed: ${describeChanges(comparison.changes)}.`,
+				]
+			: []),
+		...media.map(({ detail }) => detail),
+	].join(" ");
 }
 
 export function reviewState({

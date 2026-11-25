@@ -17,6 +17,12 @@ export interface DiskMedia {
 	type: string;
 	size: number;
 	lastModified: number;
+	/** Changes when the file at this path is replaced or edited. */
+	version?: string;
+	/** A render URL is locked to this version, including its denoised audio. */
+	expectedVersion?: string;
+	/** SHA-256 of the bytes, preserved when the file is relinked. */
+	contentHash?: string;
 }
 
 /** A project item's bytes: uploaded into browser storage, or on disk. */

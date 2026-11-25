@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
+import { MEDIA_VERSION_HEADER } from "@splice/bridge";
 import { type ExportRecord, exportRecordSchema } from "@splice/bridge/delivery";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { setCaptionSources } from "@/captions/project-captions";
@@ -7,6 +16,7 @@ import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { ExportOptions, ExportResult } from "@/export";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
+import { recording } from "@/media/__tests__/stub-fetch";
 import { buildDefaultSequence } from "@/timeline/sequences";
 
 const initialCaptionsState = useCaptionsStore.getState();
@@ -75,7 +85,23 @@ function fakeSplice() {
 function horizontalEditor(): EditorCore {
 	const { main } = buildDefaultSequence({ name: "S", isMain: true }).tracks;
 	const editor = setUpEditor({
-		tracks: { main: { ...main, clips: [videoClip({ id: "a", start: 0, duration: 10 })] } },
+		tracks: {
+			main: {
+				...main,
+				clips: [videoClip({ id: "a", start: 0, duration: 10 })],
+			},
+		},
+	});
+	editor.media.setProjectItems({
+		projectItems: [
+			{
+				id: "rec",
+				name: "Recording",
+				type: "video",
+				url: "blob:recording",
+				file: new File(["video"], "video.mp4", { type: "video/mp4" }),
+			},
+		],
 	});
 	const project = editor.project.getActive();
 	editor.project.setActiveProject({
@@ -247,6 +273,66 @@ describe("Horizontal delivery", () => {
 			expect(scene?.tracks.main.clips.map(({ id }) => id)).toEqual(["a"]);
 		}
 		expect(renders[1].scene).toBe(renders[0].scene);
+	});
+
+	test("refuses a render retry when the recording at the same path was replaced", async () => {
+		const editor = horizontalEditor();
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const file = {
+			...recording,
+			version: "original",
+			contentHash: "original-hash",
+		};
+		editor.media.setProjectItems({
+			projectItems: [
+				{ id: "rec", name: "Recording", type: "video", url: file.url, file },
+			],
+		});
+		let serverVersion = "original";
+		spyOn(globalThis, "fetch").mockImplementation(
+			Object.assign(
+				(...[input, init]: Parameters<typeof fetch>) =>
+					init?.method === "HEAD"
+						? Promise.resolve(
+								new Response(null, {
+									headers: {
+										"content-length": String(file.size),
+										[MEDIA_VERSION_HEADER]: serverVersion,
+									},
+								}),
+							)
+						: splice.fetch(input, init),
+				{ preconnect: fetch.preconnect },
+			),
+		);
+		const render = spyOn(editor.renderer, "exportProject").mockResolvedValue({
+			success: false,
+			error: "GPU lost",
+		});
+		const captured = takeDeliverySnapshot({ editor });
+		const snapshot = {
+			...captured,
+			source: { ...captured.source, checkpointId: "approved" },
+		};
+		expect(
+			await editor.project.deliver({ quality: "high", snapshot }),
+		).toMatchObject({
+			success: false,
+			failedStep: "render",
+			error: "GPU lost",
+		});
+		expect(render.mock.calls[0][0].scene?.projectItems[0].url).toEndWith(
+			"?version=original",
+		);
+
+		serverVersion = "replacement";
+		expect(await editor.project.retryDelivery()).toMatchObject({
+			success: false,
+			failedStep: "render",
+			error: expect.stringContaining("changed on disk"),
+		});
+		expect(render).toHaveBeenCalledTimes(1);
+		expect(splice.calls).toEqual([]);
 	});
 
 	test("Retry after a lost publish answer returns the published pair instead of a second one", async () => {

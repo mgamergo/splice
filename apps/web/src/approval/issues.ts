@@ -4,6 +4,9 @@
  */
 import type { Dismissal, ReviewIssue } from "@splice/bridge/approval";
 import type { ProjectCaptions } from "@splice/bridge/delivery";
+import { getSourceSpanAtClipTime } from "@/retime";
+import { isDiskMedia } from "@/media/media-data";
+import { recordingIdentity } from "@/media/sequence-media";
 import { audibleClips } from "@/agent/loudness";
 import { MAX_LINE_CHARS, wrapCueText } from "@/captions/cues";
 import type { ProjectItem } from "@/media/types";
@@ -119,7 +122,7 @@ function footageIssues({
 		const item = items.get(id);
 		const approved = approvedItems.get(id);
 		const name = item?.name ?? approved?.name ?? clips[0].name;
-		const path = item && "kind" in item.file ? item.file.path : undefined;
+		const path = item && isDiskMedia(item.file) ? item.file.path : undefined;
 		const ranges = clips.map(
 			({ id, startTime, trimStart, trimEnd, duration }) => ({
 				id,
@@ -130,7 +133,7 @@ function footageIssues({
 			}),
 		);
 		const span = clipSpan(clips[0]);
-		if (!item || item.missing) {
+		if (!item || item.missing || (item.type !== "audio" && !item.url)) {
 			issues.push({
 				id: `missing-footage:${id}`,
 				kind: "missing-footage",
@@ -141,28 +144,23 @@ function footageIssues({
 			});
 			continue;
 		}
+		const current = recordingIdentity({ file: item.file });
 		if (
 			approved &&
 			(approved.missing ||
-				approved.size !== item.file.size ||
-				approved.lastModified !== item.file.lastModified ||
-				approved.path !== path)
+				(approved.contentHash
+					? approved.contentHash !== current.contentHash
+					: approved.size !== item.file.size ||
+						approved.lastModified !== item.file.lastModified ||
+						approved.path !== path))
 		) {
 			issues.push({
 				id: `changed-footage:${id}`,
 				kind: "changed-footage",
 				title: "Recording changed on disk",
-				detail: `${name} has a different path, size, or modification time. Review the affected passage.`,
+				detail: `${name} differs from the approved recording. Review the affected passage.`,
 				...span,
-				evidence: hashText(
-					stableStringify([
-						approved,
-						path,
-						item.file.size,
-						item.file.lastModified,
-						ranges,
-					]),
-				),
+				evidence: hashText(stableStringify([approved, current, ranges])),
 			});
 		}
 	}
@@ -182,16 +180,47 @@ function captionIssues({
 		Pick<CaptionCue, "id" | "start" | "end" | "text" | "correctedBy">
 	>;
 }): ReviewIssue[] {
-	const heard = new Map<string, TimelineClip[]>();
+	const items = new Map(projectItems.map((item) => [item.id, item]));
+	const heard = new Map<
+		string,
+		{
+			name: string;
+			span: ReturnType<typeof clipSpan>;
+			identity: ReturnType<typeof recordingIdentity>;
+			ranges: Array<[number, number]>;
+		}
+	>();
 	for (const { clip } of audibleClips({
 		tracks: sequence.tracks,
 		projectItems,
 	})) {
-		if (projectItems.find(({ id }) => id === clip.mediaId)?.missing) continue;
-		const clips = heard.get(clip.mediaId) ?? [];
-		clips.push(clip);
-		heard.set(clip.mediaId, clips);
+		const item = items.get(clip.mediaId);
+		if (!item || item.missing) continue;
+		const from = clip.trimStart;
+		const to =
+			from +
+			getSourceSpanAtClipTime({
+				clipTime: clip.duration,
+				retime: clip.retime,
+			});
+		const entry = heard.get(clip.mediaId) ?? {
+			name: item.name,
+			span: clipSpan(clip),
+			identity: recordingIdentity({ file: item.file }),
+			ranges: [],
+		};
+		entry.ranges.push([from, to]);
+		heard.set(clip.mediaId, entry);
 	}
+	const coverage = [...heard]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([id, { identity, ranges }]) => ({
+			id,
+			identity,
+			ranges: ranges.sort(
+				([startA, endA], [startB, endB]) => startA - startB || endA - endB,
+			),
+		}));
 	const issues: ReviewIssue[] = [];
 	const sources = new Set(
 		captions?.sources
@@ -207,21 +236,20 @@ function captionIssues({
 				"The SRT will be empty. Load the transcripts in Captions, or dismiss this to export without captions.",
 			start: 0,
 			end: 0,
-			evidence: hashText(stableStringify([...heard])),
+			evidence: hashText(stableStringify(coverage)),
 		});
 	else
-		for (const [projectItemId, clips] of heard) {
-			if (sources.has(projectItemId)) continue;
-			const name =
-				projectItems.find(({ id }) => id === projectItemId)?.name ??
-				projectItemId;
+		for (const entry of coverage) {
+			if (sources.has(entry.id)) continue;
+			const detail = heard.get(entry.id);
+			if (!detail) continue;
 			issues.push({
-				id: `uncaptioned:${projectItemId}`,
+				id: `uncaptioned:${entry.id}`,
 				kind: "uncaptioned-recording",
 				title: "Recording without captions",
-				detail: `${name} plays in the cut but has no caption words, so its narration is missing from the SRT.`,
-				...clipSpan(clips[0]),
-				evidence: hashText(stableStringify(clips)),
+				detail: `${detail.name} plays in the cut but has no caption words, so its narration is missing from the SRT.`,
+				...detail.span,
+				evidence: hashText(stableStringify(entry)),
 			});
 		}
 	for (const cue of cues) {

@@ -19,7 +19,7 @@ import { openExportsFolder } from "@/export/deliver";
 import { projectFormat } from "@/project/format";
 import { mediaTimeToSeconds, ZERO_MEDIA_TIME } from "@/wasm";
 import { projectApproval } from "../checkpoint";
-import { describeChanges } from "../compare";
+import { hasUnavailableExportMedia, sinceApprovalSummary } from "../review";
 import {
 	useApprovalSpellings,
 	useProjectExports,
@@ -81,6 +81,11 @@ export function ReopenSummary() {
 
 	if (!open || !review || !project) return null;
 	const { sequence, comparison, unresolved } = review;
+	const summary = sinceApprovalSummary(review);
+	const changed =
+		comparison &&
+		(!comparison.identical ||
+			hasUnavailableExportMedia({ issues: review.issues, approved: true }));
 	const checkpoint = review.checkpoint ?? checkpoints.at(-1);
 	const latest = exports?.[0];
 	const exportedCheckpoint = checkpoints.find(
@@ -106,11 +111,9 @@ export function ReopenSummary() {
 							? `${checkpoint.sequenceName} · ${formatApproved(checkpoint)} · Revision ${checkpoint.revision}${checkpoint.note ? ` · “${checkpoint.note}”` : ""}`
 							: "Not finalized yet"}
 					</Row>
-					{checkpoint && comparison && (
+					{checkpoint && summary && (
 						<Row label="Since approval">
-							{comparison.identical
-								? "No changes: the current edit is the approved cut."
-								: `${comparison.passages.length} passage(s) changed: ${describeChanges(comparison.changes)}.`}
+							{summary}
 							{unresolved.length > 0 &&
 								` ${unresolved.length} issue(s) to review before export.`}
 						</Row>
@@ -141,7 +144,7 @@ export function ReopenSummary() {
 						<Play />
 						Play current edit
 					</Button>
-					{checkpoint && comparison && !comparison.identical && (
+					{checkpoint && changed && (
 						<Button
 							variant="outline"
 							onClick={() => {

@@ -1,5 +1,7 @@
 import { PROJECT_FORMATS, type ProjectFormat } from "@splice/bridge";
 import type { EditorCore } from "@/core";
+import type { ApprovedCheckpoint } from "@/approval/types";
+import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
 import type {
 	TProject,
 	TProjectMetadata,
@@ -58,6 +60,11 @@ export class ProjectManager {
 	private listeners = new Set<() => void>();
 	private exportState: ExportState = IDLE_EXPORT_STATE;
 	private exportJobs = new ExportJobs();
+	private projectWrites = Promise.resolve();
+	private pendingCheckpoint: {
+		projectId: string;
+		checkpoint: ApprovedCheckpoint;
+	} | null = null;
 	/**
 	 * A Horizontal export that can be retried with its approved edit and any
 	 * finished snapshot and render.
@@ -145,6 +152,7 @@ export class ProjectManager {
 		this.editor.sequences.clearSequences();
 
 		try {
+			await this.projectWrites;
 			const result = await storageService.loadProject({ id });
 			if (!result) {
 				throw new Error(`Project with id ${id} not found`);
@@ -204,29 +212,163 @@ export class ProjectManager {
 		}
 	}
 
+	private queueProjectWrite<T>({
+		write,
+	}: {
+		write: () => Promise<T>;
+	}): Promise<T> {
+		const result = this.projectWrites.then(write);
+		this.projectWrites = result.then(
+			() => {},
+			() => {},
+		);
+		return result;
+	}
+
+	private projectForStorage({ project }: { project: TProject }): TProject {
+		const sequences = this.editor.sequences.getSequences();
+		return {
+			...project,
+			sequences,
+			metadata: {
+				...project.metadata,
+				duration: getProjectDurationFromSequences({ sequences }),
+				updatedAt: new Date(),
+			},
+		};
+	}
+
 	async saveCurrentProject(): Promise<void> {
-		const project = this.active;
-		if (!project) return;
-
+		const id = this.active?.metadata.id;
+		const generation = this.editor.media.getGeneration();
+		if (!id) return;
 		try {
-			const sequences = this.editor.sequences.getSequences();
-			const updatedProject = {
-				...project,
-				sequences,
-				metadata: {
-					...project.metadata,
-					duration: getProjectDurationFromSequences({ sequences }),
-					updatedAt: new Date(),
+			await this.queueProjectWrite({
+				write: async () => {
+					const project = this.active;
+					if (
+						project?.metadata.id !== id ||
+						this.editor.media.getGeneration() !== generation
+					)
+						return;
+					const updatedProject = this.projectForStorage({ project });
+					await storageService.saveProject({ project: updatedProject });
+					// Edits made during this write belong to the pending save.
+					if (this.active === project) this.active = updatedProject;
+					this.updateMetadata(updatedProject);
 				},
-			};
-
-			await storageService.saveProject({ project: updatedProject });
-			// Edits made during this write belong to the pending save.
-			if (this.active === project) this.active = updatedProject;
-			this.updateMetadata(updatedProject);
+			});
 		} catch (error) {
 			console.error("Failed to save project:", error);
 		}
+	}
+
+	isCheckpointMedia({
+		projectId,
+		id,
+	}: {
+		projectId: string;
+		id: string;
+	}): boolean {
+		const checkpoints =
+			this.active?.metadata.id === projectId
+				? (this.active.approval?.checkpoints ?? [])
+				: [];
+		const pending = this.pendingCheckpoint;
+		return [
+			...checkpoints,
+			...(pending?.projectId === projectId ? [pending.checkpoint] : []),
+		].some(({ tracks }) => referencedMedia({ tracks }).has(id));
+	}
+
+	saveCheckpoint({
+		projectId,
+		mediaGeneration,
+		checkpoint,
+		matches,
+	}: {
+		projectId: string;
+		mediaGeneration: number;
+		checkpoint: ApprovedCheckpoint;
+		matches: (latest: ApprovedCheckpoint) => boolean;
+	}): Promise<{ checkpoint: ApprovedCheckpoint; saved: boolean }> {
+		const isCurrent = () =>
+			this.active?.metadata.id === projectId &&
+			this.editor.media.getGeneration() === mediaGeneration;
+		return this.queueProjectWrite({
+			write: async () => {
+				const project = this.active;
+				if (!project || !isCurrent())
+					throw new Error("The project changed. Open Review and try again.");
+				const checkpoints = project.approval?.checkpoints ?? [];
+				const latest = checkpoints.findLast(
+					({ sequenceId }) => sequenceId === checkpoint.sequenceId,
+				);
+				if (latest && matches(latest))
+					return { checkpoint: latest, saved: false };
+
+				const nextCheckpoints = [...checkpoints, checkpoint].sort(
+					(a, b) =>
+						a.approvedAt.localeCompare(b.approvedAt) || a.revision - b.revision,
+				);
+				this.pendingCheckpoint = { projectId, checkpoint };
+				try {
+					const capturedItems = checkpoint.footage.map(
+						({ projectItemId }) => projectItemId,
+					);
+					await this.editor.media.waitForProjectItemSaves({
+						items: capturedItems,
+					});
+					if (!isCurrent())
+						throw new Error("The project changed. Open Review and try again.");
+					const mediaIds = new Set(
+						this.editor.media.getProjectItems().map(({ id }) => id),
+					);
+					if (capturedItems.some((id) => !mediaIds.has(id)))
+						throw new Error(
+							"Media was removed while saving the approved cut. Review it and try again.",
+						);
+
+					const beforeWrite = this.getActive();
+					const updatedProject = this.projectForStorage({
+						project: {
+							...beforeWrite,
+							approval: {
+								checkpoints: nextCheckpoints,
+								dismissals: beforeWrite.approval?.dismissals ?? [],
+							},
+						},
+					});
+					try {
+						await storageService.saveProject({ project: updatedProject });
+					} catch (error) {
+						const detail =
+							error instanceof Error ? error.message : String(error);
+						throw new Error(`Couldn't save the approved cut. ${detail}`, {
+							cause: error,
+						});
+					}
+					if (isCurrent()) {
+						const current = this.getActive();
+						this.active = {
+							...(current === beforeWrite ? updatedProject : current),
+							approval: {
+								checkpoints: nextCheckpoints,
+								dismissals: current.approval?.dismissals ?? [],
+							},
+						};
+					}
+					this.updateMetadata(updatedProject);
+					if (!isCurrent())
+						throw new Error(
+							"The project changed while saving the approved cut.",
+						);
+					return { checkpoint, saved: true };
+				} finally {
+					this.pendingCheckpoint = null;
+				}
+			},
+		});
 	}
 
 	/**
@@ -339,26 +481,37 @@ export class ProjectManager {
 				}
 				const { snapshot } = delivery;
 				if (!delivery.video) {
-					const rendered = await this.editor.renderer.exportProject({
-						options: {
-							format: "mp4",
-							quality: delivery.quality,
-							fps: snapshot.fps,
-							includeAudio: true,
-						},
-						signal,
-						scene: snapshot.scene,
-						// Rendering is most of the work; writing the files is the rest.
-						onProgress: ({ progress }) => update({ progress: progress * 0.9 }),
-					});
-					if (rendered.cancelled) return rendered;
-					if (!rendered.success || !rendered.buffer)
+					try {
+						await verifySequenceMedia({ ...snapshot.scene, signal });
+						const rendered = await this.editor.renderer.exportProject({
+							options: {
+								format: "mp4",
+								quality: delivery.quality,
+								fps: snapshot.fps,
+								includeAudio: true,
+							},
+							signal,
+							scene: snapshot.scene,
+							// Rendering is most of the work; writing the files is the rest.
+							onProgress: ({ progress }) =>
+								update({ progress: progress * 0.9 }),
+						});
+						if (rendered.cancelled) return rendered;
+						// An unavailable source can also make a decoder fail or skip content.
+						await verifySequenceMedia({ ...snapshot.scene, signal });
+						if (!rendered.success || !rendered.buffer)
+							throw new Error(
+								rendered.error ?? "The render produced no video.",
+							);
+						delivery.video = rendered.buffer;
+					} catch (error) {
+						if (signal.aborted) return { success: false, cancelled: true };
 						return {
 							success: false,
-							error: rendered.error ?? "The render produced no video.",
+							error: error instanceof Error ? error.message : String(error),
 							failedStep: "render",
 						};
-					delivery.video = rendered.buffer;
+					}
 				}
 				try {
 					const record = await publishDelivery({
@@ -505,31 +658,42 @@ export class ProjectManager {
 		name: string;
 	}): Promise<void> {
 		try {
-			const result = await storageService.loadProject({ id });
-			if (!result) {
-				toast.error("Project not found", {
-					description: "Please try again",
-				});
-				return;
-			}
+			await this.queueProjectWrite({
+				write: async () => {
+					const result = await storageService.loadProject({ id });
+					if (!result) {
+						toast.error("Project not found", {
+							description: "Please try again",
+						});
+						return;
+					}
 
-			const updatedProject: TProject = {
-				...result.project,
-				metadata: {
-					...result.project.metadata,
-					name,
-					updatedAt: new Date(),
+					const updatedProject: TProject = {
+						...result.project,
+						metadata: {
+							...result.project.metadata,
+							name,
+							updatedAt: new Date(),
+						},
+					};
+
+					await storageService.saveProject({ project: updatedProject });
+
+					if (this.active?.metadata.id === id) {
+						this.active = {
+							...this.active,
+							metadata: {
+								...this.active.metadata,
+								name,
+								updatedAt: updatedProject.metadata.updatedAt,
+							},
+						};
+						this.notify();
+					}
+
+					this.updateMetadata(updatedProject);
 				},
-			};
-
-			await storageService.saveProject({ project: updatedProject });
-
-			if (this.active?.metadata.id === id) {
-				this.active = updatedProject;
-				this.notify();
-			}
-
-			this.updateMetadata(updatedProject);
+			});
 		} catch (error) {
 			console.error("Failed to rename project:", error);
 			toast.error("Failed to rename project", {

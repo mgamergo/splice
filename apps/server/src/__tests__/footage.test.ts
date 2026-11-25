@@ -128,7 +128,7 @@ describe("media route", () => {
 			);
 
 			const { atime, mtime } = await stat(moved);
-			await writeFile(original, bytes.toReversed());
+			await writeFile(original, bytes.slice().reverse());
 			await utimes(original, atime, mtime);
 			await rename(original, moved);
 			const replaced = await head({ path: "after.mp4" });

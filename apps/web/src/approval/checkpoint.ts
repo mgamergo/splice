@@ -20,6 +20,8 @@ import {
 import { projectFormat } from "@/project/format";
 import type { TProject } from "@/project/types";
 import type { Marker, SequenceTracks } from "@/timeline/types";
+import { isDiskMedia } from "@/media/media-data";
+import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
 import { generateUUID } from "@/utils/id";
 import { type ComparableEdit, stableStringify } from "./compare";
 import type {
@@ -47,11 +49,7 @@ function footageIdentities({
 	editor: EditorCore;
 	tracks: SequenceTracks;
 }): FootageIdentity[] {
-	const used = new Set(
-		[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
-			track.clips.flatMap((clip) => ("mediaId" in clip ? [clip.mediaId] : [])),
-		),
-	);
+	const used = referencedMedia({ tracks });
 	return editor.media
 		.getProjectItems()
 		.filter(({ id }) => used.has(id))
@@ -61,7 +59,10 @@ function footageIdentities({
 			size: file.size,
 			lastModified: file.lastModified,
 			missing: !!missing,
-			...("kind" in file && { path: file.path }),
+			...(isDiskMedia(file) && {
+				path: file.path,
+				contentHash: file.contentHash,
+			}),
 		}));
 }
 
@@ -120,6 +121,7 @@ export function captureApproval({
 	};
 	return {
 		data,
+		mediaGeneration: editor.media.getGeneration(),
 		snapshot: { ...snapshot, scene: { ...snapshot.scene, tracks } },
 	};
 }
@@ -142,7 +144,13 @@ function approvalContent({
 		sequenceCaptions,
 		captions,
 		srt,
-		footage,
+		footage: footage
+			.map(({ projectItemId, missing, contentHash, ...metadata }) => ({
+				projectItemId,
+				missing,
+				...(contentHash ? { contentHash } : metadata),
+			}))
+			.sort((a, b) => a.projectItemId.localeCompare(b.projectItemId)),
 	});
 }
 
@@ -194,40 +202,6 @@ function updateApproval({
 	editor.save.markDirty();
 }
 
-/**
- * Saves a checkpoint as the sequence's approved one. Approving the edit the
- * last checkpoint already holds keeps that checkpoint and returns it.
- */
-function saveCheckpoint({
-	editor,
-	checkpoint,
-}: {
-	editor: EditorCore;
-	checkpoint: ApprovedCheckpoint;
-}): { checkpoint: ApprovedCheckpoint; saved: boolean } {
-	const latest = latestCheckpoint({
-		project: editor.project.getActive(),
-		sequenceId: checkpoint.sequenceId,
-	});
-	if (
-		latest &&
-		latest.revision === checkpoint.revision &&
-		approvalContent(latest) === approvalContent(checkpoint)
-	)
-		return { checkpoint: latest, saved: false };
-	updateApproval({
-		editor,
-		update: (approval) => ({
-			...approval,
-			checkpoints: [...approval.checkpoints, checkpoint].sort(
-				(a, b) =>
-					a.approvedAt.localeCompare(b.approvedAt) || a.revision - b.revision,
-			),
-		}),
-	});
-	return { checkpoint, saved: true };
-}
-
 /** Persists the captured approval and returns the render inputs from that click. */
 export async function commitApproval({
 	editor,
@@ -236,17 +210,17 @@ export async function commitApproval({
 	editor: EditorCore;
 	capture: ReturnType<typeof captureApproval>;
 }) {
-	const { snapshot, data } = capture;
-	const mediaGeneration = editor.media.getGeneration();
+	const { snapshot, data, mediaGeneration } = capture;
+	if (data.origin === "export") await verifySequenceMedia(snapshot.scene);
 	const fingerprint = await deliveryFingerprint(snapshot);
-	assertApprovalContext({
-		editor,
+	const checkpoint = { ...data, fingerprint };
+	const result = await editor.project.saveCheckpoint({
 		projectId: snapshot.source.projectId,
 		mediaGeneration,
-	});
-	const result = saveCheckpoint({
-		editor,
-		checkpoint: { ...data, fingerprint },
+		checkpoint,
+		matches: (latest) =>
+			latest.revision === checkpoint.revision &&
+			approvalContent(latest) === approvalContent(checkpoint),
 	});
 	return {
 		...result,
@@ -437,6 +411,7 @@ const storedCheckpointSchema = checkpointSummarySchema.extend({
 			size: z.number(),
 			lastModified: z.number(),
 			path: z.string().optional(),
+			contentHash: z.string().optional(),
 			missing: z.boolean(),
 		}),
 	),

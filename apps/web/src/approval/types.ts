@@ -11,6 +11,7 @@ export interface FootageIdentity {
 	size: number;
 	lastModified: number;
 	path?: string;
+	contentHash?: string;
 	missing: boolean;
 }
 
