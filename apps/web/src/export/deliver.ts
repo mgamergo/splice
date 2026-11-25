@@ -15,6 +15,8 @@ import { useCaptionsStore } from "@/captions/store";
 import type { EditorCore } from "@/core";
 import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { TCanvasSize } from "@/project/types";
+import { isMixLoudnessStale } from "@/mix/final-mix";
+import { tracksWithMusicDucking } from "@/mix/music";
 import { generateUUID } from "@/utils/id";
 import type { DeliveryStep } from "./index";
 
@@ -49,17 +51,33 @@ export interface DeliveryInput extends Omit<DeliverySnapshot, "srt" | "source"> 
 /** Captures the approved edit before an export waits for anything. */
 export function captureDelivery({
 	editor,
+	approval,
 }: {
 	editor: EditorCore;
+	approval?: { acceptStaleGain: boolean };
 }): DeliveryInput {
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
 	const loudness = sequence.mix?.loudness;
+	const projectItems = [...editor.media.getProjectItems()];
+	const projectSources = project.captions?.sources;
+	if (
+		approval &&
+		!approval.acceptStaleGain &&
+		isMixLoudnessStale({ sequence, projectItems, projectSources })
+	)
+		throw new Error(
+			"The mix changed since it was measured. Remeasure it or export with the saved gain.",
+		);
 	return {
 		deliveryId: generateUUID(),
 		scene: {
-			tracks: sequence.tracks,
-			projectItems: [...editor.media.getProjectItems()],
+			tracks: tracksWithMusicDucking({
+				sequence,
+				projectItems,
+				projectSources,
+			}),
+			projectItems,
 			canvasSize: DELIVERY_FORMAT.canvasSize,
 			background: project.settings.background,
 			...(loudness && {

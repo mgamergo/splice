@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { mixFingerprint } from "@/mix/final-mix";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	spyOn,
+	test,
+} from "bun:test";
 import { type ExportRecord, exportRecordSchema } from "@splice/bridge/delivery";
 import { setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { setCaptionSources } from "@/captions/project-captions";
@@ -228,6 +237,50 @@ describe("Horizontal delivery", () => {
 		expect(await deliveryFingerprint(takeDeliverySnapshot({ editor })))
 			.not.toBe(await deliveryFingerprint(approved));
 		setGain(3);
+		const projectItems = [
+			{
+				id: "rec",
+				type: "video" as const,
+				hasAudio: true,
+				name: "rec",
+				file: new File([], "rec.mp4"),
+			},
+		];
+		editor.media.setProjectItems({ projectItems });
+		const sequence = editor.sequences.getActiveSequence();
+		const loudness = sequence.mix?.loudness;
+		if (!loudness) throw new Error("Expected a saved gain");
+		editor.command.execute({
+			command: new UpdateSequenceCommand({
+				editor,
+				sequenceId: sequence.id,
+				label: "Measure",
+				updates: {
+					mix: {
+						loudness: {
+							...loudness,
+							fingerprint: mixFingerprint({
+								tracks: sequence.tracks,
+								projectItems,
+							}),
+						},
+					},
+				},
+			}),
+		});
+		const { tracks: measuredTracks } = sequence;
+		editor.sequences.updateSequenceTracks({
+			tracks: {
+				...measuredTracks,
+				main: {
+					...measuredTracks.main,
+					clips: measuredTracks.main.clips.map((clip) => ({
+						...clip,
+						params: { ...clip.params, volume: -6 },
+					})),
+				},
+			},
+		});
 
 		const renders = recordRenders(editor);
 		// The first render fails, so Retry renders again.
@@ -243,6 +296,13 @@ describe("Horizontal delivery", () => {
 		};
 
 		expect(await editor.project.deliver({ quality: "high" })).toMatchObject({
+			success: false,
+			error: expect.stringContaining("changed since it was measured"),
+		});
+		expect(renders).toHaveLength(0);
+		expect(
+			await editor.project.deliver({ quality: "high", acceptStaleGain: true }),
+		).toMatchObject({
 			success: false,
 			failedStep: "render",
 		});

@@ -16,6 +16,11 @@ import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useCaptionsStore } from "@/captions/store";
 import { useCaptionCues } from "@/captions/use-caption-cues";
+import {
+	isMixLoudnessStale,
+	measureMixLoudness,
+	saveMixLoudness,
+} from "@/mix/final-mix";
 import { useEditor } from "@/editor/use-editor";
 import {
 	DELIVERY_STEP_LABELS,
@@ -53,6 +58,16 @@ function errorMessage(error: unknown): string {
 export function DeliveryPopover() {
 	const editor = useEditor();
 	const project = useEditor((e) => e.project.getActive());
+	const sequence = useEditor((e) => e.sequences.getActiveSequence());
+	const projectItems = useEditor((e) => e.media.getProjectItems());
+	const loudness = sequence.mix?.loudness;
+	const stale = isMixLoudnessStale({
+		sequence,
+		projectItems,
+		projectSources: project.captions?.sources,
+	});
+	const [measuring, setMeasuring] = useState(false);
+	const [approvalError, setApprovalError] = useState<string | null>(null);
 	const exportState = useEditor((e) => e.project.getExportState());
 	const revision = useEditor((e) => e.command.getRevision());
 	// Saved spellings change the SRT without a new revision.
@@ -97,12 +112,41 @@ export function DeliveryPopover() {
 		return () => {
 			cancelled = true;
 		};
-	}, [editor, revision, spellings]);
+	}, [editor, revision, spellings, sequence, projectItems, project.captions]);
 
-	const handleExport = async () => {
+	const handleExport = async ({
+		acceptStaleGain,
+	}: {
+		acceptStaleGain: boolean;
+	}) => {
 		setFolderMessage(null);
-		const exported = await editor.project.deliver({ quality });
+		setApprovalError(null);
+		const exported = await editor.project.deliver({ quality, acceptStaleGain });
 		if (exported.success) void refreshHistory();
+		else if (!exported.failedStep && !exported.cancelled)
+			setApprovalError(exported.error ?? "Couldn't export the edit.");
+	};
+
+	const handleRemeasure = async () => {
+		if (!loudness) return;
+		const revision = editor.command.getRevision();
+		setMeasuring(true);
+		setApprovalError(null);
+		try {
+			const measured = await measureMixLoudness({
+				editor,
+				sequenceId: sequence.id,
+				targetLufs: loudness.targetLufs,
+				ceilingDbtp: loudness.ceilingDbtp,
+			});
+			if (editor.command.getRevision() !== revision)
+				throw new Error("The edit changed while measuring. Measure it again.");
+			saveMixLoudness({ editor, sequenceId: sequence.id, loudness: measured });
+		} catch (error) {
+			setApprovalError(errorMessage(error));
+		} finally {
+			setMeasuring(false);
+		}
 	};
 
 	const handleRetry = async () => {
@@ -212,9 +256,32 @@ export function DeliveryPopover() {
 								? `1080p30 MP4 without burned-in captions, and an SRT with ${cueCount} cues, written together to Exports.`
 								: "No captions yet, so the SRT will be empty. Load transcripts in Captions first."}
 						</p>
-						<Button onClick={handleExport} className="w-full gap-2">
+						{approvalError && (
+							<p role="alert" className="text-destructive text-xs">
+								{approvalError}
+							</p>
+						)}
+						{stale && (
+							<>
+								<p className="text-muted-foreground text-xs">
+									The audio changed since the mix was measured.
+								</p>
+								<Button
+									variant="outline"
+									disabled={measuring}
+									onClick={handleRemeasure}
+								>
+									{measuring ? "Measuring…" : "Remeasure mix"}
+								</Button>
+							</>
+						)}
+						<Button
+							disabled={measuring}
+							onClick={() => void handleExport({ acceptStaleGain: stale })}
+							className="w-full gap-2"
+						>
 							<Download className="size-4" />
-							Export
+							{stale ? "Export with saved gain" : "Export"}
 						</Button>
 					</div>
 				</div>

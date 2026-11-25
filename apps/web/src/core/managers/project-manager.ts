@@ -275,9 +275,27 @@ export class ProjectManager {
 	 * Captures the approved Horizontal edit, then loads the saved spellings,
 	 * renders the MP4 at 1080p30 and publishes it with the SRT under Exports.
 	 */
-	deliver({ quality }: { quality: ExportQuality }): Promise<ExportResult> {
+	async deliver({
+		quality,
+		acceptStaleGain = false,
+	}: {
+		quality: ExportQuality;
+		acceptStaleGain?: boolean;
+	}): Promise<ExportResult> {
+		let input: DeliveryInput;
+		try {
+			input = captureDelivery({
+				editor: this.editor,
+				approval: { acceptStaleGain },
+			});
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
 		this.delivery = {
-			input: captureDelivery({ editor: this.editor }),
+			input,
 			snapshot: null,
 			quality,
 			video: null,
