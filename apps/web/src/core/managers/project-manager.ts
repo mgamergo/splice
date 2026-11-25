@@ -647,11 +647,12 @@ export class ProjectManager {
 							signal,
 							scene: snapshot.scene,
 							// The MP4 goes to Exports' staging folder as it renders.
-							stream: createExportFileStream({
-								exportId: staging,
-								kind: "mp4",
-								signal,
-							}),
+							createStream: () =>
+								createExportFileStream({
+									exportId: staging,
+									kind: "mp4",
+									signal,
+								}),
 							// Rendering is most of the work; writing the files is the rest.
 							onProgress: ({ progress }) =>
 								update({ progress: progress * 0.95 }),
