@@ -81,7 +81,7 @@ test("dry run reports the gap at a selected passage and keeps state and history 
 						},
 						after: {
 							left: { clipId: "setup" },
-							right: { clipId: "payoff" },
+							right: { clipId: "overlay" },
 							gapSeconds: 2,
 						},
 					},
@@ -176,4 +176,95 @@ test("an existing gap is not new when ripple delete shifts both of its clips", (
 		ok: true,
 		impact: { outsideScopeUntouched: false, newGapsAndJumpCuts: [] },
 	});
+});
+
+test("a picture repair changes the visible clip at both edges below a translucent overlay", () => {
+	const { editor, api, sequence } = fixture();
+	const source = sequence();
+	const main = {
+		...source.tracks.main,
+		clips: [videoClip({ id: "v1", start: 0, duration: 6 })],
+	};
+	const overlay = source.tracks.overlay.map((track) => ({
+		...track,
+		type: "video" as const,
+		muted: false,
+		hidden: false,
+		clips: [
+			{
+				...videoClip({ id: "overlay", start: 0, duration: 6 }),
+				params: { opacity: 0.5 },
+			},
+		],
+	}));
+	editor.sequences.setSequences({
+		sequences: [{ ...source, tracks: { ...source.tracks, main, overlay } }],
+	});
+	editor.media.setProjectItems({
+		projectItems: [
+			{
+				id: "repair",
+				name: "Replacement",
+				type: "video",
+				duration: 6,
+				file: new File([], "repair.mp4"),
+			},
+		],
+	});
+	const mainPicture = { clipId: "v1" };
+	const repair = { projectItemId: "repair", start: 2, end: 4 };
+	expect(
+		api.previewOps({
+			sequenceId: source.id,
+			expectedRevision: api.getRevision(),
+			label: "Repair picture",
+			ops: [
+				{
+					op: "picture_repair",
+					at: time(2),
+					duration: time(2),
+					projectItemId: "repair",
+					sourceIn: 1,
+				},
+			],
+		}),
+	).toMatchObject({
+		ok: true,
+		impact: {
+			affectedRange: { start: 2, end: 4 },
+			adjacentTransitions: {
+				start: {
+					before: { left: mainPicture, right: mainPicture },
+					after: { left: mainPicture, right: repair, gapSeconds: 0 },
+				},
+				end: {
+					before: { left: mainPicture, right: mainPicture },
+					after: { left: repair, right: mainPicture, gapSeconds: 0 },
+				},
+			},
+		},
+	});
+});
+
+test("razoring a clip before an existing gap does not report a new gap", () => {
+	const { editor, api, sequence } = fixture();
+	const before = sequence();
+	const main = {
+		...before.tracks.main,
+		clips: [
+			videoClip({ id: "first", start: 0, duration: 6 }),
+			videoClip({ id: "second", start: 8, duration: 2, trimStart: 8 }),
+		],
+	};
+	editor.sequences.setSequences({
+		sequences: [{ ...before, tracks: { ...before.tracks, main } }],
+	});
+	expect(
+		api.previewOps({
+			sequenceId: before.id,
+			expectedRevision: api.getRevision(),
+			label: "Split clip",
+			ops: [{ op: "razor", at: time(3), clipIds: ["first"] }],
+		}),
+	).toMatchObject({ ok: true, impact: { newGapsAndJumpCuts: [] } });
 });

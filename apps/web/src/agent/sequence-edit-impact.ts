@@ -1,6 +1,13 @@
+import { resolveOpacityAtTime } from "@/animation/values";
+import { readBlendModeFromParams, readOpacityFromParams } from "@/rendering";
 import { stableStringify } from "@/approval/compare";
 import { getSourceTimeAtClipTime } from "@/retime";
-import { hasMediaId, type TimelineClip, type TSequence } from "@/timeline";
+import {
+	hasMediaId,
+	type TimelineClip,
+	type TSequence,
+	type VideoTrack,
+} from "@/timeline";
 import {
 	mediaTimeFromSeconds,
 	mediaTimeToSeconds,
@@ -129,63 +136,137 @@ function summarizeClip(clip: TimelineClip | undefined) {
 		: null;
 }
 
+type PictureClip = VideoTrack["clips"][number];
+type PictureEdge = { clip: PictureClip; at: number };
+
+const clipEnd = (clip: PictureClip) => clip.startTime + clip.duration;
+
+function sourceAt({ clip, at }: PictureEdge) {
+	return roundMediaTime({
+		time:
+			clip.trimStart +
+			getSourceTimeAtClipTime({
+				clipTime: at - clip.startTime,
+				retime: clip.type === "video" ? clip.retime : undefined,
+			}),
+	});
+}
+
 function transition({
 	left,
 	right,
 }: {
-	left: TimelineClip | undefined;
-	right: TimelineClip | undefined;
+	left?: PictureEdge;
+	right?: PictureEdge;
 }) {
 	const gapSeconds =
-		left && right
-			? Math.max(0, seconds(right.startTime - left.startTime - left.duration))
-			: null;
+		left && right ? Math.max(0, seconds(right.at - left.at)) : null;
 	const jumpCut = !!(
 		left &&
 		right &&
-		left !== right &&
+		left.clip !== right.clip &&
 		gapSeconds === 0 &&
-		left.type === "video" &&
-		right.type === "video" &&
-		left.mediaId === right.mediaId &&
-		roundMediaTime({
-			time:
-				left.trimStart +
-				getSourceTimeAtClipTime({
-					clipTime: left.duration,
-					retime: left.retime,
-				}),
-		}) !== right.trimStart
+		left.clip.type === "video" &&
+		right.clip.type === "video" &&
+		left.clip.mediaId === right.clip.mediaId &&
+		sourceAt(left) !== sourceAt(right)
 	);
 	return {
-		left: summarizeClip(left),
-		right: summarizeClip(right),
+		left: summarizeClip(left?.clip),
+		right: summarizeClip(right?.clip),
 		gapSeconds,
 		jumpCut,
 	};
 }
 
-function boundary({ clips, at }: { clips: TimelineClip[]; at: number }) {
-	const left = clips.findLast((clip) => clip.startTime < at);
-	const right = clips.find((clip) => clip.startTime + clip.duration > at);
-	return transition({ left, right });
+function pictureClips({ tracks }: TSequence): PictureClip[] {
+	// Match the renderer's layer order and its overlap order within each track.
+	return [...tracks.overlay, tracks.main].flatMap((track) =>
+		track.type === "video" && !track.hidden
+			? track.clips
+					.filter((clip) => !clip.hidden)
+					.toSorted(
+						(a, b) => b.startTime - a.startTime || b.id.localeCompare(a.id),
+					)
+			: [],
+	);
 }
 
-function joins(clips: TimelineClip[]) {
-	return clips.slice(1).flatMap((right, index) => {
-		const left = clips[index];
+function isOpaque({ clip, at }: PictureEdge) {
+	return (
+		!clip.masks?.length &&
+		readBlendModeFromParams({ params: clip.params }) === "normal" &&
+		resolveOpacityAtTime({
+			baseOpacity: readOpacityFromParams({ params: clip.params }),
+			animations: clip.animations,
+			localTime: at - clip.startTime,
+		}) >= 1
+	);
+}
+
+function boundary({ clips, at }: { clips: PictureClip[]; at: number }) {
+	const visibleAt = ({
+		point,
+		side,
+	}: {
+		point: number;
+		side: "left" | "right";
+	}) => {
+		const clip = clips.find(
+			(clip) =>
+				(side === "left"
+					? clip.startTime < point && clipEnd(clip) >= point
+					: clip.startTime <= point && clipEnd(clip) > point) &&
+				isOpaque({ clip, at: point }),
+		);
+		return clip && { clip, at: point };
+	};
+	const adjacent = (side: "left" | "right") => {
+		const visible = visibleAt({ point: at, side });
+		if (visible) return visible;
+		// When the edge is inside a gap, show the nearest picture on that side.
+		const candidates =
+			side === "left"
+				? clips
+						.map(clipEnd)
+						.filter((end) => end < at)
+						.sort((a, b) => b - a)
+				: clips
+						.map((clip) => clip.startTime)
+						.filter((start) => start > at)
+						.sort((a, b) => a - b);
+		for (const point of candidates) {
+			const edge = visibleAt({ point, side });
+			if (edge) return edge;
+		}
+	};
+	return transition({ left: adjacent("left"), right: adjacent("right") });
+}
+
+function joins({ tracks }: TSequence) {
+	const clips = tracks.main.clips.toSorted((a, b) => a.startTime - b.startTime);
+	return clips.slice(1).flatMap((clip, index) => {
+		const left = { clip: clips[index], at: clipEnd(clips[index]) };
+		const right = { clip, at: clip.startTime };
 		const result = transition({ left, right });
-		return result.jumpCut || (result.gapSeconds ?? 0) > 0 ? [result] : [];
+		if (!result.jumpCut && (result.gapSeconds ?? 0) === 0) return [];
+		// A split changes the clip ID but preserves the source at the join.
+		const sourceKey = (edge: PictureEdge) => [
+			edge.clip.mediaId,
+			sourceAt(edge),
+		];
+		return [
+			{
+				key: JSON.stringify([
+					sourceKey(left),
+					sourceKey(right),
+					result.gapSeconds,
+					result.jumpCut,
+				]),
+				result,
+			},
+		];
 	});
-}
-
-function joinKey({
-	left,
-	right,
-	gapSeconds,
-	jumpCut,
-}: ReturnType<typeof transition>) {
-	return JSON.stringify([left?.clipId, right?.clipId, gapSeconds, jumpCut]);
 }
 
 /** Compare the complete batch, including derived graphics and all tracks. */
@@ -206,13 +287,9 @@ export function sequenceEditImpact({
 			}))
 		: undefined;
 	const edges = scope ?? affectedRange;
-	const oldPicture = before.tracks.main.clips.toSorted(
-		(a, b) => a.startTime - b.startTime,
-	);
-	const picture = after.tracks.main.clips.toSorted(
-		(a, b) => a.startTime - b.startTime,
-	);
-	const oldJoins = new Set(joins(oldPicture).map(joinKey));
+	const oldPicture = pictureClips(before);
+	const picture = pictureClips(after);
+	const oldJoins = Map.groupBy(joins(before), ({ key }) => key);
 	return {
 		affectedRange: affectedRange
 			? {
@@ -241,8 +318,8 @@ export function sequenceEditImpact({
 					},
 				}
 			: null,
-		newGapsAndJumpCuts: joins(picture).filter(
-			(join) => !oldJoins.has(joinKey(join)),
+		newGapsAndJumpCuts: joins(after).flatMap(({ key, result }) =>
+			oldJoins.get(key)?.pop() ? [] : [result],
 		),
 	};
 }
