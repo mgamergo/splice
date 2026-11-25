@@ -179,6 +179,37 @@ describe("removal markers", () => {
 		expect(spans()[1]).toEqual([s(1), s(1), s(7)]);
 	});
 
+	test("a swap updates the protected take and restoring alternatives preserves it", () => {
+		const id = cutWithMarker();
+		editor.save.pause();
+		expect(
+			apply({ ops: [{ op: "swap_take", markerId: id, takeIndex: 0 }] }),
+		).toMatchObject({ ok: true });
+		const deleteSwappedTake: EditOp = {
+			op: "ripple_delete",
+			ranges: [{ start: { seconds: 1 }, end: { seconds: 4 } }],
+		};
+		const guard = {
+			code: "INVALID_OP",
+			message: expect.stringContaining("whole “Intro” section"),
+		};
+		expect(apply({ ops: [deleteSwappedTake] })).toMatchObject(guard);
+		expect(
+			apply({ ops: [{ op: "restore_takes", markerId: id }] }),
+		).toMatchObject({ ok: true });
+		expect(markers()).toEqual([]);
+		expect(
+			apply({
+				ops: [
+					{
+						op: "ripple_delete",
+						ranges: [{ start: { seconds: 4 }, end: { seconds: 7 } }],
+					},
+				],
+			}),
+		).toMatchObject(guard);
+	});
+
 	test("swaps the surviving best-take range and preserves neighboring source and later edits", () => {
 		const id = cutWithMarker();
 		apply({

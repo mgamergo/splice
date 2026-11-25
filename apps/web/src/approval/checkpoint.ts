@@ -8,6 +8,7 @@ import {
 import { projectCaptionsSchema } from "@splice/bridge/delivery";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
 import { sequenceMixSchema } from "@splice/bridge/mix";
+import { protectedSectionSchema } from "@splice/bridge/ops";
 import { styleDefaultsSchema } from "@splice/bridge/style";
 import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceStyle } from "@/agent/style-profile";
@@ -107,6 +108,9 @@ export function captureApproval({
 		...(sequence.graphics && { graphics: structuredClone(sequence.graphics) }),
 		...(sequence.mix && { mix: structuredClone(sequence.mix) }),
 		markers: structuredClone(sequence.markers),
+		...(sequence.protectedSections && {
+			protectedSections: structuredClone(sequence.protectedSections),
+		}),
 		background: structuredClone(snapshot.scene.background),
 		styleDefaults: structuredClone(sequenceStyle({ project, sequence })),
 		...(snapshot.shortStyle && {
@@ -437,6 +441,7 @@ const storedCheckpointSchema = checkpointSummarySchema.extend({
 	graphics: sequenceGraphicsSchema.optional(),
 	mix: sequenceMixSchema.optional(),
 	markers: z.array(z.unknown()),
+	protectedSections: z.array(protectedSectionSchema).optional(),
 	background: z.discriminatedUnion("type", [
 		z.object({ type: z.literal("color"), color: z.string() }),
 		z.object({ type: z.literal("blur"), blurIntensity: z.number() }),

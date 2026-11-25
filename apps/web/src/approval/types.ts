@@ -2,6 +2,7 @@ import type { CheckpointSummary, Dismissal } from "@splice/bridge/approval";
 import type { ProjectCaptions } from "@splice/bridge/delivery";
 import type { SequenceGraphics } from "@splice/bridge/graphics";
 import type { SequenceMix } from "@splice/bridge/mix";
+import type { ProtectedSection } from "@splice/bridge/ops";
 import type { StyleDefaults } from "@splice/bridge/style";
 import type { SavedShortCaptions } from "@/agent/short-caption-corrections";
 import type { ShortDeliveryFrame } from "@/export/deliver";
@@ -30,6 +31,7 @@ export interface ApprovedCheckpoint extends CheckpointSummary {
 	graphics?: SequenceGraphics;
 	mix?: SequenceMix;
 	markers: Marker[];
+	protectedSections?: ProtectedSection[];
 	background: TBackground;
 	shortFrame?: ShortDeliveryFrame;
 	/** A Short's burned-in captions. */

@@ -6,13 +6,13 @@ import type {
 import { generateUUID } from "@/utils/id";
 import type { EditorCore } from "@/core";
 import {
-	type Command,
+	Command,
 	type CommandResult,
 	createClipSelectionResult,
 } from "@/commands/base-command";
 import type { EditorSelectionSnapshot } from "@/selection/editor-selection";
 import { applyRippleAdjustments, computeRippleAdjustments } from "@/ripple";
-import type { SequenceTracks } from "@/timeline/types";
+import type { SequenceTracks, TSequence } from "@/timeline/types";
 
 interface CommandHistoryEntry {
 	command: Command;
@@ -89,6 +89,52 @@ export class CommandManager {
 		}
 		this.bumpRevision();
 		return command;
+	}
+
+	/** Agent sequence commands ignore the UI ripple toggle. Include their derived edits in the preview. */
+	previewSequenceEdit({ command }: { command: Command }) {
+		return this.editor.sequences.stageEdit(() => {
+			const result = command.execute();
+			this.runFollowUps(command);
+			this.runReactors();
+			return result;
+		});
+	}
+
+	/** Publish the previewed state as an agent edit without recording creator Corrections. */
+	commitSequenceEdit({
+		sequences,
+		result,
+	}: {
+		sequences: TSequence[];
+		result: CommandResult | undefined;
+	}): void {
+		const manager = this.editor.sequences;
+		const before = manager.getSequences();
+		const sequenceId = manager.getActiveSequence().id;
+		const previousSelection = this.getSelectionSnapshot();
+		const command = new (class extends Command {
+			readonly isAgentEdit = true;
+			readonly ignoresRippleToggle = true;
+			execute() {
+				manager.setSequences({ sequences });
+				return result;
+			}
+			undo() {
+				manager.setSequences({ sequences: before });
+			}
+		})();
+		command.execute();
+		const selectionOverride = this.applySelectionOverride(result);
+		this.history.push({
+			command,
+			followUps: [],
+			sequenceId,
+			previousSelection,
+			selectionOverride,
+		});
+		this.redoStack = [];
+		this.bumpRevision();
 	}
 
 	push({ command }: { command: Command }): void {

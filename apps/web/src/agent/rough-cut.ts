@@ -1,3 +1,4 @@
+import { validateProtectedSections } from "@/agent/protected-sections";
 import { tagTighteningEdges } from "@/agent/corrections";
 import type { RoughCutPlan, ItemRange } from "@splice/bridge/ops";
 import { audibleClips, heardClips } from "@/agent/loudness";
@@ -460,6 +461,23 @@ export function buildRoughCut({
 		}
 	}
 
+	if (!plan.restructure) {
+		const inRecordingOrder = mapped
+			.map((section) => ({
+				...section,
+				firstTakeAt: section.windows.reduce((first, { start }) => start < first ? start : first, section.bestWindow.start),
+			}))
+			.sort((a, b) => a.firstTakeAt - b.firstTakeAt);
+		for (let i = 1; i < inRecordingOrder.length; i++) {
+			const previous = inRecordingOrder[i - 1];
+			const current = inRecordingOrder[i];
+			if (current.bestWindow.start < previous.bestWindow.start)
+				throw new RemovalTakeError(
+					`The chosen takes put “${current.sectionName}” before “${previous.sectionName}”. Choose takes in teaching order, or pass restructure: true if the creator explicitly asked for that change.`,
+				);
+		}
+	}
+
 	const clamped = {
 		pauses: clampToItems({ ranges: plan.pauses, projectItems }),
 		falseStarts: clampToItems({ ranges: plan.falseStarts, projectItems }),
@@ -611,31 +629,44 @@ export function buildRoughCut({
 		within: [...closeAll(spoken), ...pauses.flat()],
 	});
 
+	const deleted = unionSpans(cuts);
+	const hasKeptMaterial = ({ spans, holes }: { spans: Window[]; holes: Window[] }) =>
+		spans.some((area) => outsideHoles({ area, holes }).length > 0);
+
 	let tracks = source.tracks;
 	const markers = [...source.markers];
+	const protectedSections = [...(source.protectedSections ?? [])];
 	const sectionsRemoved = mapped.map(
 		({ sectionName, bestTake, bestWindow, cuts: sectionCuts }) => {
-			const marker: RemovalMarker = {
-				id: generateUUID(),
-				time: sectionCuts[0].start,
-				data: {
-					kind: "removal",
-					sectionName,
-					bestTake,
-					badTakes: sectionCuts.map(({ take }) => take),
-				},
-			};
-			markers.push(marker);
-			tracks = tagBestTake({
-				tracks,
-				markerId: marker.id,
-				clipIds: bestWindow.clipIds,
-			});
 			const removed = sectionCuts.reduce(
 				(sum, { start, end }) => sum + end - start,
 				0,
 			);
-			return { sectionName, removedSeconds: seconds(removed) };
+			const report = { sectionName, removedSeconds: seconds(removed) };
+			const sectionId = generateUUID();
+			protectedSections.push({ id: sectionId, sectionName, bestTake });
+			tracks = tagBestTake({
+				tracks,
+				markerId: sectionId,
+				clipIds: bestWindow.clipIds,
+			});
+			if (
+				sectionCuts.length &&
+				hasKeptMaterial({ spans: [bestWindow], holes: deleted })
+			) {
+				const marker: RemovalMarker = {
+					id: sectionId,
+					time: sectionCuts[0].start,
+					data: {
+						kind: "removal",
+						sectionName,
+						bestTake,
+						badTakes: sectionCuts.map(({ take }) => take),
+					},
+				};
+				markers.push(marker);
+			}
+			return report;
 		},
 	);
 
@@ -701,9 +732,36 @@ export function buildRoughCut({
 		isMain: false,
 		tracks: cut.tracks,
 		markers: cut.markers.sort((a, b) => a.time - b.time),
+		protectedSections: protectedSections.length ? protectedSections : undefined,
 		createdAt: new Date(),
 		updatedAt: new Date(),
 	};
+	validateProtectedSections({
+		before: { ...source, tracks, protectedSections },
+		after: sequence,
+		restructure: plan.restructure,
+	});
+	if (!plan.restructure) {
+		const badTakes = unionSpans(takeCuts);
+		const recordings = Map.groupBy(
+			audibleClips({ tracks: source.tracks, projectItems }),
+			({ clip }) => clip.mediaId,
+		);
+		for (const [itemId, recording] of recordings) {
+			const spans = recording.map(({ clip }) => ({
+				start: clip.startTime,
+				end: addMediaTime({ a: clip.startTime, b: clip.duration }),
+			}));
+			// A recording can be entirely bad takes. Guard only the content left after take removal.
+			if (
+				hasKeptMaterial({ spans, holes: badTakes }) &&
+				!hasKeptMaterial({ spans, holes: deleted })
+			)
+				throw new RemovalTakeError(
+					`Tightening would remove all kept material from recording ${itemId}. Keep some of the recording, or pass restructure: true if the creator explicitly asked to remove it.`,
+				);
+		}
+	}
 	return {
 		sequence,
 		sections: sectionsRemoved,

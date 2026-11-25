@@ -1,3 +1,4 @@
+import { normalizeProjectBrief, projectBriefSchema } from "@splice/bridge/brief";
 import { BASE_STYLE, styleDefaultsSchema } from "@splice/bridge/style";
 import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceMixSchema } from "@splice/bridge/mix";
@@ -7,7 +8,10 @@ import { parseProjectCaptions } from "@splice/bridge/delivery";
 import { parseProjectApproval } from "@/approval/checkpoint";
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
-import { removalMarkerDataSchema } from "@splice/bridge/ops";
+import {
+	protectedSectionSchema,
+	removalMarkerDataSchema,
+} from "@splice/bridge/ops";
 import { mediaUrlForPath } from "@splice/bridge";
 import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
 import type { DiskMedia, ProjectItem } from "@/media/types";
@@ -190,6 +194,9 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: this.stripAudioBuffers({ tracks: sequence.tracks }),
 				markers: sequence.markers,
+				...(sequence.protectedSections && {
+					protectedSections: sequence.protectedSections,
+				}),
 				...(sequence.captions && { captions: sequence.captions }),
 				...(sequence.graphics && { graphics: sequence.graphics }),
 				...(sequence.styleDefaults && { styleDefaults: sequence.styleDefaults }),
@@ -214,6 +221,7 @@ class StorageService {
 			version: project.version,
 			timelineViewState: project.timelineViewState,
 			...(project.captions && { captions: project.captions }),
+			...(project.brief && { brief: project.brief }),
 			...(project.approval && { approval: project.approval }),
 		};
 
@@ -275,6 +283,12 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: sequence.tracks,
 				markers: normalizeMarkers({ raw: sequence.markers }),
+				protectedSections: Array.isArray(sequence.protectedSections)
+					? sequence.protectedSections.flatMap((section) => {
+							const parsed = protectedSectionSchema.safeParse(section);
+							return parsed.success ? [parsed.data] : [];
+						})
+					: undefined,
 				captions: savedShortCaptionsSchema.safeParse(sequence.captions).data,
 				graphics: sequenceGraphicsSchema.safeParse(sequence.graphics).data,
 				styleDefaults: styleDefaultsSchema.safeParse(sequence.styleDefaults).data,
@@ -304,6 +318,7 @@ class StorageService {
 			},
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
+			brief: normalizeProjectBrief(projectBriefSchema.safeParse(serializedProject.brief).data),
 			captions: parseProjectCaptions(serializedProject.captions),
 			approval: parseProjectApproval({
 				raw: serializedProject.approval,

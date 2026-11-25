@@ -35,6 +35,8 @@ export interface TranscriptSelectionSummary {
 	sequenceName: string;
 	start: number;
 	end: number;
+	/** The selection expanded to frame boundaries, in sequence seconds. */
+	editBounds: { start: number; end: number };
 	text: string;
 	sentences: TranscriptSentenceSummary[];
 }
