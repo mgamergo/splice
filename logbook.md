@@ -128,3 +128,10 @@ This is the order I'll build it in, one PR per milestone and stacked where neede
   P3 (known limitations): Windows reserved names like CON.demo (exports.ts:50); captions_correct revision check before awaiting profile read (editor-api.ts:437).
 - 16:05 User: moving the project to a different machine — commit finished work, discard anything mid-implementation, stop.
   STATE: main has #1–#19. Open: #20 (H1) needs round 2 for the 7 P2s above, then Codex re-verify + CodeRabbit, then merge. Next: H2 (approval checkpoints, review issues + dismissals, export gate, reopen summary) stacked on H1, then H3–H6 (see build plan above). Merge bar: no P1/P2; P3s → known limitations.
+
+## 2026-11-24 evening (new machine: instabox, 4 vCPU / 8 GB / 20 GB)
+
+- #20 (H1) was merged before its round-2 fixes, so the 7 P2s go to a follow-up PR (`fix/h1-review`).
+- User: work fast with parallel builders; one Codex review round per PR (gpt-6.1-sol, the latest sol available, medium effort); don't wait for CodeRabbit; keep merging.
+- Five Claude builders started in worktrees on this machine (no devbox CLI here): `fix/h1-review`, H2 `feat/h2-approval`, H3 graphics, H4 `feat/h4-final-mix`, H6 cut transcript. Heavy steps (build:web, browser e2e) serialize on a shared flock so the 8 GB box doesn't OOM. H5 waits for H3 (cards/zooms).
+- PR #21 (`fix/h1-review`, a04b1901): all 7 P2s fixed + the captions_correct revision P3; 524 pass. Pairs now publish as one folder rename into `Exports/<stem>/`; deliveryId makes Retry idempotent. The FFmpeg loudness test (true peak −4.9 vs −5) fails on main too once FFmpeg is installed (CI has no FFmpeg, so it skips there). Codex review (gpt-6.1-sol, medium) started.
