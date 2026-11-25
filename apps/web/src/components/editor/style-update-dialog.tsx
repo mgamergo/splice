@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { fetchStyleDefaults, projectStyle } from "@/agent/style-profile";
+import { fetchStyleDefaults, oldestStyleRevision } from "@/agent/style-profile";
 import { StyleUpdateApi, type StylePreview } from "@/agent/style-update";
 import { readBridgeToken } from "@/bridge/token";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,12 @@ import { mediaTimeFromSeconds, mediaTimeToSeconds } from "@/wasm";
 
 export function StyleUpdateDialog() {
 	const editor = useEditor();
-	const project = useEditor((e) => e.project.getActive());
+	const current = useEditor((e) =>
+		oldestStyleRevision({
+			project: e.project.getActive(),
+			sequences: e.sequences.getSequences(),
+		}),
+	);
 	const api = useMemo(() => new StyleUpdateApi({ editor }), [editor]);
 	const [latest, setLatest] = useState(0);
 	const [preview, setPreview] = useState<StylePreview | null>(null);
@@ -57,7 +62,12 @@ export function StyleUpdateDialog() {
 				editor.playback.pause();
 				setPreview(next);
 			} else {
-				setLatest(projectStyle(editor.project.getActive()).revision);
+				setLatest(
+					oldestStyleRevision({
+						project: editor.project.getActive(),
+						sequences: editor.sequences.getSequences(),
+					}),
+				);
 			}
 		} catch (error) {
 			toast.error(
@@ -93,7 +103,7 @@ export function StyleUpdateDialog() {
 
 	return (
 		<>
-			{latest > projectStyle(project).revision && (
+			{latest > current && (
 				<Button
 					size="sm"
 					variant="outline"

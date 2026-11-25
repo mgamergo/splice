@@ -8,7 +8,7 @@ import { CAPTION_TRACK_NAME } from "@/agent/short-captions";
 import { layoutShort } from "@/agent/short-layout";
 import {
 	fetchStyleDefaults,
-	projectStyle,
+	oldestStyleRevision,
 	sequenceStyle,
 } from "@/agent/style-profile";
 import { BatchCommand } from "@/commands/batch-command";
@@ -152,6 +152,8 @@ export function planStyleUpdate({
 	const canvas = project.settings.canvasSize;
 	return sequences.map((before) => {
 		const oldStyle = sequenceStyle({ project, sequence: before });
+		if (oldStyle.revision >= defaults.revision)
+			return { before, after: before, changes: [] };
 		const graphics = syncGraphics({
 			sequence: before,
 			projectItems,
@@ -230,7 +232,8 @@ export class StyleUpdateApi {
 			throw new Error(
 				"Finish the current edit before previewing a style update.",
 			);
-		const from = projectStyle(project).revision;
+		const sequences = this.editor.sequences.getSequences();
+		const from = oldestStyleRevision({ project, sequences });
 		if (defaults.revision <= from) return null;
 		const preview: StylePreview = {
 			id: generateUUID(),
@@ -242,7 +245,7 @@ export class StyleUpdateApi {
 			defaults,
 			sequences: planStyleUpdate({
 				project,
-				sequences: this.editor.sequences.getSequences(),
+				sequences,
 				projectItems: this.editor.media.getProjectItems(),
 				defaults,
 			}),

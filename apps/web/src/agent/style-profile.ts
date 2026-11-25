@@ -26,6 +26,20 @@ export function sequenceStyle({
 	return sequence.styleDefaults ?? projectStyle(project);
 }
 
+export function oldestStyleRevision({
+	project,
+	sequences,
+}: {
+	project: TProject;
+	sequences: TSequence[];
+}) {
+	return sequences.reduce(
+		(revision, sequence) =>
+			Math.min(revision, sequenceStyle({ project, sequence }).revision),
+		projectStyle(project).revision,
+	);
+}
+
 export async function fetchStyleDefaults() {
 	return styleDefaultsSchema.parse(
 		await callSplice({ method: "style.defaults" }),
