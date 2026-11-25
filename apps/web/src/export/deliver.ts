@@ -39,7 +39,7 @@ export function takeDeliverySnapshot({
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
 	const cues = (reviewedCues ?? sequenceCaptionCues({ editor, sequence })).filter(
-		({ text }) => text,
+		({ text }) => text.trim(),
 	);
 	const { width, height, fps } = PROJECT_FORMATS.horizontal;
 	const revision = editor.command.getRevision();

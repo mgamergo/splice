@@ -52,7 +52,9 @@ function Row({
 export function ReopenSummary() {
 	const editor = useEditor();
 	const project = useEditor((e) => e.project.getActiveOrNull());
-	const review = useReviewState();
+	const sequenceId = useEditor(
+		(e) => e.sequences.getActiveSequenceOrNull()?.id,
+	);
 	const { exports, error } = useProjectExports();
 	const horizontal = !!project && projectFormat({ project }) === "horizontal";
 	const spellings = useApprovalSpellings({ enabled: horizontal });
@@ -60,6 +62,7 @@ export function ReopenSummary() {
 	const shown = useRef(false);
 	const setActiveTab = useLibraryPanelStore((state) => state.setActiveTab);
 	const [open, setOpen] = useState(false);
+	const review = useReviewState({ enabled: open });
 	const projectId = project?.metadata.id;
 	const checkpoints = projectApproval(project).checkpoints;
 
@@ -74,7 +77,7 @@ export function ReopenSummary() {
 			return;
 		shown.current = true;
 		if (checkpoints.length > 0 || (exports?.length ?? 0) > 0) setOpen(true);
-	}, [ready, projectId, review, exports, error, checkpoints.length]);
+	}, [ready, projectId, sequenceId, exports, error, checkpoints.length]);
 
 	if (!open || !review || !project) return null;
 	const { sequence, comparison, unresolved } = review;

@@ -62,6 +62,7 @@ export function hashText(text: string): string {
 
 /** A run of the track that plays one stretch of one source without a break. */
 interface Run {
+	name: string;
 	start: number;
 	end: number;
 	key: string;
@@ -128,7 +129,7 @@ function trackRuns({
 			previous.sourceEnd = sourceEnd;
 			continue;
 		}
-		runs.push({ start, end, key, sourceStart, sourceEnd });
+		runs.push({ name: clip.name, start, end, key, sourceStart, sourceEnd });
 	}
 	return runs;
 }
@@ -322,7 +323,7 @@ function trackChanges({
 						kind: "changed",
 						evidence: hashText(stableStringify([run, match])),
 						what: "clip",
-						label,
+						label: match.name || label,
 						start: match.start,
 						end: match.end,
 						approvedStart: run.start,
@@ -334,7 +335,7 @@ function trackChanges({
 					kind: "removed",
 					evidence: hashText(stableStringify(run)),
 					what: "clip",
-					label,
+					label: run.name || label,
 					start: anchor,
 					end: anchor,
 					approvedStart: run.start,
@@ -346,7 +347,7 @@ function trackChanges({
 					kind: "added",
 					evidence: hashText(stableStringify(run)),
 					what: "clip",
-					label,
+					label: run.name || label,
 					start: run.start,
 					end: run.end,
 					approvedStart: approvedAnchor,
@@ -495,8 +496,8 @@ function cueChanges({
 	toCurrent: TimeMap;
 	duration: number;
 }): CheckpointChange[] {
-	const before = approved.filter(({ text }) => text);
-	const after = current.filter(({ text }) => text);
+	const before = approved.filter(({ text }) => text.trim());
+	const after = current.filter(({ text }) => text.trim());
 	const pairs = alignLists({
 		before,
 		after,

@@ -6,7 +6,9 @@ import { type ListedExport, listExports } from "@/export/deliver";
 import { type ReviewState, reviewState } from "./review";
 
 /** The active sequence's approval state, recomputed as the edit changes. */
-export function useReviewState(): ReviewState | null {
+export function useReviewState({
+	enabled = true,
+}: { enabled?: boolean } = {}): ReviewState | null {
 	const editor = useEditor();
 	const sequence = useEditor((e) => e.sequences.getActiveSequenceOrNull());
 	const project = useEditor((e) => e.project.getActiveOrNull());
@@ -14,10 +16,10 @@ export function useReviewState(): ReviewState | null {
 	const spellings = useCaptionsStore((state) => state.spellings);
 	return useMemo(
 		() =>
-			sequence && project && projectItems
+			enabled && sequence && project && projectItems
 				? reviewState({ editor, sequence, spellings })
 				: null,
-		[editor, sequence, project, projectItems, spellings],
+		[editor, enabled, sequence, project, projectItems, spellings],
 	);
 }
 
