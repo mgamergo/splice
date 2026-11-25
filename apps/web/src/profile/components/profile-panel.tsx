@@ -48,6 +48,10 @@ function ProfileContents() {
 	const [loadError, setLoadError] = useState("");
 	const [actionError, setActionError] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [confirming, setConfirming] = useState<{
+		id: string;
+		conflicts: string[];
+	}>();
 
 	useEffect(() => {
 		let live = true;
@@ -75,9 +79,11 @@ function ProfileContents() {
 	async function revert({
 		kind,
 		id,
+		confirmConflicts,
 	}: {
 		kind: "profile" | "framing";
 		id: string;
+		confirmConflicts?: string[];
 	}) {
 		setBusy(true);
 		setActionError("");
@@ -85,13 +91,15 @@ function ProfileContents() {
 			if (kind === "profile") {
 				await callSplice({
 					method: "profile.revert",
-					params: { id, operationId: crypto.randomUUID() },
+					params: { id, operationId: crypto.randomUUID(), confirmConflicts },
 				});
 			} else {
 				await callSplice({ method: "framing.revert", params: { id } });
 			}
 			setPanel(await readPanel());
+			setConfirming(undefined);
 		} catch (error) {
+			setConfirming(undefined);
 			setActionError(
 				error instanceof Error
 					? error.message
@@ -119,42 +127,84 @@ function ProfileContents() {
 					<section>
 						<h2 className="font-medium">Update history</h2>
 						{panel.updates.length ? (
-							<>
-								<p className="my-1 text-xs text-muted-foreground">
-									You can revert the latest change to the profile text.
-								</p>
-								<ul className="divide-y">
-									{panel.updates.map((update) => (
-										<li
-											key={update.id}
-											className="flex items-center justify-between gap-2 py-2"
-										>
+							<ul className="divide-y">
+								{panel.updates.map((update) => (
+									<li key={update.id} className="space-y-2 py-2">
+										<div className="flex items-center justify-between gap-2">
 											<div>
 												<time dateTime={update.timestamp}>
 													{new Date(update.timestamp).toLocaleString()}
 												</time>
 												<p className="text-xs text-muted-foreground">
 													{update.reverts
-														? "Reverted a profile update"
-														: `${update.correctionCount} corrections · ${update.answerCount} answers`}
+														? `Reverted update ${update.reverts.slice(0, 8)}`
+														: `${update.id.slice(0, 8)} · ${update.correctionCount} corrections · ${update.answerCount} answers`}
 												</p>
 											</div>
-											{update.canRevert && (
+											{update.canRevert && confirming?.id !== update.id && (
 												<Button
 													size="sm"
 													variant="outline"
 													disabled={busy}
-													onClick={() =>
-														void revert({ kind: "profile", id: update.id })
-													}
+													onClick={() => {
+														if (update.conflicts.length) {
+															setConfirming({
+																id: update.id,
+																conflicts: update.conflicts,
+															});
+															setActionError("");
+														} else {
+															void revert({ kind: "profile", id: update.id });
+														}
+													}}
 												>
 													Revert
 												</Button>
 											)}
-										</li>
-									))}
-								</ul>
-							</>
+										</div>
+										{update.canRevert && update.conflicts.length > 0 && (
+											<p className="text-xs text-muted-foreground">
+												Conflicts with{" "}
+												{update.conflicts.length === 1 ? "update" : "updates"}{" "}
+												{update.conflicts
+													.map((id) => id.slice(0, 8))
+													.join(", ")}
+												.
+											</p>
+										)}
+										{update.canRevert && confirming?.id === update.id && (
+											<div className="flex flex-wrap gap-2">
+												<Button
+													size="sm"
+													variant="ghost"
+													disabled={busy}
+													onClick={() => setConfirming(undefined)}
+												>
+													Cancel
+												</Button>
+												<Button
+													size="sm"
+													variant="outline"
+													disabled={
+														busy ||
+														confirming.conflicts.join() !==
+															update.conflicts.join()
+													}
+													onClick={() =>
+														void revert({
+															kind: "profile",
+															id: update.id,
+															confirmConflicts: confirming.conflicts,
+														})
+													}
+												>
+													Revert and overwrite conflicts
+												</Button>
+											</div>
+										)}
+									</li>
+								))}
+							</ul>
 						) : (
 							<p className="text-muted-foreground">No updates yet.</p>
 						)}

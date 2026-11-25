@@ -133,20 +133,46 @@ async function callCli({
 export function createProfileProviders({
 	root,
 	apiKey = process.env.SPLICE_PROFILE_API_KEY,
+	baseUrl = process.env.SPLICE_PROFILE_BASE_URL,
 	request = fetch,
 }: {
 	root: string;
 	apiKey?: string;
+	baseUrl?: string;
 	request?: (url: string, options: RequestInit) => Promise<Response>;
 }) {
 	const directory = join(root, "Profile");
 	const path = join(directory, "provider.json");
 	let writing: Promise<unknown> = Promise.resolve();
 
+	// The endpoint and credentials are fixed for the life of the server.
+	const configured = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : null;
+	const endpoint =
+		configured &&
+		!configured.username &&
+		!configured.password &&
+		!configured.search &&
+		!configured.hash &&
+		(configured.protocol === "https:" ||
+			(configured.protocol === "http:" &&
+				["localhost", "127.0.0.1", "[::1]"].includes(configured.hostname)))
+			? `${configured.origin}${configured.pathname.replace(/\/+$/, "")}/chat/completions`
+			: null;
+	const availability = { apiAvailable: endpoint !== null, hasApiKey: !!apiKey };
+
 	async function read(): Promise<ProfileProviderSettings> {
 		try {
+			const stored: unknown = JSON.parse(await readFile(path, "utf8"));
+			// Older settings included a browser-controlled URL. Discard it on load.
 			const settings = profileProviderSchema.safeParse(
-				JSON.parse(await readFile(path, "utf8")),
+				stored &&
+					typeof stored === "object" &&
+					"kind" in stored &&
+					stored.kind === "api" &&
+					"model" in stored &&
+					"baseUrl" in stored
+					? { kind: "api", model: stored.model }
+					: stored,
 			);
 			if (settings.success && !containsKey(settings.data)) return settings.data;
 			throw new Error("Invalid provider settings.");
@@ -161,14 +187,12 @@ export function createProfileProviders({
 
 	function containsKey(provider: ProfileProviderSettings) {
 		return (
-			provider.kind === "api" &&
-			!!apiKey &&
-			[provider.baseUrl, provider.model].some((value) => value.includes(apiKey))
+			provider.kind === "api" && !!apiKey && provider.model.includes(apiKey)
 		);
 	}
 
 	async function settings() {
-		return { provider: await read(), hasApiKey: !!apiKey };
+		return { provider: await read(), ...availability };
 	}
 
 	return {
@@ -177,9 +201,13 @@ export function createProfileProviders({
 			const parsed = profileProviderSchema.safeParse(params);
 			if (!parsed.success || containsKey(parsed.data))
 				throw invalidParams(
-					"Check the provider settings. Use HTTPS or a local HTTP URL, and enable CLI use explicitly.",
+					"Check the provider settings. Enter a model or enable CLI use explicitly.",
 				);
 			const provider = parsed.data;
+			if (provider.kind === "api" && !endpoint)
+				throw invalidParams(
+					"Set SPLICE_PROFILE_BASE_URL in the server environment and restart Splice.",
+				);
 			const run = writing.then(async () => {
 				await mkdir(directory, { recursive: true });
 				const temporary = `${path}.tmp`;
@@ -191,7 +219,7 @@ export function createProfileProviders({
 				} finally {
 					await rm(temporary, { force: true });
 				}
-				return { provider, hasApiKey: !!apiKey };
+				return { provider, ...availability };
 			});
 			writing = run.catch(() => {});
 			return run;
@@ -202,9 +230,9 @@ export function createProfileProviders({
 			if (provider.kind === "cli")
 				return ({ prompt, signal }) =>
 					callCli({ command: provider.command, prompt, signal });
+			if (!endpoint) return null;
 			return async ({ prompt, signal }) => {
-				const url = `${new URL(provider.baseUrl).href.replace(/\/+$/, "")}/chat/completions`;
-				const response = await request(url, {
+				const response = await request(endpoint, {
 					method: "POST",
 					redirect: "error",
 					headers: {

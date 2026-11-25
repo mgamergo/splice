@@ -14,21 +14,29 @@ import {
 import { z } from "zod";
 import { invalidParams } from "./transcription";
 
-const EMPTY_PROFILE = `# Editing profile
-
-No preferences have been learned yet.
-
-## Take selection
-
-## Tightening
-`;
+import {
+	changeKind,
+	changeSchema,
+	EMPTY_PROFILE,
+	entrySchema,
+	manualEntries,
+	type Preference,
+	preferenceChanges,
+	type ProfileEntry,
+	renderProfile,
+	validateAnalysis,
+} from "./profile-preferences";
 
 const questionResponseSchema = z.strictObject({
 	question: profileQuestionSchema,
 	answer: z.string().nullable(),
 });
 
-const revertSchema = z.strictObject({ id: z.uuid(), operationId: z.uuid() });
+const revertSchema = z.strictObject({
+	id: z.uuid(),
+	operationId: z.uuid(),
+	confirmConflicts: z.array(z.uuid()).optional(),
+});
 
 const updateSchema = z.strictObject({
 	id: z.uuid(),
@@ -39,10 +47,104 @@ const updateSchema = z.strictObject({
 	question: profileQuestionSchema.optional(),
 	reverts: z.uuid().optional(),
 	text: z.string(),
+	entries: z.array(entrySchema).optional(),
+	changes: z.array(changeSchema).optional(),
+	confirmedConflicts: z.array(z.uuid()).optional(),
 	operation: z
 		.strictObject({ id: z.uuid(), requestHash: z.string() })
 		.optional(),
 });
+
+type Update = z.infer<typeof updateSchema>;
+
+function changesFor(update: Update) {
+	return (
+		update.changes ??
+		preferenceChanges({
+			before: manualEntries(update.previousText),
+			after: manualEntries(update.text),
+		})
+	);
+}
+
+function entriesFor(text: string, latest: Update | undefined) {
+	return latest?.text === text && latest.entries
+		? latest.entries
+		: manualEntries(text);
+}
+
+function revertHistory(updates: Update[]) {
+	const indices = new Map(updates.map(({ id }, index) => [id, index]));
+	const reverted = new Map<string, number>();
+	for (const [index, update] of updates.entries()) {
+		if (update.reverts) reverted.set(update.reverts, index);
+	}
+	const lastWrites = new Map<ReturnType<typeof changeKind>, number>();
+	const activeWrites = new Map<ReturnType<typeof changeKind>, number>();
+	const changes = updates.map((update, index) => {
+		const changes = changesFor(update);
+		for (const change of changes) {
+			const kind = changeKind(change);
+			lastWrites.set(kind, index);
+			if (!update.reverts && !reverted.has(update.id))
+				activeWrites.set(kind, index);
+		}
+		return changes;
+	});
+
+	function conflictsAt(index: number) {
+		const conflicts = new Set<number>();
+		for (const change of changes[index] ?? []) {
+			const later = activeWrites.get(changeKind(change));
+			if (later !== undefined && later > index) conflicts.add(later);
+		}
+		return [...conflicts]
+			.sort((a, b) => a - b)
+			.map((later) => updates[later].id);
+	}
+
+	function inverseAt(index: number, entries: ProfileEntry[]) {
+		const next = new Map(entries.map((entry) => [entry.kind, entry]));
+		for (const change of changes[index] ?? []) {
+			const kind = changeKind(change);
+			if (!kind) continue;
+			const lastWriter = lastWrites.get(kind) ?? index;
+			const undone = updates[lastWriter]?.reverts;
+			// A confirmed revert of an older update already replaced this value.
+			if (
+				undone &&
+				(indices.get(undone) ?? index) < index &&
+				lastWriter > index
+			)
+				continue;
+			let before = change.before;
+			// If an earlier writer has since been reverted, walk back through its
+			// input too. A later revert must not resurrect an already undone value.
+			for (let prior = index - 1; prior >= 0; prior--) {
+				const earlier = changes[prior]?.find(
+					(entry) => changeKind(entry) === kind,
+				);
+				if (!earlier) continue;
+				if (
+					(reverted.get(updates[prior].id) ?? -1) <= index ||
+					JSON.stringify(earlier.after) !== JSON.stringify(before)
+				)
+					break;
+				before = earlier.before;
+			}
+			if (before) next.set(kind, before);
+			else next.delete(kind);
+		}
+		return [...next.values()];
+	}
+
+	return {
+		canRevert: (update: Update, index: number) =>
+			!update.reverts && !reverted.has(update.id) && !!changes[index]?.length,
+		conflictsAt,
+		inverseAt,
+	};
+}
 
 const transactionSchema = z.strictObject({
 	kind: z.enum(["capture", "apply"]),
@@ -316,9 +418,14 @@ export function createProfileStore({ root }: { root: string }) {
 		answerIds,
 		question,
 		reverts,
+		entries,
+		confirmedConflicts,
 		signal,
 	}: z.infer<typeof profileApplySchema> &
-		Pick<z.infer<typeof updateSchema>, "answerIds" | "question" | "reverts"> & {
+		Pick<
+			z.infer<typeof updateSchema>,
+			"answerIds" | "question" | "reverts" | "entries" | "confirmedConflicts"
+		> & {
 			signal?: AbortSignal;
 		}) {
 		const requestHash = versionOf(
@@ -329,9 +436,12 @@ export function createProfileStore({ root }: { root: string }) {
 				answerIds,
 				question,
 				reverts,
+				entries,
+				confirmedConflicts,
 			}),
 		);
-		const previous = (await readUpdates()).find(
+		const updates = await readUpdates();
+		const previous = updates.find(
 			({ operation }) => operation?.id === operationId,
 		);
 		if (previous) {
@@ -352,6 +462,9 @@ export function createProfileStore({ root }: { root: string }) {
 		const ids = [...new Set(correctionIds)];
 		if (ids.some((id) => !pending.has(id)))
 			throw invalidParams("Every correction ID must still be pending.");
+		const before = entriesFor(previousText, updates.at(-1));
+		const after =
+			entries ?? (text === previousText ? before : manualEntries(text));
 		const update = {
 			id: randomUUID(),
 			timestamp: new Date().toISOString(),
@@ -361,6 +474,9 @@ export function createProfileStore({ root }: { root: string }) {
 			answerIds,
 			question,
 			reverts,
+			entries: after,
+			changes: preferenceChanges({ before, after }),
+			confirmedConflicts,
 			operation: { id: operationId, requestHash },
 		};
 		const offset = await sizeIfPresent(updatesPath);
@@ -435,24 +551,33 @@ export function createProfileStore({ root }: { root: string }) {
 		panel: () =>
 			serialized(async () => {
 				const text = await readProfile();
-				const updates = (await readUpdates()).reverse();
-				const latest = updates.findIndex(
-					(update) => update.previousText !== update.text,
-				);
+				const updates = await readUpdates();
+				const history = revertHistory(updates);
+				const current = updates.at(-1)?.text === text;
 				return {
 					text,
-					updates: updates.map((update, index) => ({
-						id: update.id,
-						timestamp: update.timestamp,
-						correctionCount: update.correctionIds.length,
-						answerCount: update.answerIds?.length ?? 0,
-						reverts: update.reverts,
-						canRevert: index === latest && update.text === text,
-					})),
+					updates: updates
+						.map((update, index) => {
+							const canRevert = current && history.canRevert(update, index);
+							return {
+								id: update.id,
+								timestamp: update.timestamp,
+								correctionCount: update.correctionIds.length,
+								answerCount: update.answerIds?.length ?? 0,
+								reverts: update.reverts,
+								canRevert,
+								conflicts: canRevert ? history.conflictsAt(index) : [],
+							};
+						})
+						.reverse(),
 				};
 			}),
 		async revert(params: unknown) {
-			const { id, operationId } = parseRequest({
+			const {
+				id,
+				operationId,
+				confirmConflicts = [],
+			} = parseRequest({
 				schema: revertSchema,
 				params,
 			});
@@ -462,21 +587,46 @@ export function createProfileStore({ root }: { root: string }) {
 					const previous = updates.find(
 						(update) => update.operation?.id === operationId,
 					);
-					if (previous?.reverts === id) return applyResult(previous);
-					const latest = updates
-						.reverse()
-						.find((update) => update.previousText !== update.text);
+					if (previous) {
+						if (
+							previous.reverts !== id ||
+							JSON.stringify(previous.confirmedConflicts ?? []) !==
+								JSON.stringify(confirmConflicts)
+						)
+							throw invalidParams(
+								"This operation ID was already used with different arguments.",
+							);
+						return applyResult(previous);
+					}
+					const index = updates.findIndex((update) => update.id === id);
+					const target = updates[index];
+					const latest = updates.at(-1);
 					const text = await readProfile();
-					if (!latest || latest.id !== id || latest.text !== text)
+					const history = revertHistory(updates);
+					if (
+						!target ||
+						latest?.text !== text ||
+						!history.canRevert(target, index)
+					)
 						throw invalidParams(
-							"Only the latest change to the editing profile text can be reverted.",
+							"This profile update can no longer be reverted.",
 						);
+					const conflicts = history.conflictsAt(index);
+					if (JSON.stringify(conflicts) !== JSON.stringify(confirmConflicts))
+						throw invalidParams(
+							conflicts.length
+								? `This revert conflicts with update ${conflicts.join(", ")}. Review the conflicts before confirming.`
+								: "Revert conflicts changed. Review this update before trying again.",
+						);
+					const entries = history.inverseAt(index, entriesFor(text, latest));
 					return apply({
-						text: latest.previousText,
+						text: renderProfile(entries),
+						entries,
 						correctionIds: [],
 						expectedVersion: versionOf(text),
 						operationId,
 						reverts: id,
+						confirmedConflicts: confirmConflicts,
 					});
 				}),
 			);
@@ -519,11 +669,11 @@ export function createProfileStore({ root }: { root: string }) {
 		}: {
 			signal: AbortSignal;
 			analyze: (batch: {
-				text: string;
+				preferences: Preference[];
 				corrections: Awaited<ReturnType<typeof readCorrections>>;
-				answers: { question: string; answer: string }[];
+				answers: { id: string; question: string; answer: string }[];
 				canAsk: boolean;
-			}) => Promise<{ text: string; question: string | null }>;
+			}) => Promise<unknown>;
 		}) {
 			return profileChange(async () => {
 				if (signal.aborted) return false;
@@ -533,8 +683,10 @@ export function createProfileStore({ root }: { root: string }) {
 					const used = new Set(
 						updates.flatMap(({ answerIds }) => answerIds ?? []),
 					);
+					const text = await readProfile();
 					return {
-						text: await readProfile(),
+						text,
+						entries: entriesFor(text, updates.at(-1)),
 						corrections: (await readCorrections(pendingPath)).slice(0, 12),
 						evidence: responses
 							.flatMap(({ question, answer }) =>
@@ -552,26 +704,37 @@ export function createProfileStore({ root }: { root: string }) {
 				)
 					return false;
 				const result = await analyze({
-					text: batch.text,
+					preferences: batch.entries.filter((entry) => entry.kind !== "manual"),
 					corrections: batch.corrections,
-					answers: batch.evidence.map(({ question, answer }) => ({
-						question,
-						answer,
-					})),
-					canAsk: batch.canAsk,
+					answers: batch.evidence,
+					canAsk: batch.canAsk && batch.corrections.length > 0,
 				});
 				return serialized(async () => {
 					if (signal.aborted) return false;
+					const correctionIds = batch.corrections.map(({ id }) => id);
+					const answerIds = batch.evidence.map(({ id }) => id);
+					const { preferences, question } = validateAnalysis({
+						result,
+						evidence: new Set([...correctionIds, ...answerIds]),
+					});
+					const entries = new Map(
+						batch.entries.map((entry) => [entry.kind, entry]),
+					);
+					for (const preference of preferences) {
+						entries.set(preference.kind, preference);
+					}
+					const after = [...entries.values()];
 					await apply({
-						text: result.text,
-						correctionIds: batch.corrections.map(({ id }) => id),
-						answerIds: batch.evidence.map(({ id }) => id),
+						text: renderProfile(after),
+						entries: after,
+						correctionIds,
+						answerIds,
 						signal,
 						expectedVersion: versionOf(batch.text),
 						operationId: randomUUID(),
 						question:
-							batch.canAsk && result.question
-								? { id: randomUUID(), text: result.question }
+							batch.canAsk && correctionIds.length && question
+								? { id: randomUUID(), text: question }
 								: undefined,
 					});
 					return true;

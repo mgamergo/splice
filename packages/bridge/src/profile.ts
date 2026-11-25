@@ -141,6 +141,7 @@ export const profileUpdateSummarySchema = z.strictObject({
 	answerCount: z.number().int().nonnegative(),
 	reverts: z.uuid().optional(),
 	canRevert: z.boolean(),
+	conflicts: z.array(z.uuid()).default([]),
 });
 
 export const profilePanelSchema = z.strictObject({
@@ -152,21 +153,6 @@ export const profileProviderSchema = z.discriminatedUnion("kind", [
 	z.strictObject({ kind: z.literal("off") }),
 	z.strictObject({
 		kind: z.literal("api"),
-		baseUrl: z
-			.url({ protocol: /^https?$/ })
-			.max(500)
-			.refine((value) => {
-				if (!URL.canParse(value)) return false;
-				const url = new URL(value);
-				return (
-					!url.username &&
-					!url.password &&
-					!url.search &&
-					!url.hash &&
-					(url.protocol === "https:" ||
-						["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
-				);
-			}),
 		model: z.string().trim().min(1).max(200),
 	}),
 	z.strictObject({
@@ -180,4 +166,5 @@ export type ProfileProviderSettings = z.infer<typeof profileProviderSchema>;
 export const profileSettingsSchema = z.strictObject({
 	provider: profileProviderSchema,
 	hasApiKey: z.boolean(),
+	apiAvailable: z.boolean(),
 });

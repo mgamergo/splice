@@ -67,7 +67,6 @@ function ProviderSettings() {
 			choice === "api"
 				? {
 						kind: "api",
-						baseUrl: form.get("baseUrl"),
 						model: form.get("model"),
 					}
 				: choice === "off"
@@ -80,8 +79,7 @@ function ProviderSettings() {
 		);
 		if (!parsed.success) {
 			setStatus({
-				error:
-					"Enter a model and a valid HTTPS or local HTTP base URL, or confirm CLI use.",
+				error: "Enter a model or confirm CLI use.",
 			});
 			return;
 		}
@@ -106,8 +104,7 @@ function ProviderSettings() {
 		}
 	}
 
-	if (loading)
-		return <p className="p-3 text-sm">Loading provider settings…</p>;
+	if (loading) return <p className="p-3 text-sm">Loading provider settings…</p>;
 
 	const provider = settings?.provider;
 	return (
@@ -127,7 +124,9 @@ function ProviderSettings() {
 					}}
 				>
 					<option value="off">Off</option>
-					<option value="api">OpenAI-compatible API</option>
+					<option value="api" disabled={!settings?.apiAvailable}>
+						OpenAI-compatible API
+					</option>
 					<option value="codex">Codex CLI</option>
 					<option value="claude">Claude Code CLI</option>
 				</select>
@@ -137,19 +136,14 @@ function ProviderSettings() {
 					Corrections stay pending for MCP processing.
 				</p>
 			)}
+			{!settings?.apiAvailable && (
+				<p className="text-muted-foreground">
+					To enable the API provider, set <code>SPLICE_PROFILE_BASE_URL</code>{" "}
+					in the server environment and restart Splice.
+				</p>
+			)}
 			{choice === "api" && (
 				<>
-					<label className="block space-y-1" htmlFor="profile-base-url">
-						<span>Base URL</span>
-						<Input
-							id="profile-base-url"
-							name="baseUrl"
-							type="url"
-							required
-							placeholder="https://openrouter.ai/api/v1"
-							defaultValue={provider?.kind === "api" ? provider.baseUrl : ""}
-						/>
-					</label>
 					<label className="block space-y-1" htmlFor="profile-model">
 						<span>Model</span>
 						<Input
@@ -171,8 +165,8 @@ function ProviderSettings() {
 						)}
 					</p>
 					<p className="text-muted-foreground">
-						Splice sends profile text, correction summaries, and answers to this
-						endpoint.
+						Splice sends typed preferences, correction summaries, and answers to
+						the server-configured API endpoint.
 					</p>
 				</>
 			)}
@@ -193,7 +187,11 @@ function ProviderSettings() {
 					</span>
 				</label>
 			)}
-			<Button size="sm" type="submit" disabled={saving}>
+			<Button
+				size="sm"
+				type="submit"
+				disabled={saving || (choice === "api" && !settings?.apiAvailable)}
+			>
 				{saving ? "Saving…" : "Save provider"}
 			</Button>
 			{status.error && <p role="alert">{status.error}</p>}

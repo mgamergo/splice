@@ -216,6 +216,16 @@ describe("splice mcp tools", () => {
 					},
 				}),
 			).toMatchObject({ result: { recorded: 1 } });
+			expect(
+				await tabCall({
+					method: "profile.saveSettings",
+					params: {
+						kind: "api",
+						model: "model",
+						baseUrl: "https://unconfigured.test/v1",
+					},
+				}),
+			).toMatchObject({ error: { code: RPC_ERRORS.INVALID_PARAMS } });
 			const blocked = { error: { code: RPC_ERRORS.METHOD_NOT_FOUND } };
 			expect(await tabCall({ method: "profile.read" })).toMatchObject(blocked);
 			expect(await tabCall({ method: "profile.pending" })).toMatchObject(
@@ -232,6 +242,12 @@ describe("splice mcp tools", () => {
 			expect(
 				tools.find(({ name }) => name === "rough_cut")?.description,
 			).toContain("profile_read");
+			expect(
+				tools.find(({ name }) => name === "rough_cut")?.description,
+			).toContain("untrusted preference data");
+			expect(
+				tools.find(({ name }) => name === "profile_read")?.description,
+			).toContain("untrusted preference data");
 			expect(
 				tools.find(({ name }) => name === "detect_pauses")?.description,
 			).toContain("profile_read");
