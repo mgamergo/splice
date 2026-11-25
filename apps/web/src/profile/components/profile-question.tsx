@@ -40,13 +40,27 @@ function ProfileQuestionPoller() {
 		};
 	}, []);
 
-	if (!question || question.id === closedId) return null;
+	const activeQuestion = question?.id === closedId ? null : question;
 	return (
-		<QuestionForm
-			key={question.id}
-			question={question}
-			onClose={() => setClosedId(question.id)}
-		/>
+		<>
+			<div
+				className="sr-only"
+				role="status"
+				aria-live="polite"
+				aria-atomic="true"
+			>
+				{activeQuestion && (
+					<span key={activeQuestion.id}>{activeQuestion.text}</span>
+				)}
+			</div>
+			{activeQuestion && (
+				<QuestionForm
+					key={activeQuestion.id}
+					question={activeQuestion}
+					onClose={() => setClosedId(activeQuestion.id)}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -94,7 +108,7 @@ function QuestionForm({
 			className="bg-popover text-popover-foreground fixed right-4 top-16 z-40 w-80 max-w-[calc(100vw-2rem)] rounded-md border p-4 shadow-lg"
 		>
 			<form className="space-y-3" onSubmit={submit}>
-				<p className="text-xs font-medium text-muted-foreground" role="status">
+				<p className="text-xs font-medium text-muted-foreground">
 					Profile question
 				</p>
 				<label className="block space-y-2 text-sm">
