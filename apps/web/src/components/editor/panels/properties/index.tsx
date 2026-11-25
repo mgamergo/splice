@@ -13,19 +13,21 @@ import { useClipSelection } from "@/timeline/hooks/clip/use-clip-selection";
 import { usePropertiesStore } from "./stores/properties-store";
 import { getPropertiesConfig } from "./registry";
 import { cn } from "@/utils/ui";
+import { GraphicEvidence, UnplacedGraphics } from "./components/graphic-evidence";
 import { EmptyView } from "./empty-view";
 
 export function PropertiesPanel() {
 	const editor = useEditor();
-	useEditor((e) => e.sequences.getActiveSequenceOrNull());
+	const sequence = useEditor((e) => e.sequences.getActiveSequenceOrNull());
 	useEditor((e) => e.media.getProjectItems());
 	const { selectedClips } = useClipSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
 
 	if (selectedClips.length === 0) {
+		const unplaced = sequence?.graphics?.records.filter(({ placed }) => !placed) ?? [];
 		return (
 			<div className="panel bg-background flex h-full flex-col items-center justify-center overflow-hidden rounded-sm border">
-				<EmptyView />
+				{unplaced.length > 0 ? <UnplacedGraphics graphics={unplaced} /> : <EmptyView />}
 			</div>
 		);
 	}
@@ -50,6 +52,7 @@ export function PropertiesPanel() {
 	if (!clipWithTrack) return null;
 
 	const { clip, track } = clipWithTrack;
+	const graphic = sequence?.graphics?.records.find(({ id }) => id === clip.graphicId);
 	const config = getPropertiesConfig({ clip, projectItems });
 	const visibleTabs = config.tabs;
 
@@ -93,6 +96,14 @@ export function PropertiesPanel() {
 				</div>
 			</TooltipProvider>
 			<ScrollArea className="flex-1 scrollbar-hidden">
+				{graphic && (
+					<>
+						<GraphicEvidence graphic={graphic} />
+						{graphic.flags.map(({ code, message }) => (
+							<p key={code} className="border-b p-3 text-sm text-muted-foreground">{message}</p>
+						))}
+					</>
+				)}
 				{activeTab.content({ trackId: track.id })}
 			</ScrollArea>
 		</div>
