@@ -62,7 +62,7 @@ Fill the **Transitions** tab. A transition sits on the edit between two adjacent
 ### 4. Text, emoji and caption styles
 
 - Text presets: titles, lower thirds, callouts, labels, with in/out animations (fade, slide, pop, typewriter, word-by-word, letter stagger) built on keyframes.
-- Emoji: a searchable picker using an openly licensed set (Noto Emoji or Twemoji; check the license of any animated set before bundling it), usable inline in text and as stickers.
+- Emoji: **done for stickers**, as an **Emoji** tab in Stickers with Fluent Emoji Flat (MIT), browsable by category and searchable by name or character. Still to do: emoji inline in text, and animated emoji (check the license of any animated set before bundling it).
 - Caption style presets for Shorts: karaoke highlight of the spoken word, word pop, box background, outline and shadow, emoji emphasis on keywords. Styles are saved with the project and in style defaults. Horizontal stays clean MP4 plus SRT.
 - Import `.ass`/`.ssa` styles as caption presets.
 - More fonts: Google Fonts exists; add user `.ttf`/`.otf` from the Library folder.
