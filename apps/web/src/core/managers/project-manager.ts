@@ -1,3 +1,4 @@
+import { readStyleDefaults, sequenceStyle } from "@/agent/style-profile";
 import {
 	PROJECT_FORMATS,
 	type ProjectFormat,
@@ -97,6 +98,7 @@ export class ProjectManager {
 		format?: ProjectFormat;
 		shortStyle?: ShortStyle;
 	}): Promise<string> {
+		const styleDefaults = await readStyleDefaults();
 		const { width, height, fps } = PROJECT_FORMATS[format];
 		const mainSequence = buildDefaultSequence({
 			name: "Main sequence",
@@ -115,6 +117,7 @@ export class ProjectManager {
 			sequences: [mainSequence],
 			currentSequenceId: mainSequence.id,
 			settings: {
+				styleDefaults,
 				format,
 				...(format === "short" && { shortStyle }),
 				fps: { numerator: fps, denominator: 1 },
@@ -931,6 +934,7 @@ export class ProjectManager {
 					projectItems,
 					canvas,
 					shortStyle: style,
+					style: sequenceStyle({ project, sequence }).values,
 				});
 				const tracks = layoutShort({
 					sequence: { ...reframed, ...synced },
@@ -938,6 +942,7 @@ export class ProjectManager {
 					canvas,
 					projectItems,
 					updateHookVisibility: true,
+					defaults: sequenceStyle({ project, sequence }).values,
 				});
 				return !synced && tracks === sequence.tracks
 					? []

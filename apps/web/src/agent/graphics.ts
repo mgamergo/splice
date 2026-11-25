@@ -5,7 +5,8 @@ import {
 	type CanvasRect,
 	type OverlayRegion,
 } from "@/agent/overlay-bounds";
-import { GRAPHIC_PROPERTIES } from "@splice/bridge/graphics";
+import { BASE_STYLE, type FramingPreference, type StyleDefaults } from "@splice/bridge/style";
+import { GRAPHIC_APPEARANCE_PROPERTIES, GRAPHIC_PROPERTIES } from "@splice/bridge/graphics";
 import type {
 	GraphicFlag,
 	GraphicKind,
@@ -55,15 +56,10 @@ import {
 export const GRAPHICS_TRACK_NAME = "Graphics";
 export const CARDS_TRACK_NAME = "Cards";
 
-const ZOOM_RAMP_SECONDS = 0.4;
-const DEFAULT_MAX_ZOOM = 2.5;
-/** A zoom smaller than this doesn't make the target more legible; the shot stays wide. */
-const MIN_USEFUL_ZOOM = 1.2;
 /** How much of the screen a zoomed target fills, at most. */
 const ZOOM_FILL = 0.7;
-/** Canvas pixels between a target and its highlight box, and the box's line. */
+/** Canvas pixels between a target and its highlight box. */
 const HIGHLIGHT_PADDING = 12;
-const HIGHLIGHT_STROKE = 5;
 /** Actions this close in one recording are the same action. */
 const SAME_ACTION_SECONDS = 1 / 30;
 const MIN_GRAPHIC_SECONDS = 0.3;
@@ -74,7 +70,6 @@ const POSITION_EPSILON = 0.5;
 const SCALE_EPSILON = 1e-3;
 const CARD_LINE_LENGTH = 42;
 const SHORT_CARD_LINE_LENGTH = 22;
-const CARD_FONT_SIZE = 3.2;
 
 const ZOOM_CHANNELS = [
 	"transform.positionX",
@@ -193,19 +188,21 @@ export function planZoomView({
 	frame,
 	target,
 	canvas,
-	maxZoom = DEFAULT_MAX_ZOOM,
+	maxZoom = BASE_STYLE.values.zoom.maxScale,
+	minZoom = BASE_STYLE.values.zoom.minScale,
 }: {
 	frame: CanvasRect;
 	target: CanvasRect;
 	canvas: CanvasSize;
 	maxZoom?: number;
+	minZoom?: number;
 }): ZoomView | null {
 	const scale = Math.min(
 		maxZoom,
 		(ZOOM_FILL * canvas.width) / target.width,
 		(ZOOM_FILL * canvas.height) / target.height,
 	);
-	if (scale < MIN_USEFUL_ZOOM) return null;
+	if (scale < minZoom) return null;
 	const halfView = {
 		x: canvas.width / (2 * scale),
 		y: canvas.height / (2 * scale),
@@ -634,18 +631,49 @@ function graphicClipParams({
 	return params;
 }
 
+function graphicAppearance({
+	record,
+	values,
+	canvas,
+	style,
+}: {
+	record: GraphicRecord;
+	values: GraphicValues;
+	canvas: CanvasSize;
+	style: StyleDefaults["values"];
+}): NonNullable<GraphicValues["appearance"]> {
+	switch (record.kind) {
+		case "card":
+			return {
+				color: style.card.color,
+				fontSize: style.card.fontSize,
+				"background.color": style.card.background,
+				"background.cornerRadius": style.card.cornerRadius,
+			};
+		case "highlight":
+			return {
+				stroke: style.highlight.stroke,
+				cornerRadius: style.highlight.cornerRadius,
+				strokeWidth: Math.min(64, Math.max(1,
+					(style.highlight.width * DEFAULT_GRAPHIC_SOURCE_SIZE) /
+					((record.highlightScale ?? values.scale ?? 1) * handleSide(canvas)),
+				)),
+			};
+		case "zoom":
+			return {};
+	}
+}
+
 function newGraphicClip({
 	record,
 	params,
 	start,
 	duration,
-	canvas,
 }: {
 	record: GraphicRecord;
 	params: Record<string, number | string>;
 	start: number;
 	duration: number;
-	canvas: CanvasSize;
 }): GraphicClip | TextClip {
 	const startTime = ticks(start);
 	const base =
@@ -654,14 +682,10 @@ function newGraphicClip({
 					raw: {
 						name: "Card",
 						params: {
-							fontSize: CARD_FONT_SIZE,
 							fontWeight: "bold",
 							textAlign: "center",
-							color: "#ffffff",
 							lineHeight: 1.3,
 							"background.enabled": true,
-							"background.color": "#0f172acc",
-							"background.cornerRadius": 30,
 							"background.paddingX": 160,
 							"background.paddingY": 130,
 						},
@@ -672,21 +696,6 @@ function newGraphicClip({
 					definitionId: record.kind,
 					name: record.kind === "zoom" ? "Zoom" : "Highlight",
 					startTime,
-					// The line is drawn on the square source, so it thins as the box grows.
-					params:
-						record.kind === "highlight"
-							? {
-									strokeWidth: Math.min(
-										64,
-										Math.max(
-											1,
-											(HIGHLIGHT_STROKE * DEFAULT_GRAPHIC_SOURCE_SIZE) /
-												(Number(params["transform.scaleX"]) *
-													handleSide(canvas)),
-										),
-									),
-								}
-							: undefined,
 				});
 	return {
 		...base,
@@ -864,17 +873,18 @@ interface ZoomPlacement {
 	start: number;
 	end: number;
 	view: ZoomView;
+	style: StyleDefaults["values"]["zoom"];
 }
 
 /** How far into its zoom the picture is at a sequence time, 0–1. */
 function zoomAmount({
-	zoom: { start, end },
+	zoom: { start, end, style },
 	time,
 }: {
 	zoom: ZoomPlacement;
 	time: number;
 }) {
-	const ramp = Math.min(ZOOM_RAMP_SECONDS, (end - start) / 3);
+	const ramp = Math.min(style.rampSeconds, (end - start) / 3);
 	if (time <= start || time >= end) return 0;
 	if (time < start + ramp) return (time - start) / ramp;
 	if (time > end - ramp) return (end - time) / ramp;
@@ -903,7 +913,7 @@ function addZoomKeys({
 			overlaps({ clip, start: zoom.start, end: zoom.end }),
 	);
 	if (spanned.length === 0 || spanned.some(hasOwnTransformKeys)) return null;
-	const ramp = Math.min(ZOOM_RAMP_SECONDS, (zoom.end - zoom.start) / 3);
+	const ramp = Math.min(zoom.style.rampSeconds, (zoom.end - zoom.start) / 3);
 	const clips = track.clips.map((clip): VideoTrack["clips"][number] => {
 		if (!spanned.includes(clip)) return clip;
 		const clipStart = seconds(clip.startTime);
@@ -966,7 +976,7 @@ function addZoomKeys({
 						id: `graphics-zoom:${zoom.record.id}:${clip.id}:${path}:${index}`,
 						time: ticks(time - clipStart),
 						value: base[path] + (zoomed[path] - base[path]) * amount,
-						segmentToNext: "bezier" as const,
+						segmentToNext: zoom.style.easing,
 						tangentMode: "flat" as const,
 					};
 				}),
@@ -1031,11 +1041,15 @@ function captureAdjustments({
 	clip,
 	canvas,
 	timingComparable,
+	previousStyle,
+	sizes,
 }: {
 	record: GraphicRecord;
 	clip: TimelineClip;
 	canvas: CanvasSize;
 	timingComparable: boolean;
+	previousStyle: StyleDefaults["values"];
+	sizes: ProjectItemSizes;
 }): GraphicOverrides {
 	const placed = record.placed;
 	if (!placed) return record.overrides;
@@ -1053,6 +1067,18 @@ function captureAdjustments({
 		overrides.scaleY = now.scaleY;
 	if (record.kind === "card" && now.text !== placed.text)
 		overrides.text = now.text;
+	const previous = placed.appearance ?? {
+		...graphicAppearance({ record, values: placed, canvas, style: previousStyle }),
+		aspect: graphicClipParams({ record, values: placed, canvas, sizes }).aspect,
+	};
+	const appearance = { ...overrides.appearance };
+	for (const property of GRAPHIC_APPEARANCE_PROPERTIES) {
+		const value = clip.params[property];
+		if ((typeof value === "string" || typeof value === "number") &&
+			previous[property] !== undefined && (value !== previous[property] || clip.animations?.[property]))
+			appearance[property] = value;
+	}
+	if (Object.keys(appearance).length) overrides.appearance = appearance;
 	// A cut moves graphics with the picture; only a change while the picture
 	// stayed put is the creator retiming the graphic.
 	if (timingComparable) {
@@ -1073,11 +1099,17 @@ export function syncGraphics({
 	projectItems,
 	canvas,
 	shortStyle,
+	style = BASE_STYLE.values,
+	previousStyle = style,
+	recordFraming = false,
 }: {
 	sequence: Pick<TSequence, "tracks" | "graphics">;
 	projectItems: ProjectItem[];
 	canvas: CanvasSize;
 	shortStyle?: ShortStyle;
+	style?: StyleDefaults["values"];
+	previousStyle?: StyleDefaults["values"];
+	recordFraming?: boolean;
 }): { tracks: SequenceTracks; graphics: SequenceGraphics } | null {
 	const graphics = sequence.graphics;
 	if (!graphics) return null;
@@ -1129,7 +1161,7 @@ export function syncGraphics({
 	const ordered = graphics.records.toSorted(
 		(a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
 	);
-	for (const record of ordered) {
+	for (let record of ordered) {
 		const current = shown.get(record.id);
 		const { anchor, covered, reviewTime } = resolveSourceTime({
 			tracks,
@@ -1142,6 +1174,8 @@ export function syncGraphics({
 					record,
 					clip: current.clip,
 					canvas,
+					previousStyle,
+					sizes,
 					timingComparable:
 						screenUnchanged &&
 						!!anchor &&
@@ -1149,6 +1183,55 @@ export function syncGraphics({
 						Math.abs(anchor.time - record.placed.anchor) < TIME_EPSILON,
 				})
 			: record.overrides;
+		const before = record.framingCorrection?.before ?? (record.kind === "zoom"
+			? record.placed?.scale
+			: record.placed?.position && record.placed.position.y / canvas.height);
+		const after = record.kind === "zoom" && overrides.scale !== record.overrides.scale
+			? overrides.scale
+			: record.kind === "card" && overrides.position !== record.overrides.position &&
+				overrides.position ? overrides.position.y / canvas.height : undefined;
+		if (recordFraming && before !== undefined && after !== undefined)
+			record = { ...record, framingCorrection: { before, after } };
+
+		const zoomTarget = record.target;
+		const oldZoomCap = record.zoomStyleMaxScale;
+		const oldZoomMin = record.zoomStyleMinScale ?? previousStyle.zoom.minScale;
+		// Older records did not save the requested cap. Keep their planned view.
+		if (
+			record.kind === "zoom" &&
+			zoomTarget &&
+			anchor &&
+			(oldZoomCap !== undefined || record.maxZoom !== undefined) &&
+			(style.zoom.minScale !== oldZoomMin ||
+				(record.maxZoom === undefined && style.zoom.maxScale !== oldZoomCap))
+		) {
+			const frame = screenFrame({
+				clip: anchor.clip,
+				size: sizes.get(record.action.projectItemId),
+				canvas,
+			});
+			const view = planZoomView({
+				frame,
+				target: targetOnCanvas({ frame, target: zoomTarget }),
+				canvas,
+				maxZoom: zoomLimit({
+					maxZoom: record.maxZoom,
+					bias: record.zoomBias,
+					style,
+				}),
+				minZoom: style.zoom.minScale,
+			});
+			record = {
+				...record,
+				zoomStyleMaxScale: style.zoom.maxScale,
+				zoomStyleMinScale: style.zoom.minScale,
+				planned: {
+					...record.planned,
+					position: view?.center ?? { x: 0, y: 0 },
+					scale: view?.scale ?? 1,
+				},
+			};
+		}
 		const adjusted = { ...record, overrides };
 		if (!anchor) {
 			if (current)
@@ -1263,6 +1346,27 @@ export function syncGraphics({
 			values.scale = overrides.scale ?? paddedSide / handleSide(canvas);
 		}
 
+		if (record.kind === "highlight" && !adjusted.highlightScale)
+			adjusted.highlightScale = record.placed?.scale || values.scale || 1;
+		const appearance = graphicAppearance({ record: adjusted, values, canvas, style });
+		const paramsForValues = () => ({
+			...graphicClipParams({ record, values, canvas, sizes }),
+			...appearance,
+			...overrides.appearance,
+		});
+		const cardAnchor = record.cardAnchor ?? (shortStyle ? style[shortStyle].cardAnchor : "auto");
+		if (record.kind === "card" && !overrides.position) {
+			if (cardAnchor !== "auto")
+				values.position = { x: 0, y: canvas.height * (cardAnchor === "top" ? -0.25 : 0.25) };
+			else if (shortStyle && style[shortStyle].cardAnchor !== previousStyle[shortStyle].cardAnchor) {
+				const frame = screenFrame({ clip: anchor.clip, size: sizes.get(record.action.projectItemId), canvas });
+				values.position = cardPosition({
+					canvas, target: record.target ? targetOnCanvas({ frame, target: record.target }) : null,
+				});
+				adjusted.planned = { ...adjusted.planned, position: values.position };
+			}
+		}
+
 		if (
 			record.kind === "card" &&
 			shortStyle &&
@@ -1271,10 +1375,9 @@ export function syncGraphics({
 		) {
 			const draft = newGraphicClip({
 				record,
-				params: graphicClipParams({ record, values, canvas, sizes }),
+				params: paramsForValues(),
 				start,
 				duration,
-				canvas,
 			});
 			if (draft.type === "text") {
 				const bounds = textBounds({ clip: draft, canvas });
@@ -1286,12 +1389,7 @@ export function syncGraphics({
 				values.scale = (values.scale ?? 1) * scale;
 			}
 		}
-		if (
-			record.kind === "card" &&
-			shortStyle === "explainer" &&
-			!overrides.position &&
-			!hidden
-		) {
+		if (record.kind === "card" && !overrides.position && !hidden) {
 			const region = actionTargetRegion({
 				record,
 				anchor,
@@ -1318,14 +1416,22 @@ export function syncGraphics({
 			)?.placed?.position;
 			const top = { x: 0, y: -canvas.height * 0.25 };
 			const bottom = { x: 0, y: canvas.height * 0.25 };
+			const preferBottom = record.cardAnchor
+				? record.cardAnchor === "bottom"
+				: ((shortStyle === "explainer" ? previousCard : undefined) ??
+					values.position ??
+					top).y > 0;
+			const halves = preferBottom ? [bottom, top] : [top, bottom];
+			const targetAware = cardPosition({ canvas, target: region ?? null });
 			const positions =
-				previousCard && previousCard.y > 0 ? [bottom, top] : [top, bottom];
+				shortStyle === "explainer" || cardAnchor !== "auto"
+					? [...halves, ...(region ? [targetAware] : [])]
+					: [values.position ?? targetAware, ...halves];
 			const draft = newGraphicClip({
 				record,
-				params: graphicClipParams({ record, values, canvas, sizes }),
+				params: paramsForValues(),
 				start,
 				duration,
-				canvas,
 			});
 			const choices = positions.map((position) => {
 				const bounds = textBounds({
@@ -1368,10 +1474,7 @@ export function syncGraphics({
 				values.position = choice.position;
 				start = choice.at;
 				duration = Math.min(duration, pictureEnd - start);
-			} else if (
-				overrides.start === undefined &&
-				overrides.duration === undefined
-			) {
+			} else {
 				if (current)
 					tracks = filterGraphicTracks({
 						tracks,
@@ -1393,7 +1496,7 @@ export function syncGraphics({
 			}
 		}
 
-		const params = graphicClipParams({ record, values, canvas, sizes });
+		const params = paramsForValues();
 		const type = trackKind(record.kind);
 		let clipId: string;
 		if (
@@ -1437,7 +1540,7 @@ export function syncGraphics({
 					});
 			clipId = clip.id;
 		} else {
-			const clip = newGraphicClip({ record, params, start, duration, canvas });
+			const clip = newGraphicClip({ record, params, start, duration });
 			if (hidden) clip.hidden = true;
 			tracks = placeClip({ tracks, clip });
 			clipId = clip.id;
@@ -1449,6 +1552,9 @@ export function syncGraphics({
 			scale: values.scale,
 			scaleY: values.scaleY,
 			text: values.text,
+			appearance: Object.fromEntries(GRAPHIC_APPEARANCE_PROPERTIES.flatMap((key) =>
+				params[key] === undefined ? [] : [[key, params[key]]],
+			)),
 			clipId,
 			hidden,
 			anchor: anchor.time,
@@ -1456,12 +1562,13 @@ export function syncGraphics({
 		const trackHidden = tracks.overlay.some(
 			(track) => track.hidden && track.clips.some(({ id }) => id === clipId),
 		);
-		if (record.kind === "zoom" && !hidden && !trackHidden) {
+		if (record.kind === "zoom" && (values.scale ?? 1) > 1 && !hidden && !trackHidden) {
 			const zoom: ZoomPlacement = {
 				record,
 				trackId: anchor.trackId,
 				start,
 				end: start + duration,
+				style: style.zoom,
 				view: {
 					center: values.position ?? { x: 0, y: 0 },
 					scale: values.scale ?? 1,
@@ -1575,6 +1682,15 @@ function cardPosition({
  * creator's adjustments; deleted graphics stay deleted; uncertain targets
  * leave the shot wide. Placement happens in `syncGraphics`.
  */
+function zoomLimit({ maxZoom, bias = 1, style }: {
+	maxZoom?: number;
+	bias?: number;
+	style: StyleDefaults["values"];
+}) {
+	const cap = maxZoom ?? style.zoom.maxScale;
+	return Math.min(maxZoom ?? 4, Math.max(1, cap * bias));
+}
+
 export function planGraphicsPass({
 	sequence,
 	planned,
@@ -1582,6 +1698,8 @@ export function planGraphicsPass({
 	projectItems,
 	canvas,
 	shortStyle,
+	style = BASE_STYLE.values,
+	framing = [],
 }: {
 	sequence: Pick<TSequence, "tracks" | "graphics">;
 	planned: PlannedGraphic[];
@@ -1589,11 +1707,17 @@ export function planGraphicsPass({
 	projectItems: ProjectItem[];
 	canvas: CanvasSize;
 	shortStyle?: ShortStyle;
+	style?: StyleDefaults["values"];
+	framing?: FramingPreference[];
 }): {
 	graphics: SequenceGraphics;
 	entries: GraphicPlanEntry[];
 	removedIds: string[];
 } {
+	const zoom = framing.find(({ kind, reverted }) => !reverted && kind.startsWith("zoom"));
+	const card = framing.find(({ kind, reverted }) => !reverted && kind.startsWith("card"));
+	const zoomBias = zoom?.kind === "zoom-closer" ? 1.2 : zoom ? 0.8 : undefined;
+	const cardAnchor = card?.kind === "card-top" ? "top" : card ? "bottom" : undefined;
 	const sizes = itemSizes(projectItems);
 	const tracks = sequence.tracks;
 	const existing = sequence.graphics ?? { records: [], tombstones: [] };
@@ -1718,7 +1842,8 @@ export function planGraphicsPass({
 				frame,
 				target,
 				canvas,
-				maxZoom: graphic.maxZoom,
+				maxZoom: zoomLimit({ maxZoom: graphic.maxZoom, bias: match ? match.zoomBias : zoomBias, style }),
+				minZoom: style.zoom.minScale,
 			});
 			if (!view) {
 				if (match) {
@@ -1737,7 +1862,7 @@ export function planGraphicsPass({
 		}
 		if (graphic.kind === "card") {
 			values.position =
-				shortStyle === "explainer"
+				shortStyle === "explainer" && style.explainer.cardAnchor !== "auto"
 					? { x: 0, y: -canvas.height * 0.25 }
 					: cardPosition({ target, canvas });
 			values.scale = 1;
@@ -1764,6 +1889,13 @@ export function planGraphicsPass({
 				start: shownFrom,
 				end: shownFrom + values.duration * rate,
 			},
+			...(graphic.kind === "zoom" && {
+				maxZoom: graphic.maxZoom,
+				zoomStyleMaxScale: style.zoom.maxScale,
+				zoomStyleMinScale: style.zoom.minScale,
+				zoomBias: match ? match.zoomBias : zoomBias,
+			}),
+			...(graphic.kind === "card" && { cardAnchor: match ? match.cardAnchor : cardAnchor }),
 			planned: values,
 		};
 		const record: GraphicRecord = match

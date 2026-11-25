@@ -1,3 +1,4 @@
+import type { StyleDefaults } from "@splice/bridge/style";
 import type { ScalarAnimationChannel } from "@/animation/types";
 import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
@@ -32,6 +33,8 @@ export type Marker =
 	| RemovalMarker;
 
 export interface TSequence {
+	/** The approved style of a sequence restored from a checkpoint. */
+	styleDefaults?: StyleDefaults;
 	id: string;
 	name: string;
 	isMain: boolean;
@@ -196,6 +199,8 @@ export interface TextClip extends BaseTimelineClip {
 		text: string;
 		parts?: CaptionPart[];
 		manualPosition?: true;
+		appearance?: Record<string, string | number | boolean>;
+		appearanceOverrides?: Record<string, string | number | boolean>;
 	};
 	hidden?: boolean;
 	effects?: Effect[];

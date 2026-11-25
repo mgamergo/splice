@@ -8,7 +8,9 @@ import {
 import { projectCaptionsSchema } from "@splice/bridge/delivery";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
 import { sequenceMixSchema } from "@splice/bridge/mix";
-import { captionsRequestSchema } from "@splice/bridge/ops";
+import { styleDefaultsSchema } from "@splice/bridge/style";
+import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
+import { sequenceStyle } from "@/agent/style-profile";
 import { z } from "zod";
 import { type CaptionCue } from "@/captions/cues";
 import { sequenceCaptionCues } from "@/captions/project-captions";
@@ -106,6 +108,7 @@ export function captureApproval({
 		...(sequence.mix && { mix: structuredClone(sequence.mix) }),
 		markers: structuredClone(sequence.markers),
 		background: structuredClone(snapshot.scene.background),
+		styleDefaults: structuredClone(sequenceStyle({ project, sequence })),
 		...(snapshot.shortStyle && {
 			shortStyle: snapshot.shortStyle,
 			shortFrame: structuredClone({
@@ -442,7 +445,8 @@ const storedCheckpointSchema = checkpointSummarySchema.extend({
 		canvasSize: z.object({ width: z.number().positive(), height: z.number().positive() }),
 		fps: z.object({ numerator: z.number().positive(), denominator: z.number().positive() }),
 	}).optional(),
-	sequenceCaptions: captionsRequestSchema.optional(),
+	sequenceCaptions: savedShortCaptionsSchema.optional(),
+	styleDefaults: styleDefaultsSchema.optional(),
 	captions: projectCaptionsSchema.optional(),
 	srt: z.string(),
 	cues: z.array(
