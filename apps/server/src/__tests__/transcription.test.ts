@@ -1,6 +1,14 @@
+import { footageVersion } from "../footage";
 import { expect, test } from "bun:test";
 import { RPC_ERRORS } from "@splice/bridge";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcClient } from "../rpc-client";
@@ -200,6 +208,16 @@ test("concurrent requests join one job, then read the full cache and compact pag
 		});
 		expect(await applyCleanup()).toMatchObject({ freedBytes: 0 });
 		expect(await jobs.start({ path: source })).toMatchObject({ cached: true });
+		const moved = "Day 1/moved.m4a";
+		await rename(join(root, "Footage", source), join(root, "Footage", moved));
+		expect(await jobs.start({ path: moved })).toMatchObject({
+			cached: true,
+			path: moved,
+			transcript: { path: moved },
+		});
+		expect(await jobs.cached({ path: moved })).toMatchObject({ path: moved });
+		expect(runs).toBe(1);
+		await rename(join(root, "Footage", moved), join(root, "Footage", source));
 		// A missing transcript still rebuilds on the next explicit transcription.
 		await rm(cached.cachePath);
 		expect(await jobs.start({ path: source, waitSeconds: 1 })).toMatchObject({
@@ -363,7 +381,7 @@ test("transcript words come from the cache and skip paths without one instead of
 		await writeFile(join(root, "Footage", "untranscribed.mp4"), "video");
 		await jobs.start({ path: source, waitSeconds: 5 });
 		const result = await jobs.words({
-			paths: [source, "logo.png", "untranscribed.mp4", "gone.mp4"],
+			params: { paths: [source, "logo.png", "untranscribed.mp4", "gone.mp4"] },
 		});
 		expect(result.missing).toEqual([
 			"logo.png",
@@ -376,10 +394,59 @@ test("transcript words come from the cache and skip paths without one instead of
 			expect.objectContaining({ text: expect.stringContaining("blue") }),
 		);
 		await expect(
-			jobs.words({ paths: ["../escape.mp4"] }),
+			jobs.words({ params: { paths: ["../escape.mp4"] } }),
 		).rejects.toMatchObject({
 			code: RPC_ERRORS.INVALID_PARAMS,
 		});
+	} finally {
+		await jobs.stop();
+		await rm(root, { force: true, recursive: true });
+	}
+});
+
+test("project transcript reads reject freshly transcribed bytes at an overwritten path", async () => {
+	const root = await mkdtemp(join(tmpdir(), "splice-bound-transcript-"));
+	let spoken = "Original";
+	const jobs = createTranscriptionJobs({
+		root,
+		extract: async () => 9.7,
+		createTools: () => ({
+			async transcribe() {
+				return {
+					value: JSON.parse(
+						JSON.stringify(whisperOutput).replaceAll("blue", spoken),
+					),
+					backend: "cpu",
+				};
+			},
+		}),
+	});
+	try {
+		const file = join(root, "Footage", source);
+		await mkdir(join(root, "Footage", "Day 1"), { recursive: true });
+		await writeFile(file, "original");
+		const expectedVersion = await footageVersion({ absolutePath: file });
+		const request = { recordings: [{ path: source, expectedVersion }] };
+		await jobs.start({ path: source, waitSeconds: 5 });
+		const original = await jobs.words({ params: request });
+		expect(JSON.stringify(original)).toContain("Original");
+		spoken = "Replacement";
+		await writeFile(file, "replaced");
+		await jobs.start({ path: source, waitSeconds: 5 });
+		expect(JSON.stringify(await jobs.words({ params: { paths: [source] } }))).toContain(
+			"Replacement",
+		);
+		await expect(jobs.words({ params: request })).rejects.toThrow(
+			"recording changed on disk",
+		);
+
+		await writeFile(file, "original");
+		const restoredVersion = await footageVersion({ absolutePath: file });
+		expect(
+			await jobs.words({
+				params: { recordings: [{ path: source, expectedVersion: restoredVersion }] },
+			}),
+		).toEqual(original);
 	} finally {
 		await jobs.stop();
 		await rm(root, { force: true, recursive: true });

@@ -1,10 +1,11 @@
 import { type FootageFile, isFootagePath } from "@splice/bridge";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { realpath, readdir, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { open, realpath, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 import { fileIdentity } from "./file-identity";
+import { createSharedWork } from "./shared-work";
 
 export const FOOTAGE_FOLDER = "Footage";
 
@@ -111,6 +112,12 @@ export async function listFootage({
 }
 
 /** Changes even when a replacement has the same size and modification time. */
+export function versionForStats(info: Stats): string {
+	return createHash("sha256")
+		.update([info.dev, ...fileIdentity(info)].join())
+		.digest("hex");
+}
+
 export async function footageVersion({
 	absolutePath,
 }: {
@@ -118,41 +125,118 @@ export async function footageVersion({
 }): Promise<string> {
 	const info = await stat(absolutePath);
 	if (!info.isFile()) throw new Error("Footage is unavailable.");
-	return createHash("sha256")
-		.update([info.dev, ...fileIdentity(info)].join())
-		.digest("hex");
+	return versionForStats(info);
 }
 
-const footageHashes = new Map<string, Promise<string>>();
+const footageHashes = new Map<string, string>();
 const MAX_CACHED_HASHES = 512;
+const hashWork = createSharedWork<string>({
+	stop: new AbortController().signal,
+});
+type HashProgress = (percentage: number) => void;
+const progressListeners = new Map<string, Set<HashProgress>>();
 
-/** Hash the file on demand and share the result between probes of that version. */
-export function footageContentHash({
+/** Stream the full recording once per file version, sharing concurrent reads. */
+export async function footageContentHash({
 	absolutePath,
 	version,
+	signal,
+	onProgress,
 }: {
 	absolutePath: string;
 	version: string;
+	signal?: AbortSignal;
+	onProgress?: HashProgress;
 }): Promise<string> {
+	signal?.throwIfAborted();
 	const cached = footageHashes.get(version);
-	if (cached) return cached;
-	const pending = (async () => {
-		const hash = createHash("sha256");
-		for await (const chunk of createReadStream(absolutePath))
-			hash.update(chunk);
-		if ((await footageVersion({ absolutePath })) !== version)
-			throw new Error("Footage changed while reading its identity.");
-		return hash.digest("hex");
-	})().catch((error: unknown) => {
-		if (footageHashes.get(version) === pending) footageHashes.delete(version);
-		throw error;
-	});
-	if (footageHashes.size >= MAX_CACHED_HASHES) {
-		const oldest = footageHashes.keys().next();
-		if (!oldest.done) footageHashes.delete(oldest.value);
+	if (cached) {
+		onProgress?.(100);
+		return cached;
 	}
-	footageHashes.set(version, pending);
-	return pending;
+	// An in-flight read must stat the same path it opened. Completed digests
+	// can be reused across paths that identify the very same file version.
+	const key = JSON.stringify([absolutePath, version]);
+	const listeners = progressListeners.get(key) ?? new Set<HashProgress>();
+	if (onProgress) {
+		listeners.add(onProgress);
+		progressListeners.set(key, listeners);
+	}
+	try {
+		return await hashWork.run({
+			key,
+			signal,
+			work: async (signal) => {
+				const digest = await hashRecording({
+					absolutePath,
+					version,
+					signal,
+					report: (percent) => {
+						for (const listener of progressListeners.get(key) ?? [])
+							listener(percent);
+					},
+				});
+				if (footageHashes.size >= MAX_CACHED_HASHES) {
+					const oldest = footageHashes.keys().next();
+					if (!oldest.done) footageHashes.delete(oldest.value);
+				}
+				footageHashes.set(version, digest);
+				for (const report of progressListeners.get(key) ?? []) report(100);
+				return digest;
+			},
+		});
+	} finally {
+		if (onProgress) {
+			listeners.delete(onProgress);
+			if (!listeners.size) progressListeners.delete(key);
+		}
+	}
+}
+
+async function hashRecording({
+	absolutePath,
+	version,
+	signal,
+	report,
+}: {
+	absolutePath: string;
+	version: string;
+	signal: AbortSignal;
+	report: HashProgress;
+}) {
+	const changed = () =>
+		new Error("Footage changed while reading its identity.");
+	const file = await open(absolutePath, "r");
+	try {
+		const info = await file.stat();
+		if (!info.isFile() || versionForStats(info) !== version) throw changed();
+		const hash = createHash("sha256");
+		const chunk = Buffer.allocUnsafe(1024 * 1024);
+		let read = 0;
+		let reported = 0;
+		while (read < info.size) {
+			signal.throwIfAborted();
+			const { bytesRead } = await file.read(chunk, 0, chunk.length, read);
+			if (!bytesRead) throw changed();
+			hash.update(chunk.subarray(0, bytesRead));
+			read += bytesRead;
+			const percent = Math.min(99, Math.floor((read / info.size) * 100));
+			if (percent > reported) {
+				reported = percent;
+				report(percent);
+			}
+		}
+		if (
+			read !== info.size ||
+			versionForStats(await file.stat()) !== version ||
+			(await footageVersion({ absolutePath })) !== version
+		)
+			throw changed();
+		signal.throwIfAborted();
+		return hash.digest("hex");
+	} finally {
+		await file.close();
+	}
 }
 
 /** Serves a file with HTTP range support, which media elements and mediabunny rely on. */
@@ -255,5 +339,67 @@ export function serveFile({
 	return respond({
 		status: 200,
 		blob: request.method === "HEAD" ? null : file,
+	});
+}
+
+/** Send progress separately from the file, so the editor can cancel a long probe. */
+export function streamFootageIdentity({
+	request,
+	absolutePath,
+	contentType,
+	version,
+}: {
+	request: Request;
+	absolutePath: string;
+	contentType: string;
+	version: string;
+}): Response {
+	const abort = new AbortController();
+	const signal = AbortSignal.any([request.signal, abort.signal]);
+	const encoder = new TextEncoder();
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			const send = (message: object) => {
+				if (!signal.aborted)
+					controller.enqueue(encoder.encode(JSON.stringify(message) + "\n"));
+			};
+			void (async () => {
+				try {
+					const info = await stat(absolutePath);
+					const contentHash = await footageContentHash({
+						absolutePath,
+						version,
+						signal,
+						onProgress: (progress) => send({ progress }),
+					});
+					if ((await footageVersion({ absolutePath })) !== version)
+						throw new Error("Footage changed while reading its identity.");
+					send({
+						version,
+						contentHash,
+						contentType,
+						size: info.size,
+						// Match the resolution of the media response's Last-Modified header.
+						lastModified: Math.floor(info.mtimeMs / 1000) * 1000,
+					});
+				} catch {
+					send({
+						error:
+							"Could not verify the recording. Check the file and try again.",
+					});
+				} finally {
+					if (!abort.signal.aborted) controller.close();
+				}
+			})();
+		},
+		cancel(reason) {
+			abort.abort(reason);
+		},
+	});
+	return new Response(stream, {
+		headers: {
+			"content-type": "application/x-ndjson",
+			"cache-control": "no-store",
+		},
 	});
 }

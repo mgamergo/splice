@@ -9,6 +9,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readdir,
+	rename,
 	rm,
 	stat,
 	utimes,
@@ -216,15 +217,15 @@ describe("noise reducer", () => {
 			});
 			expect(renders).toHaveLength(1);
 
-			await utimes(footage, new Date(), new Date(Date.now() + 10_000));
-			expect(
-				await reducer.render({ params: { path: "Day 1/take.wav" } }),
-			).toEqual({
-				path: "Day 1/take.wav",
-				cached: false,
-				noiseProfile: { sampledAt: 3, rmsDb: -52 },
+			const moved = join(root, "Footage", "Day 1", "moved.wav");
+			await rename(footage, moved);
+			await utimes(moved, new Date(), new Date(Date.now() + 10_000));
+			expect(await reducer.ensure({ path: "Day 1/moved.wav" })).toEqual({
+				file: first.file,
+				cached: true,
 			});
-			expect(renders).toHaveLength(2);
+			expect(renders).toHaveLength(1);
+			await rename(moved, footage);
 
 			// Rewritten with the same size, its modified time put back.
 			const { atime, mtime } = await stat(footage);
@@ -236,7 +237,7 @@ describe("noise reducer", () => {
 			).toMatchObject({
 				cached: false,
 			});
-			expect(renders).toHaveLength(3);
+			expect(renders).toHaveLength(2);
 			await reducer.stop();
 		}));
 

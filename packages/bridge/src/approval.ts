@@ -31,6 +31,7 @@ export const ISSUE_KINDS = [
 	"changed-since-approval",
 	"missing-footage",
 	"changed-footage",
+	"replacement-passage",
 	"no-captions",
 	"uncaptioned-recording",
 	"caption-empty",

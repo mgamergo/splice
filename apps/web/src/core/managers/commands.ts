@@ -309,9 +309,13 @@ export class CommandManager {
 		return this.redoStack.length > 0;
 	}
 
-	clear(): void {
+	clearUndoHistory(): void {
 		this.history = [];
 		this.redoStack = [];
+	}
+
+	clear(): void {
+		this.clearUndoHistory();
 		this.unsavedCorrections = [];
 	}
 

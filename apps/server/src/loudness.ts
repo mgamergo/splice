@@ -26,8 +26,20 @@ import {
 	run,
 	SOURCE_TIMELINE_FILTER,
 } from "./transcription-tools";
-import { mediaTypeForPath } from "./footage";
-import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import {
+	footageContentHash,
+	mediaTypeForPath,
+	versionForStats,
+} from "./footage";
+import {
+	expectedRecordingVersion,
+	footagePath,
+	invalidParams,
+	locateRecording,
+	type RecordingRequest,
+	resolveRecording,
+} from "./transcription";
+import { promoteCacheFile } from "./cache-promotion";
 import { createSharedWork } from "./shared-work";
 import {
 	type FileIdentity,
@@ -58,6 +70,7 @@ export const measureLoudnessInput = {
  */
 const measureSchema = z.object({
 	...measureLoudnessInput,
+	expectedVersion: expectedRecordingVersion,
 	ranges: rangesSchema.optional(),
 });
 
@@ -78,17 +91,23 @@ export type LoudnessMeasurement = z.infer<typeof loudnessMeasurementSchema>;
 export function loudnessCacheKey({
 	path,
 	info,
+	content,
 	ranges,
 	render,
 }: {
 	path: string;
 	info: FileIdentity;
+	content?: string;
 	ranges: SourceRange[] | null;
 	/** The noise-reduced render measured, by its file name and identity. */
 	render?: { name: string; info: FileIdentity };
 }): string {
 	// Bump the version when the measurement changes.
-	const key: unknown[] = [5, path, ...fileIdentity(info), ranges];
+	const key: unknown[] = [
+		5,
+		...(content ? [content] : [path, ...fileIdentity(info)]),
+		ranges,
+	];
 	if (render) key.push({ render: [render.name, ...fileIdentity(render.info)] });
 	return createHash("sha256").update(JSON.stringify(key)).digest("hex");
 }
@@ -242,11 +261,12 @@ export class MissingFootageError extends Error {}
 /** `splice` couldn't measure the recording, for example a damaged file. */
 export class UnmeasurableError extends Error {}
 
-export type MeasureLoudness = (request: {
-	path: string;
-	ranges: SourceRange[];
-	noiseReduction: boolean;
-}) => Promise<LoudnessMeasurement>;
+export type MeasureLoudness = (
+	request: RecordingRequest & {
+		ranges: SourceRange[];
+		noiseReduction: boolean;
+	},
+) => Promise<LoudnessMeasurement>;
 
 const MISSING = "Missing from Footage, so playback skips it. Relink it first.";
 
@@ -277,6 +297,7 @@ export async function planSourceGains({
 		path,
 		missing,
 		ranges,
+		recordingVersion,
 		noiseReduction,
 	} of audioSources) {
 		if (path === null) {
@@ -295,7 +316,14 @@ export async function planSourceGains({
 		}
 		let measured: LoudnessMeasurement;
 		try {
-			measured = await measure({ path, ranges, noiseReduction });
+			measured = await measure({
+				path,
+				ranges,
+				noiseReduction,
+				...(recordingVersion !== undefined && {
+					expectedVersion: recordingVersion,
+				}),
+			});
 		} catch (error) {
 			// One recording that can't be measured keeps its level; the rest
 			// are still normalized.
@@ -357,12 +385,13 @@ async function audioOnly({
 	signal: AbortSignal;
 }): Promise<string> {
 	if (mediaTypeForPath(source)?.startsWith("audio/")) return source;
-	const key = createHash("sha256")
-		.update(
-			JSON.stringify([resolve(source), ...fileIdentity(await stat(source))]),
-		)
-		.digest("hex");
-	const audio = join(cacheDir, `audio-${key}.mka`);
+	const version = versionForStats(await stat(source));
+	const content = await footageContentHash({
+		absolutePath: source,
+		version,
+		signal,
+	});
+	const audio = join(cacheDir, `audio-${content}.mka`);
 	if (
 		await access(audio).then(
 			() => true,
@@ -393,6 +422,8 @@ async function audioOnly({
 			],
 			signal,
 		});
+		if (versionForStats(await stat(source)) !== version)
+			throw new Error("Footage changed while copying its audio. Measure it again.");
 		await rename(partial, audio).catch(async (error) => {
 			// Another measurement published the same copy first.
 			if (
@@ -476,8 +507,7 @@ export function createLoudnessMeter({
 		stop: stop.signal,
 	});
 
-	type Target = {
-		path: string;
+	type Target = RecordingRequest & {
 		ranges: SourceRange[] | null;
 		denoised: boolean;
 	};
@@ -487,26 +517,43 @@ export function createLoudnessMeter({
 	 * `signal` ends this request's wait for the render.
 	 */
 	async function identify({
-		target: { path, ranges, denoised },
+		target: { path, expectedVersion, ranges, denoised },
 		signal,
 	}: {
 		target: Target;
 		signal?: AbortSignal;
 	}) {
-		const { source, info } = await resolveRecording({ root, path });
+		const { source, info, content, version } = await resolveRecording({
+			root,
+			path,
+			expectedVersion,
+			signal,
+		});
 		let input = source;
 		let render: { name: string; info: FileIdentity } | undefined;
 		if (denoised) {
-			input = (await noiseReduction.ensure({ path, signal })).file;
+			input = (
+				await noiseReduction.ensure({ path, expectedVersion: version, signal })
+			).file;
 			render = { name: basename(input), info: await stat(input) };
 		}
-		const key = loudnessCacheKey({ path, info, ranges, render });
+		const key = loudnessCacheKey({ path, info, content, ranges, render });
+		const cachePath = join(cacheDir, `${key}.json`);
+		if (!render) {
+			const legacy = loudnessCacheKey({ path, info, ranges });
+			await promoteCacheFile({
+				legacy: join(cacheDir, `${legacy}.json`),
+				target: cachePath,
+				jobPrefix: ".job-",
+				jobFile: "loudness.json",
+			}).catch(() => {});
+		}
 		return {
 			input,
 			info,
 			render,
 			key,
-			cachePath: join(cacheDir, `${key}.json`),
+			cachePath,
 		};
 	}
 	type Identified = Awaited<ReturnType<typeof identify>>;
@@ -523,7 +570,11 @@ export function createLoudnessMeter({
 		target: Target;
 		identified: Identified;
 	}): Promise<boolean> {
-		const current = await resolveRecording({ root, path: target.path });
+		const current = await locateRecording({
+			root,
+			path: target.path,
+			expectedVersion: target.expectedVersion,
+		});
 		if (!sameFileIdentity({ a: current.info, b: info })) return false;
 		if (!render) return true;
 		const rendered = await stat(input).catch(() => null);
@@ -573,11 +624,15 @@ export function createLoudnessMeter({
 		}) {
 			const parsed = measureSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			const { path, noiseReduction: denoised = false } = parsed.data;
+			const {
+				path,
+				expectedVersion,
+				noiseReduction: denoised = false,
+			} = parsed.data;
 			// Order matters: ranges play back to back, as they play in the sequence.
 			const ranges =
 				parsed.data.ranges?.map(({ start, end }) => ({ start, end })) ?? null;
-			const target = { path, ranges, denoised };
+			const target = { path, expectedVersion, ranges, denoised };
 			const run = () =>
 				cacheUse.use({
 					cache: "loudness",
@@ -611,6 +666,8 @@ export function createLoudnessMeter({
 										})
 									: work(jobSignal),
 						});
+						if (expectedVersion !== undefined)
+							await locateRecording({ root, path, expectedVersion });
 						return { path, ranges, noiseReduction: denoised, ...measured };
 					},
 				});

@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import { playCue } from "@/captions/project-captions";
 import { RestoreCheckpointCommand } from "@/commands/sequence/restore-checkpoint";
-import { verifySequenceMedia } from "@/media/sequence-media";
+import {
+	requireApprovedMedia,
+	verifySequenceMedia,
+} from "@/media/sequence-media";
 import type { EditorCore } from "@/core";
 import type { ApprovedCheckpoint } from "./types";
 
@@ -76,11 +79,8 @@ export async function restoreCheckpoint({
 		return false;
 	const generation = editor.media.getGeneration();
 	const projectItems = editor.media.getProjectItems();
-	await verifySequenceMedia({
-		tracks: checkpoint.tracks,
-		projectItems,
-		checkIdentity: false,
-	});
+	await verifySequenceMedia({ tracks: checkpoint.tracks, projectItems });
+	requireApprovedMedia({ footage: checkpoint.footage, projectItems });
 	if (
 		generation !== editor.media.getGeneration() ||
 		projectItems !== editor.media.getProjectItems()

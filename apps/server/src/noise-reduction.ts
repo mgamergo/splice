@@ -10,12 +10,23 @@ import {
 	findFfmpeg,
 	run,
 } from "./transcription-tools";
-import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import {
+	expectedRecordingVersion,
+	footagePath,
+	invalidParams,
+	locateRecording,
+	type RecordingRequest,
+	resolveRecording,
+} from "./transcription";
+import { promoteCacheFile } from "./cache-promotion";
 import { createSharedWork } from "./shared-work";
 import { type FileIdentity, fileIdentity } from "./file-identity";
 
 export const renderNoiseReductionInput = { path: footagePath };
-const renderSchema = z.object(renderNoiseReductionInput);
+const renderSchema = z.strictObject({
+	...renderNoiseReductionInput,
+	expectedVersion: expectedRecordingVersion,
+});
 
 /** Bump when the filters change, so earlier renders aren't reused. */
 export const NOISE_REDUCTION_VERSION = 4;
@@ -65,13 +76,18 @@ export interface NoiseWindow {
 export function denoiseCacheKey({
 	path,
 	info,
+	content,
 }: {
+	content?: string;
 	path: string;
 	info: FileIdentity;
 }): string {
 	return createHash("sha256")
 		.update(
-			JSON.stringify([NOISE_REDUCTION_VERSION, path, ...fileIdentity(info)]),
+			JSON.stringify([
+				NOISE_REDUCTION_VERSION,
+				...(content ? [content] : [path, ...fileIdentity(info)]),
+			]),
 		)
 		.digest("hex");
 }
@@ -380,25 +396,50 @@ export function createNoiseReducer({
 	const cacheDir = join(root, "Cache", "noise-reduction");
 	const renders = createSharedWork<DenoisedAudio>({ stop: stop.signal });
 
-	async function identify(path: string) {
-		const { source, info } = await resolveRecording({ root, path });
-		const key = denoiseCacheKey({ path, info });
-		return { source, key, file: join(cacheDir, `${key}.wav`) };
+	async function identify({
+		path,
+		expectedVersion,
+		signal,
+	}: RecordingRequest & { signal?: AbortSignal }) {
+		const { source, info, content, version } = await resolveRecording({
+			root,
+			path,
+			expectedVersion,
+			signal,
+		});
+		const key = denoiseCacheKey({ path, info, content });
+		const legacy = denoiseCacheKey({ path, info });
+		return {
+			source,
+			key,
+			version,
+			file: join(cacheDir, `${key}.wav`),
+			legacyFile: join(cacheDir, `${legacy}.wav`),
+		};
 	}
 
 	async function renderAndCache({
 		path,
 		source,
-		key,
+		version,
 		file,
+		legacyFile,
 		signal,
 	}: {
 		path: string;
 		source: string;
-		key: string;
+		version: string;
 		file: string;
+		legacyFile: string;
 		signal: AbortSignal;
 	}): Promise<DenoisedAudio> {
+		if (await Bun.file(file).exists()) return { file, cached: true };
+		await promoteCacheFile({
+			legacy: legacyFile,
+			target: file,
+			jobPrefix: ".job-",
+			jobFile: "denoised.wav",
+		}).catch(() => {});
 		if (await Bun.file(file).exists()) return { file, cached: true };
 		await mkdir(cacheDir, { recursive: true });
 		const temporary = await mkdtemp(join(cacheDir, ".job-"));
@@ -412,11 +453,10 @@ export function createNoiseReducer({
 			}).catch(async (error: unknown) => {
 				// The file can leave Footage after it was identified, before FFmpeg
 				// opens it: report that as missing Footage, not as FFmpeg's error.
-				await resolveRecording({ root, path });
+				await locateRecording({ root, path });
 				throw error;
 			});
-			if ((await identify(path)).key !== key)
-				throw new Error("Footage changed while reducing noise. Try again.");
+			await locateRecording({ root, path, expectedVersion: version });
 			await rename(output, file);
 			return { file, cached: false, noiseWindow };
 		} finally {
@@ -430,14 +470,21 @@ export function createNoiseReducer({
 	 */
 	async function ensure({
 		path,
+		expectedVersion,
 		signal,
-	}: {
-		path: string;
+	}: RecordingRequest & {
 		signal?: AbortSignal;
 	}): Promise<DenoisedAudio> {
-		const identity = await identify(path);
+		const hashSignal = signal
+			? AbortSignal.any([stop.signal, signal])
+			: stop.signal;
+		const identity = await identify({
+			path,
+			expectedVersion,
+			signal: hashSignal,
+		});
 		stop.signal.throwIfAborted();
-		return renders.run({
+		const result = await renders.run({
 			key: identity.key,
 			signal,
 			work: (jobSignal) =>
@@ -447,6 +494,9 @@ export function createNoiseReducer({
 						renderAndCache({ path, ...identity, signal: jobSignal }),
 				}),
 		});
+		if (expectedVersion !== undefined)
+			await locateRecording({ root, path, expectedVersion });
+		return result;
 	}
 
 	return {
@@ -462,8 +512,12 @@ export function createNoiseReducer({
 		}) {
 			const parsed = renderSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			const { path } = parsed.data;
-			const { cached, noiseWindow } = await ensure({ path, signal });
+			const { path, expectedVersion } = parsed.data;
+			const { cached, noiseWindow } = await ensure({
+				path,
+				expectedVersion,
+				signal,
+			});
 			return {
 				path,
 				cached,

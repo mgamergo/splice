@@ -1,3 +1,4 @@
+import { footageVersion } from "../footage";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
 	BRIDGE_PATHS,
@@ -461,6 +462,9 @@ describe("rpc endpoint", () => {
 			// timeout. The RPC endpoint is exempt from it; the rough cut still
 			// answers through the client `splice mcp` uses.
 			await writeSlowScan({ root, seconds: 6 });
+			const recordingVersion = await footageVersion({
+				absolutePath: join(root, "Footage", "talk.wav"),
+			});
 			const server = startServer({
 				port: 0,
 				token: TOKEN,
@@ -476,7 +480,14 @@ describe("rpc endpoint", () => {
 						? {
 								ok: true,
 								sequenceId: "raw",
-								items: [{ id: "a", name: "talk.wav", path: "talk.wav" }],
+								items: [
+									{
+										id: "a",
+										name: "talk.wav",
+										path: "talk.wav",
+										recordingVersion,
+									},
+								],
 							}
 						: { ok: true, revision: 3 },
 			});
@@ -507,6 +518,9 @@ describe("rpc endpoint", () => {
 		const root = await mkdtemp(join(tmpdir(), "splice-tab-swap-"));
 		try {
 			await writeSlowScan({ root, seconds: 2 });
+			const recordingVersion = await footageVersion({
+				absolutePath: join(root, "Footage", "talk.wav"),
+			});
 			const server = startServer({
 				port: 0,
 				token: TOKEN,
@@ -525,7 +539,9 @@ describe("rpc endpoint", () => {
 					return {
 						ok: true,
 						sequenceId: "raw",
-						items: [{ id: "a", name: "talk.wav", path: "talk.wav" }],
+						items: [
+							{ id: "a", name: "talk.wav", path: "talk.wav", recordingVersion },
+						],
 					};
 				},
 			});

@@ -1,4 +1,8 @@
-import { captionsRequestSchema, captionStyleSchema } from "@splice/bridge/ops";
+import {
+	captionSourceSchema,
+	captionsRequestSchema,
+	captionStyleSchema,
+} from "@splice/bridge/ops";
 import { z } from "zod";
 import type { TextClip } from "@/timeline/types";
 
@@ -14,6 +18,7 @@ const correctionSchema = z.object({
 });
 
 export const savedShortCaptionsSchema = captionsRequestSchema.extend({
+	sources: z.array(captionSourceSchema),
 	corrections: z.array(correctionSchema).optional(),
 	/** Style fields explicitly set on this sequence. Older saves stored only these fields. */
 	explicitStyle: captionStyleSchema.optional(),

@@ -1,3 +1,4 @@
+import { invalidateRecordingAnalysis } from "@/media/replacement-analysis";
 import { readStyleDefaults, sequenceStyle } from "@/agent/style-profile";
 import {
 	PROJECT_FORMATS,
@@ -6,7 +7,12 @@ import {
 } from "@splice/bridge";
 import type { EditorCore } from "@/core";
 import type { ApprovedCheckpoint } from "@/approval/types";
-import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
+import {
+	pinRenderMedia,
+	rebindRenderMedia,
+	referencedMedia,
+	verifySequenceMedia,
+} from "@/media/sequence-media";
 import type {
 	TProject,
 	TProjectMetadata,
@@ -254,11 +260,21 @@ export class ProjectManager {
 		};
 	}
 
-	private async saveProjectSnapshot({ project }: { project: TProject }) {
+	private async saveProjectSnapshot({
+		project,
+		replacement,
+	}: {
+		project: TProject;
+		replacement?: ProjectItem;
+	}) {
 		const events = this.editor.command.getUnsavedCorrections({
 			projectId: project.metadata.id,
 		});
-		await storageService.saveProject({ project, correctionEvents: events });
+		await storageService.saveProject({
+			project,
+			correctionEvents: events,
+			replacement,
+		});
 		this.editor.command.markCorrectionsSaved({ events });
 	}
 
@@ -285,6 +301,55 @@ export class ProjectManager {
 		} catch (error) {
 			console.error("Failed to save project:", error);
 		}
+	}
+
+	/** Commit the new recording and its analysis invalidation together. */
+	async replaceRecording({
+		projectId,
+		replacement,
+		checkCurrent,
+		publish,
+	}: {
+		projectId: string;
+		replacement: ProjectItem;
+		checkCurrent: () => Promise<void>;
+		publish: () => void;
+	}): Promise<void> {
+		const generation = this.editor.media.getGeneration();
+		await this.queueProjectWrite({
+			write: async () => {
+				await checkCurrent();
+				const project = this.getActive();
+				if (
+					project.metadata.id !== projectId ||
+					this.editor.media.getGeneration() !== generation
+				)
+					throw new Error("The project changed. Relink the recording again.");
+				const invalidated = () =>
+					invalidateRecordingAnalysis({
+						project: this.getActive(),
+						sequences: this.editor.sequences.getSequences(),
+						projectItemId: replacement.id,
+					});
+				const snapshot = {
+					...this.projectForStorage({ project }),
+					...invalidated(),
+				};
+				await this.saveProjectSnapshot({ project: snapshot, replacement });
+				if (
+					this.active?.metadata.id !== projectId ||
+					this.editor.media.getGeneration() !== generation
+				)
+					throw new Error("The project changed. Relink the recording again.");
+				const updated = invalidated();
+				this.setActiveProject({ project: { ...this.getActive(), ...updated } });
+				this.editor.sequences.setSequences({ sequences: updated.sequences });
+				// Older undo snapshots can still contain the discarded words.
+				this.editor.command.clearUndoHistory();
+				publish();
+				this.editor.save.markDirty();
+			},
+		});
 	}
 
 	isCheckpointMedia({
@@ -504,6 +569,17 @@ export class ProjectManager {
 	retryDelivery(): Promise<ExportResult> {
 		if (!this.delivery)
 			return Promise.resolve({ success: false, error: "Nothing to retry." });
+		const { scene } = this.delivery.input;
+		const projectItems = rebindRenderMedia({
+			captured: scene.projectItems,
+			current: this.editor.media.getProjectItems(),
+		});
+		if (projectItems !== scene.projectItems) {
+			this.delivery.input = {
+				...this.delivery.input,
+				scene: { ...scene, projectItems: pinRenderMedia({ projectItems }) },
+			};
+		}
 		return this.runDelivery();
 	}
 

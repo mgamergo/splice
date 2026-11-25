@@ -45,7 +45,7 @@ const ANALYSIS_FOLDERS = {
 		jobs: [{ name: /^\.scan-[a-zA-Z0-9]{6}$/, files: ["scan.json"] }],
 	},
 	loudness: {
-		file: /^(?:[0-9a-f]{64}\.json|audio-[0-9a-f]{64}\.mka)$/,
+		file: /^(?:[0-9a-f]{64}\.json|audio-(?:sample-v1-)?[0-9a-f]{64}\.mka)$/,
 		jobs: [
 			{ name: /^\.job-[a-zA-Z0-9]{6}$/, files: ["loudness.json"] },
 			{ name: /^\.audio-[a-zA-Z0-9]{6}$/, files: ["audio.mka"] },

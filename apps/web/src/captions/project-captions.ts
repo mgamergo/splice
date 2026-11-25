@@ -1,4 +1,3 @@
-import type { ItemSummary } from "@splice/bridge";
 import type {
 	CaptionScope,
 	ProjectCaptions,
@@ -87,19 +86,6 @@ const transcriptWordsSchema = z.object({
 	),
 });
 
-/** Recordings in the project that reference Footage, so `splice` may hold their transcripts. */
-function recordings({ editor }: { editor: EditorCore }): ItemSummary[] {
-	return editor.media
-		.getProjectItems()
-		.map(summarizeItem)
-		.filter(
-			(item): item is ItemSummary & { path: string } =>
-				item.path !== null &&
-				!item.missing &&
-				(item.type === "video" || item.type === "audio"),
-		);
-}
-
 /**
  * The cached transcripts of the project's recordings, as caption words, and
  * the names of the recordings `splice` has no transcript for yet.
@@ -112,28 +98,42 @@ export async function fetchTranscriptSources({
 	sources: CaptionsRequest["sources"];
 	withoutTranscript: string[];
 }> {
-	const items = recordings({ editor });
-	const paths = [...new Set(items.flatMap(({ path }) => (path ? [path] : [])))];
+	const before = editor.media.getProjectItems();
+	const items = before
+		.map(summarizeItem)
+		.flatMap(({ id, path, type, missing, name, recordingVersion }) =>
+			path && !missing && (type === "video" || type === "audio")
+				? [{ id, path, name, expectedVersion: recordingVersion ?? null }]
+				: [],
+		);
+	const recordings = items.map(({ path, expectedVersion }) => ({
+		path,
+		expectedVersion,
+	}));
 	const wordsByPath = new Map<
 		string,
 		CaptionsRequest["sources"][number]["words"]
 	>();
 	// transcript.words takes at most 200 paths per call.
-	for (let offset = 0; offset < paths.length; offset += 200) {
+	for (let offset = 0; offset < recordings.length; offset += 200) {
 		const { transcripts } = transcriptWordsSchema.parse(
 			await callSplice({
 				method: "transcript.words",
-				params: { paths: paths.slice(offset, offset + 200) },
+				params: { recordings: recordings.slice(offset, offset + 200) },
 			}),
 		);
 		for (const { path, words } of transcripts) wordsByPath.set(path, words);
 	}
+	if (editor.media.getProjectItems() !== before)
+		throw new Error(
+			"Project items changed while loading caption words. Try again.",
+		);
 	const sources = items.flatMap(({ id, path }) => {
-		const words = path ? wordsByPath.get(path) : undefined;
+		const words = wordsByPath.get(path);
 		return words?.length ? [{ projectItemId: id, words }] : [];
 	});
 	const withoutTranscript = items
-		.filter(({ path }) => !path || !wordsByPath.get(path)?.length)
+		.filter(({ path }) => !wordsByPath.get(path)?.length)
 		.map(({ name }) => name);
 	return { sources, withoutTranscript };
 }

@@ -7,6 +7,7 @@ import {
 	MEDIA_VERSION_PARAM,
 } from "@splice/bridge";
 import { type AudioCapableClip, isNoiseReduced } from "@/timeline/audio-state";
+import { z } from "zod";
 import { BlobSource, UrlSource, type Source } from "mediabunny";
 import { ensureMediaSession } from "@/bridge/media-session";
 import type { DiskMedia, MediaData, ProjectItem } from "./types";
@@ -114,7 +115,7 @@ export function clipAudioMedia({
 	if (!isNoiseReduced({ clip }) || !isDiskMedia(file))
 		return { file, sourceKey: projectItem.id };
 	const url = denoisedAudioUrlForPath(file.path);
-	const version = file.expectedVersion;
+	const version = file.expectedVersion ?? file.version;
 	return {
 		file: {
 			...file,
@@ -139,10 +140,12 @@ export async function probeDiskMedia({
 	path,
 	signal,
 	includeContentHash = true,
+	onProgress,
 }: {
 	path: string;
 	signal?: AbortSignal;
 	includeContentHash?: boolean;
+	onProgress?: (progress: number) => void;
 }): Promise<DiskMedia | null> {
 	if (!isFootagePath(path)) {
 		return null;
@@ -150,11 +153,13 @@ export async function probeDiskMedia({
 	const url = mediaUrlForPath(path);
 	const head = () =>
 		fetch(url, {
-			method: "HEAD",
+			method: onProgress && includeContentHash ? "GET" : "HEAD",
 			credentials: "same-origin",
 			cache: "no-store",
 			signal,
-			...(includeContentHash && { headers: { [MEDIA_CONTENT_HEADER]: "1" } }),
+			...(includeContentHash && {
+				headers: { [MEDIA_CONTENT_HEADER]: onProgress ? "progress" : "1" },
+			}),
 		});
 	let response = await head();
 	// The media cookie is missing (a new browser session): get one and try again.
@@ -164,16 +169,68 @@ export async function probeDiskMedia({
 	if (!response.ok) {
 		return null;
 	}
+	const name = path.split("/").pop() ?? path;
+	if (onProgress && includeContentHash) {
+		const { contentType, ...identity } = await readRecordingIdentity({
+			response,
+			onProgress,
+		});
+		return { kind: "disk", path, url, name, type: contentType, ...identity };
+	}
 	const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
 	return {
 		kind: "disk",
 		path,
 		url,
-		name: path.split("/").pop() ?? path,
+		name,
 		type: response.headers.get("content-type") ?? "application/octet-stream",
 		size: Number(response.headers.get("content-length") ?? 0),
 		lastModified: Number.isFinite(lastModified) ? lastModified : 0,
 		version: response.headers.get(MEDIA_VERSION_HEADER) ?? undefined,
 		contentHash: response.headers.get(MEDIA_CONTENT_HEADER) ?? undefined,
 	};
+}
+
+const identityMessage = z.union([
+	z.object({ progress: z.number() }),
+	z.object({ error: z.string() }),
+	z.object({
+		version: z.string().min(1),
+		contentHash: z.string().regex(/^[0-9a-f]{64}$/),
+		contentType: z.string(),
+		size: z.number(),
+		lastModified: z.number(),
+	}),
+]);
+
+async function readRecordingIdentity({
+	response,
+	onProgress,
+}: {
+	response: Response;
+	onProgress: (progress: number) => void;
+}) {
+	const reader = response.body
+		?.pipeThrough(new TextDecoderStream())
+		.getReader();
+	if (!reader)
+		throw new Error("Splice did not return the recording's identity.");
+	let pending = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done)
+				throw new Error("Splice did not return the recording's identity.");
+			const lines = (pending + value).split("\n");
+			pending = lines.pop() ?? "";
+			for (const line of lines) {
+				const message = identityMessage.parse(JSON.parse(line));
+				if ("progress" in message) onProgress(message.progress);
+				else if ("error" in message) throw new Error(message.error);
+				else return message;
+			}
+		}
+	} finally {
+		await reader.cancel();
+	}
 }

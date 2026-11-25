@@ -1,3 +1,4 @@
+import { relinkItemSchema } from "@splice/bridge/items";
 import { applyRequestSchema } from "@splice/bridge/ops";
 import { readFraming } from "@/agent/style-profile";
 import { StyleUpdateApi, summarizeStylePreview } from "@/agent/style-update";
@@ -161,6 +162,17 @@ export function createTabHandlers({
 		"editor.audioSources": (params) => api.audioSources(params),
 		"editor.listItems": (): ItemSummary[] =>
 			editor.media.getProjectItems().map(summarizeItem),
+		"editor.verifyItems": () => editor.media.verifyRecordings(),
+		"editor.relinkItem": (params) => {
+			checkAgentAllowed();
+			const parsed = relinkItemSchema.safeParse(params);
+			if (!parsed.success) throw new InvalidParamsError(parsed.error.message);
+			return editor.media.relinkRecording({
+				request: parsed.data,
+				beforeCommit: checkAgentAllowed,
+			});
+		},
+
 		"editor.importItems": (params) => {
 			if (isBlocked()) {
 				throw new AgentBlockedError();

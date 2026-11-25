@@ -46,6 +46,8 @@ import {
 	useLibraryPanelStore,
 } from "@/components/editor/panels/library/library-panel-store";
 import { MASKABLE_CLIP_TYPES } from "@/timeline";
+import { isDiskMedia } from "@/media/media-data";
+import { RelinkDialog } from "@/media/relink-dialog";
 import type { ProjectItem } from "@/media/types";
 import { cn } from "@/utils/ui";
 import {
@@ -240,6 +242,33 @@ function MediaScopeRegistrar() {
 	return null;
 }
 
+function UnavailableRecording({ item }: { item: ProjectItem }) {
+	const [open, setOpen] = useState(false);
+	if (!isDiskMedia(item.file)) return null;
+	return (
+		<div className="flex flex-col items-start gap-1 px-2 py-1">
+			<span className="max-w-full truncate text-sm" title={item.name}>
+				{item.name}
+			</span>
+			<Button
+				type="button"
+				size="sm"
+				variant="outline"
+				onClick={() => setOpen(true)}
+			>
+				{item.recordingChange ? "Verify recording" : "Relink"}
+			</Button>
+			{open && (
+				<RelinkDialog
+					item={item}
+					file={item.file}
+					onClose={() => setOpen(false)}
+				/>
+			)}
+		</div>
+	);
+}
+
 function ProjectItemDraggable({
 	item,
 	preview,
@@ -365,17 +394,21 @@ function MediaItemList({
 			{items.map((item) => (
 				<MediaItemWithContextMenu item={item} onRemove={onRemove} key={item.id}>
 					<SelectableItem className={cn(!isGrid && "w-full")} id={item.id}>
-						<ProjectItemDraggable
-							item={item}
-							preview={
-								<MediaPreview
-									item={item}
-									variant={isGrid ? "grid" : "compact"}
-								/>
-							}
-							variant={isGrid ? "card" : "compact"}
-							isRounded={isGrid ? false : undefined}
-						/>
+						{item.missing ? (
+							<UnavailableRecording item={item} />
+						) : (
+							<ProjectItemDraggable
+								item={item}
+								preview={
+									<MediaPreview
+										item={item}
+										variant={isGrid ? "grid" : "compact"}
+									/>
+								}
+								variant={isGrid ? "card" : "compact"}
+								isRounded={isGrid ? false : undefined}
+							/>
+						)}
 					</SelectableItem>
 				</MediaItemWithContextMenu>
 			))}

@@ -8,7 +8,10 @@ import { findGraphicClip } from "@/agent/graphics";
 import { isHookTrack } from "@/agent/short-hook";
 import { getSourceSpanAtClipTime } from "@/retime";
 import { isDiskMedia } from "@/media/media-data";
-import { recordingIdentity } from "@/media/sequence-media";
+import {
+	matchesApprovedRecording,
+	recordingIdentity,
+} from "@/media/sequence-media";
 import { audibleClips } from "@/agent/loudness";
 import { MAX_LINE_CHARS, wrapCueText } from "@/captions/cues";
 import type { ProjectItem } from "@/media/types";
@@ -141,23 +144,21 @@ function footageIssues({
 			issues.push({
 				id: `missing-footage:${id}`,
 				kind: "missing-footage",
-				title: "Missing recording",
-				detail: `${name} is unavailable. Relink it to play its ${clips.length} clip(s).`,
+				title: item?.recordingChange
+					? "Verify recording on disk"
+					: "Missing recording",
+				detail: item?.recordingChange
+					? `${name} needs confirmation in Project items before playback.`
+					: `${name} is unavailable. Relink it to play its ${clips.length} clip(s).`,
 				...span,
-				evidence: hashText(stableStringify([path, ranges])),
+				evidence: hashText(
+					stableStringify([path, ranges, item?.recordingChange]),
+				),
 			});
 			continue;
 		}
 		const current = recordingIdentity({ file: item.file });
-		if (
-			approved &&
-			(approved.missing ||
-				(approved.contentHash
-					? approved.contentHash !== current.contentHash
-					: approved.size !== item.file.size ||
-						approved.lastModified !== item.file.lastModified ||
-						approved.path !== path))
-		) {
+		if (approved && !matchesApprovedRecording({ item, approved })) {
 			issues.push({
 				id: `changed-footage:${id}`,
 				kind: "changed-footage",
@@ -169,6 +170,125 @@ function footageIssues({
 		}
 	}
 	return issues;
+}
+
+function replacementIssues({
+	sequence,
+	projectItems,
+	horizontal,
+}: {
+	sequence: Pick<TSequence, "tracks" | "graphics" | "mix">;
+	projectItems: ProjectItem[];
+	horizontal: boolean;
+}): ReviewIssue[] {
+	const clips = allClips(sequence.tracks);
+	return projectItems.flatMap((item) => {
+		const replacement = item.recordingChange?.version ?? item.replacementId;
+		if (!replacement) return [];
+		const issue = ({
+			id,
+			title,
+			start,
+			end,
+			input,
+			graphicId,
+		}: {
+			id: string;
+			title: string;
+			start: number;
+			end: number;
+			input: unknown;
+			graphicId?: string;
+		}): ReviewIssue => ({
+			id: `replacement:${item.id}:${id}`,
+			kind: "replacement-passage",
+			title,
+			detail: `Review this passage against the recording “${item.name}”.`,
+			start,
+			end,
+			graphicId,
+			evidence: hashText(stableStringify([replacement, input])),
+		});
+		const affected = clips.filter(
+			(clip) => "mediaId" in clip && clip.mediaId === item.id,
+		);
+		const narration = affected.filter(
+			(clip) =>
+				clip.type === "audio" ||
+				(clip.type === "video" &&
+					clip.isSourceAudioEnabled !== false &&
+					item.hasAudio !== false),
+		);
+		const clipIssues = affected.map((clip) =>
+			issue({
+				id: clip.id,
+				title:
+					horizontal && narration.includes(clip)
+						? "Review clip and captions"
+						: "Review clip",
+				...clipSpan(clip),
+				input: [clip.startTime, clip.duration, clip.trimStart, clip.trimEnd],
+			}),
+		);
+		const captionIssues = clips.flatMap((clip) =>
+			clip.type === "text" &&
+			clip.captionLayout?.parts?.some(({ words }) =>
+				words.some(({ projectItemId }) => projectItemId === item.id),
+			)
+				? [
+						issue({
+							id: clip.id,
+							title: "Review caption",
+							...clipSpan(clip),
+							input: [clip.startTime, clip.duration, clip.params.content],
+						}),
+					]
+				: [],
+		);
+		const graphicIssues = (sequence.graphics?.records ?? []).flatMap(
+			(graphic) => {
+				if (
+					graphic.action.projectItemId !== item.id &&
+					graphic.passage.projectItemId !== item.id
+				)
+					return [];
+				const clip = clips.find(({ id }) => id === graphic.placed?.clipId);
+				const fallback = graphic.reviewTime ?? 0;
+				return [
+					issue({
+						id: `graphic:${graphic.id}`,
+						title: "Review graphic evidence",
+						graphicId: graphic.id,
+						...(clip ? clipSpan(clip) : { start: fallback, end: fallback }),
+						input: [
+							graphic.action,
+							graphic.passage,
+							graphic.target,
+							graphic.placed,
+						],
+					}),
+				];
+			},
+		);
+		const music = sequence.mix?.music;
+		const overrides = (music?.overrides ?? []).flatMap((override, index) =>
+			music?.projectItemId === item.id ||
+			affected.some((clip) => {
+				const { start, end } = clipSpan(clip);
+				return start < override.end && end > override.start;
+			})
+				? [
+						issue({
+							id: `mix:${index}`,
+							title: "Review mix override",
+							...override,
+							input: override,
+						}),
+					]
+				: [],
+		);
+		return [...clipIssues, ...captionIssues, ...graphicIssues, ...overrides];
+	});
 }
 
 function captionIssues({
@@ -471,6 +591,7 @@ export function collectIssues({
 			? changedPassageIssues({ comparison, checkpoint })
 			: []),
 		...footageIssues({ sequence, projectItems, checkpoint }),
+		...replacementIssues({ sequence, projectItems, horizontal }),
 		...(horizontal
 			? captionIssues({ sequence, projectItems, captions, cues })
 			: []),

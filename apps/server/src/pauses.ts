@@ -4,7 +4,15 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { footagePath, invalidParams, resolveRecording } from "./transcription";
+import {
+	expectedRecordingVersion,
+	footagePath,
+	invalidParams,
+	locateRecording,
+	type RecordingRequest,
+	resolveRecording,
+} from "./transcription";
+import { promoteCacheFile } from "./cache-promotion";
 import { createSharedWork } from "./shared-work";
 import { fileIdentity, sameFileIdentity } from "./file-identity";
 import {
@@ -60,7 +68,10 @@ export const detectPausesInput = {
 			`Shortest silence reported as a pause, in seconds. Defaults to ${DEFAULT_MIN_PAUSE_SECONDS}.`,
 		),
 };
-const detectPausesSchema = z.strictObject(detectPausesInput);
+const detectPausesSchema = z.strictObject({
+	...detectPausesInput,
+	expectedVersion: expectedRecordingVersion,
+});
 
 export interface TimeRange {
 	start: number;
@@ -391,7 +402,9 @@ export function createPauseDetector({
 }: {
 	root: string;
 	cacheUse?: CacheUse;
-	readTranscript: (input: { path: string }) => Promise<Transcript | null>;
+	readTranscript: (
+		input: RecordingRequest & { signal?: AbortSignal },
+	) => Promise<Transcript | null>;
 }) {
 	const stop = new AbortController();
 	const cacheDir = join(root, "Cache", "pauses");
@@ -399,27 +412,41 @@ export function createPauseDetector({
 
 	async function scan({
 		path,
+		expectedVersion,
 		noiseDb,
 		signal,
-	}: {
-		path: string;
+	}: RecordingRequest & {
 		noiseDb: number;
 		signal?: AbortSignal;
 	}): Promise<{ scan: Scan; cached: boolean }> {
-		const { source, info } = await resolveRecording({ root, path });
-		// The inode and change time catch a file replaced with one of the same
-		// size and modified time.
-		const key = createHash("sha256")
-			.update(
-				JSON.stringify([CACHE_VERSION, path, ...fileIdentity(info), noiseDb]),
-			)
-			.digest("hex");
+		const { source, info, content } = await resolveRecording({
+			root,
+			path,
+			expectedVersion,
+			signal,
+		});
+		const keyFor = (identity: Array<string | number>) =>
+			createHash("sha256")
+				.update(JSON.stringify([CACHE_VERSION, ...identity, noiseDb]))
+				.digest("hex");
+		const key = keyFor([content]);
 		const cachePath = join(cacheDir, `${key}.json`);
-		const cached = scanSchema.safeParse(
-			await Bun.file(cachePath)
-				.json()
-				.catch(() => null),
+		const legacy = join(
+			cacheDir,
+			`${keyFor([path, ...fileIdentity(info)])}.json`,
 		);
+		const cached = await cacheUse.use({
+			cache: "pauses",
+			operation: async () => {
+				await promoteCacheFile({
+					legacy,
+					target: cachePath,
+					jobPrefix: ".scan-",
+					jobFile: "scan.json",
+				}).catch(() => {});
+				return scanSchema.safeParse(await Bun.file(cachePath).json().catch(() => null));
+			},
+		});
 		if (cached.success) return { scan: cached.data, cached: true };
 		const work = (jobSignal: AbortSignal) =>
 			cacheUse.use({
@@ -448,7 +475,7 @@ export function createPauseDetector({
 						const { durationSeconds } = parseSilencedetect({ output: probe });
 						result = { durationSeconds, hasAudio: false, silences: [] };
 					}
-					const current = await resolveRecording({ root, path });
+					const current = await locateRecording({ root, path });
 					if (!sameFileIdentity({ a: current.info, b: info }))
 						throw new Error("Footage changed while finding pauses. Try again.");
 					await mkdir(cacheDir, { recursive: true });
@@ -477,6 +504,7 @@ export function createPauseDetector({
 		if (!parsed.success) throw invalidParams(parsed.error.message);
 		const {
 			path,
+			expectedVersion,
 			noiseDb = DEFAULT_NOISE_DB,
 			minSeconds = DEFAULT_MIN_PAUSE_SECONDS,
 		} = parsed.data;
@@ -484,12 +512,12 @@ export function createPauseDetector({
 			await Promise.all([
 				cacheUse.use({
 					cache: "pauses",
-					operation: () => scan({ path, noiseDb, signal }),
+					operation: () => scan({ path, expectedVersion, noiseDb, signal }),
 				}),
 				// Pause edges come from the audio, and the transcript only joins
 				// silences and finds fillers, so a transcript that can't be read
 				// leaves the audio's pauses.
-				readTranscript({ path }).then(
+				readTranscript({ path, expectedVersion, signal }).then(
 					(found) => ({ transcript: found, transcriptError: null }),
 					(error: unknown) => ({
 						transcript: null,
@@ -498,6 +526,8 @@ export function createPauseDetector({
 					}),
 				),
 			]);
+		if (expectedVersion !== undefined)
+			await locateRecording({ root, path, expectedVersion });
 		const words = transcript ? transcriptWords(transcript) : null;
 		const silences = combineSilencesWithTranscript({
 			silences: result.silences,
@@ -557,8 +587,7 @@ export function createPauseDetector({
 		async pauseRanges({
 			signal,
 			...params
-		}: {
-			path: string;
+		}: RecordingRequest & {
 			noiseDb?: number;
 			minSeconds?: number;
 			signal?: AbortSignal;
@@ -574,8 +603,7 @@ export function createPauseDetector({
 			paddingSeconds,
 			signal,
 			...params
-		}: {
-			path: string;
+		}: RecordingRequest & {
 			noiseDb?: number;
 			paddingSeconds: number;
 			signal?: AbortSignal;

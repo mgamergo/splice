@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
 import { RPC_ERRORS } from "@splice/bridge";
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	stat,
+	utimes,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -271,13 +279,14 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		);
 		expect(calls).toHaveLength(3);
 
-		await utimes(file, new Date(), new Date(Date.now() + 10_000));
+		const moved = join(root, "Footage", "moved.wav");
+		await rename(file, moved);
+		await utimes(moved, new Date(), new Date(Date.now() + 10_000));
 		expect(
-			await meter.measure({ params: { path: "take.wav", ranges } }),
-		).toMatchObject({
-			cached: false,
-		});
-		expect(calls).toHaveLength(4);
+			await meter.measure({ params: { path: "moved.wav", ranges } }),
+		).toMatchObject({ cached: true, path: "moved.wav" });
+		expect(calls).toHaveLength(3);
+		await rename(moved, file);
 
 		// Replaced by a file of the same size, its times put back.
 		const { atime, mtime } = await stat(file);
@@ -290,7 +299,7 @@ test("measures once per file and ordered ranges, and remeasures a changed file",
 		).toMatchObject({
 			cached: false,
 		});
-		expect(calls).toHaveLength(5);
+		expect(calls).toHaveLength(4);
 		await meter.stop();
 	} finally {
 		await rm(root, { recursive: true, force: true });

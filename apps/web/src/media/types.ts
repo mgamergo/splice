@@ -21,17 +21,24 @@ export interface DiskMedia {
 	version?: string;
 	/** A render URL is locked to this version, including its denoised audio. */
 	expectedVersion?: string;
-	/** SHA-256 of the bytes, preserved when the file is relinked. */
+	/** Sampled fingerprint, or a full SHA-256 from an existing approved cut. */
 	contentHash?: string;
 }
 
 /** A project item's bytes: uploaded into browser storage, or on disk. */
 export type MediaData = File | DiskMedia;
 
-export interface ProjectItem
-	extends Omit<ProjectItemData, "size" | "lastModified" | "diskPath"> {
+export interface ProjectItem extends Omit<
+	ProjectItemData,
+	"size" | "lastModified" | "diskPath" | "diskContentHash" | "diskVersion"
+> {
 	file: MediaData;
 	url?: string;
 	/** A disk item whose file is no longer in the Footage folder. */
 	missing?: boolean;
+	/** A candidate at the saved path needs approval before playback can use it. */
+	recordingChange?: {
+		kind: "changed" | "unverified";
+		version: string | undefined;
+	};
 }

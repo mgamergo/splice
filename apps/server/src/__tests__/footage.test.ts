@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+	copyFile,
 	mkdir,
 	mkdtemp,
+	open,
 	rename,
 	rm,
 	stat,
@@ -19,7 +21,13 @@ import {
 	mediaUrlForPath,
 	sessionCookieName,
 } from "@splice/bridge";
-import { listFootage, mediaTypeForPath, resolveFootagePath } from "../footage";
+import {
+	footageContentHash,
+	footageVersion,
+	listFootage,
+	mediaTypeForPath,
+	resolveFootagePath,
+} from "../footage";
 import { startServer, type RunningServer } from "../server";
 
 const TOKEN = "test-token";
@@ -90,7 +98,104 @@ describe("footage paths", () => {
 	});
 });
 
+test("full fingerprints detect a 64 KiB rewrite between the old samples", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "splice-fingerprint-"));
+	const original = join(dir, "recording.mp4");
+	const moved = join(dir, "copy.mp4");
+	const bytes = Buffer.alloc(16 * 1024 * 1024);
+	const fingerprint = async (absolutePath: string) =>
+		footageContentHash({
+			absolutePath,
+			version: await footageVersion({ absolutePath }),
+		});
+	try {
+		await writeFile(original, bytes);
+		const expected = await fingerprint(original);
+		expect(expected).toMatch(/^[0-9a-f]{64}$/);
+		await copyFile(original, moved);
+		expect(await fingerprint(moved)).toBe(expected);
+		const info = await stat(moved);
+		const file = await open(moved, "r+");
+		try {
+			await file.write(
+				Buffer.alloc(64 * 1024, 1),
+				0,
+				64 * 1024,
+				bytes.length / 2,
+			);
+		} finally {
+			await file.close();
+		}
+		await utimes(moved, info.atime, info.mtime);
+		expect(await fingerprint(moved)).not.toBe(expected);
+		expect(await fingerprint(original)).toBe(expected);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("streams hash progress and can restart an aborted read of the same version", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "splice-hash-progress-"));
+	const absolutePath = join(dir, "large.wav");
+	try {
+		await writeFile(absolutePath, Buffer.alloc(16 * 1024 * 1024));
+		const version = await footageVersion({ absolutePath });
+		const abort = new AbortController();
+		const reason = new Error("Cancelled verification");
+		await expect(
+			footageContentHash({
+				absolutePath,
+				version,
+				signal: abort.signal,
+				onProgress: () => abort.abort(reason),
+			}),
+		).rejects.toBe(reason);
+		const progress: number[] = [];
+		const digest = await footageContentHash({
+			absolutePath,
+			version,
+			onProgress: (percent) => progress.push(percent),
+		});
+		expect(progress[0]).toBeLessThan(100);
+		expect(progress.at(-1)).toBe(100);
+		const cached: number[] = [];
+		expect(
+			await footageContentHash({
+				absolutePath,
+				version,
+				onProgress: (percent) => cached.push(percent),
+			}),
+		).toBe(digest);
+		expect(cached).toEqual([100]);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 describe("media route", () => {
+	test("streams progress and the same verified identity as HEAD", async () => {
+		const path = "Day 1/take #1.mp4";
+		const response = await media({
+			path,
+			headers: { [MEDIA_CONTENT_HEADER]: "progress" },
+		});
+		expect(response.headers.get("content-type")).toBe("application/x-ndjson");
+		const messages = (await response.text())
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const identity = messages.at(-1);
+		expect(messages).toContainEqual({ progress: 100 });
+		expect(identity).toMatchObject({
+			contentType: "video/mp4",
+			size: bytes.length,
+			contentHash: await footageContentHash({
+				absolutePath: join(root, "Footage", path),
+				version: identity.version,
+			}),
+		});
+	});
+
 	test("identifies byte-identical relinks and rejects requests for a replaced version", async () => {
 		const dir = join(root, "Footage");
 		const original = join(dir, "before.mp4");

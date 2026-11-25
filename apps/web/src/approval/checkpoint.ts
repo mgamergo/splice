@@ -29,7 +29,11 @@ import { projectFormat, projectShortStyle } from "@/project/format";
 import type { TProject } from "@/project/types";
 import type { Marker, SequenceTracks, TSequence } from "@/timeline/types";
 import { isDiskMedia } from "@/media/media-data";
-import { referencedMedia, verifySequenceMedia } from "@/media/sequence-media";
+import {
+	referencedMedia,
+	requireApprovedMedia,
+	verifySequenceMedia,
+} from "@/media/sequence-media";
 import { generateUUID } from "@/utils/id";
 import { stableStringify } from "./compare";
 import type {
@@ -246,7 +250,14 @@ export async function commitApproval({
 	capture: ReturnType<typeof captureApproval>;
 }) {
 	const { snapshot, data, mediaGeneration } = capture;
-	if (data.origin === "export") await verifySequenceMedia(snapshot.scene);
+	if (
+		data.origin === "export" ||
+		data.footage.some(({ missing }) => missing) ||
+		snapshot.scene.projectItems.some(
+			({ file }) => isDiskMedia(file) && file.version,
+		)
+	)
+		await verifySequenceMedia(snapshot.scene);
 	const fingerprint = await deliveryFingerprint(snapshot);
 	const checkpoint = { ...data, fingerprint };
 	const result = await editor.project.saveCheckpoint({
@@ -381,6 +392,8 @@ export function checkpointDeliverySnapshot({
 	const project = editor.project.getActive();
 	const shortStyle = checkpoint.shortStyle ?? projectShortStyle({ project });
 	const frame = checkpoint.shortFrame ?? project.settings;
+	const projectItems = editor.media.getProjectItems();
+	requireApprovedMedia({ footage: checkpoint.footage, projectItems });
 	const { srt, cueCount } = shortStyle && !checkpoint.shortStyle
 		? shortCaptionDelivery({ tracks: checkpoint.tracks })
 		: checkpoint;
@@ -390,7 +403,7 @@ export function checkpointDeliverySnapshot({
 		requestedRevision: editor.command.getRevision(),
 		scene: deliveryScene({
 			sequence: checkpointSequence(checkpoint),
-			projectItems: editor.media.getProjectItems(),
+			projectItems,
 			projectSources: checkpoint.captions?.sources,
 			background: checkpoint.background,
 			shortCanvas: shortStyle ? frame.canvasSize : undefined,

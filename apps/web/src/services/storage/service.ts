@@ -13,7 +13,7 @@ import {
 	removalMarkerDataSchema,
 } from "@splice/bridge/ops";
 import { mediaUrlForPath } from "@splice/bridge";
-import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
+import { isDiskMedia } from "@/media/media-data";
 import type { DiskMedia, ProjectItem } from "@/media/types";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
 import { ProjectStorageAdapter } from "./project-storage-adapter";
@@ -71,15 +71,14 @@ export function normalizeMarkers({ raw }: { raw: unknown }): Marker[] {
  * Rebuilds a disk item from its stored path. A file that left the Footage folder
  * still loads, marked missing, so its clips stay in the sequence until it's relinked.
  */
-async function loadDiskProjectItem({
+function loadDiskProjectItem({
 	metadata,
 	diskPath,
 }: {
 	metadata: ProjectItemData;
 	diskPath: string;
-}): Promise<ProjectItem> {
-	const probed = await probeDiskMedia({ path: diskPath }).catch(() => null);
-	const file: DiskMedia = probed ?? {
+}): ProjectItem {
+	const file: DiskMedia = {
 		kind: "disk",
 		path: diskPath,
 		url: mediaUrlForPath(diskPath),
@@ -87,6 +86,8 @@ async function loadDiskProjectItem({
 		type: "application/octet-stream",
 		size: metadata.size,
 		lastModified: metadata.lastModified,
+		version: metadata.diskVersion,
+		contentHash: metadata.diskContentHash,
 	};
 	return {
 		id: metadata.id,
@@ -101,7 +102,43 @@ async function loadDiskProjectItem({
 		hasAudio: metadata.hasAudio,
 		thumbnailUrl: metadata.thumbnailUrl,
 		ephemeral: metadata.ephemeral,
-		missing: probed === null,
+		missing: true,
+		replacementId: metadata.replacementId,
+		originalLocation: metadata.originalLocation,
+	};
+}
+
+function itemMetadata(projectItem: ProjectItem): ProjectItemData {
+	return {
+		id: projectItem.id,
+		name: projectItem.name,
+		type: projectItem.type,
+		size: projectItem.file.size,
+		lastModified: projectItem.file.lastModified,
+		width: projectItem.width,
+		height: projectItem.height,
+		duration: projectItem.duration,
+		fps: projectItem.fps,
+		hasAudio: projectItem.hasAudio,
+		thumbnailUrl: projectItem.thumbnailUrl,
+		ephemeral: projectItem.ephemeral,
+	};
+}
+
+function recordingMetadata({
+	projectItem,
+	file,
+}: {
+	projectItem: ProjectItem;
+	file: DiskMedia;
+}): ProjectItemData {
+	return {
+		...itemMetadata(projectItem),
+		diskPath: file.path,
+		diskContentHash: file.contentHash,
+		diskVersion: file.version,
+		replacementId: projectItem.replacementId,
+		originalLocation: projectItem.originalLocation,
 	};
 }
 
@@ -180,9 +217,11 @@ class StorageService {
 	async saveProject({
 		project,
 		correctionEvents = [],
+		replacement,
 	}: {
 		project: TProject;
 		correctionEvents?: CorrectionEvent[];
+		replacement?: ProjectItem;
 	}): Promise<void> {
 		const duration =
 			project.metadata.duration ??
@@ -225,9 +264,19 @@ class StorageService {
 			...(project.approval && { approval: project.approval }),
 		};
 
+		let recording: ProjectItemData | undefined;
+		if (replacement) {
+			if (!isDiskMedia(replacement.file))
+				throw new Error("Expected a replacement from Footage.");
+			recording = recordingMetadata({
+				projectItem: replacement,
+				file: replacement.file,
+			});
+		}
 		await this.projectsAdapter.save({
 			project: serializedProject,
 			events: correctionEvents,
+			recording,
 		});
 		if (correctionEvents.length)
 			for (const listener of this.correctionOutboxListeners) listener();
@@ -404,27 +453,12 @@ class StorageService {
 		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
-		const metadata: ProjectItemData = {
-			id: projectItem.id,
-			name: projectItem.name,
-			type: projectItem.type,
-			size: projectItem.file.size,
-			lastModified: projectItem.file.lastModified,
-			width: projectItem.width,
-			height: projectItem.height,
-			duration: projectItem.duration,
-			fps: projectItem.fps,
-			hasAudio: projectItem.hasAudio,
-			thumbnailUrl: projectItem.thumbnailUrl,
-			ephemeral: projectItem.ephemeral,
-		};
-
+		const metadata = itemMetadata(projectItem);
 		const data = projectItem.file;
 		if (isDiskMedia(data)) {
-			// The file stays on disk; only its path and metadata are stored.
-			await mediaMetadataAdapter.set({
-				key: projectItem.id,
-				value: { ...metadata, diskPath: data.path },
+			await this.projectsAdapter.writeRecording({
+				projectId,
+				recording: recordingMetadata({ projectItem, file: data }),
 			});
 			return;
 		}
@@ -465,7 +499,9 @@ class StorageService {
 		const { mediaMetadataAdapter, projectItemsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
-		const metadata = await mediaMetadataAdapter.get(id);
+		const metadata =
+			(await this.projectsAdapter.readRecording({ projectId, id })) ??
+			(await mediaMetadataAdapter.get(id));
 		if (metadata?.diskPath) {
 			return loadDiskProjectItem({ metadata, diskPath: metadata.diskPath });
 		}
@@ -506,6 +542,21 @@ class StorageService {
 		};
 	}
 
+	private async listProjectItemIds({
+		projectId,
+		mediaMetadataAdapter,
+	}: {
+		projectId: string;
+		mediaMetadataAdapter: IndexedDBAdapter<ProjectItemData>;
+	}): Promise<string[]> {
+		// Old projects still have disk metadata alongside the browser files.
+		const [legacy, recordings] = await Promise.all([
+			mediaMetadataAdapter.list(),
+			this.projectsAdapter.readRecordings({ projectId }),
+		]);
+		return [...new Set([...legacy, ...recordings.map(({ id }) => id)])].sort();
+	}
+
 	async loadAllProjectItems({
 		projectId,
 	}: {
@@ -515,7 +566,10 @@ class StorageService {
 			projectId,
 		});
 
-		const mediaIds = await mediaMetadataAdapter.list();
+		const mediaIds = await this.listProjectItemIds({
+			projectId,
+			mediaMetadataAdapter,
+		});
 		const mediaItems: ProjectItem[] = [];
 
 		for (const id of mediaIds) {
@@ -541,6 +595,7 @@ class StorageService {
 		await Promise.all([
 			projectItemsAdapter.remove(id),
 			mediaMetadataAdapter.remove(id),
+			this.projectsAdapter.removeRecordings({ projectId, id }),
 		]);
 	}
 
@@ -555,6 +610,7 @@ class StorageService {
 		await Promise.all([
 			mediaMetadataAdapter.clear(),
 			projectItemsAdapter.clear(),
+			this.projectsAdapter.removeRecordings({ projectId }),
 		]);
 	}
 
@@ -584,7 +640,10 @@ class StorageService {
 			projectId,
 		});
 
-		const mediaIds = await mediaMetadataAdapter.list();
+		const mediaIds = await this.listProjectItemIds({
+			projectId,
+			mediaMetadataAdapter,
+		});
 
 		return {
 			mediaItems: mediaIds.length,

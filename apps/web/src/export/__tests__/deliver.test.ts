@@ -611,6 +611,64 @@ describe("Horizontal delivery", () => {
 		expect(splice.calls).toEqual([]);
 	});
 
+	test("retargets a failed render to the verified new location of the approved recording", async () => {
+		const editor = horizontalEditor();
+		useCaptionsStore.setState({ spellingsLoaded: true });
+		const file = {
+			...recording,
+			version: "original",
+			contentHash: "sample-v1:original",
+		};
+		const item = {
+			id: "rec",
+			name: "Recording",
+			type: "video" as const,
+			url: file.url,
+			file,
+		};
+		editor.media.setProjectItems({ projectItems: [item] });
+		let path = file.path;
+		let version = file.version;
+		spyOn(globalThis, "fetch").mockImplementation(
+			Object.assign(
+				async (...[input, init]: Parameters<typeof fetch>) => {
+					if (init?.method !== "HEAD") return splice.fetch(input, init);
+					if (!String(input).endsWith(path))
+						return new Response(null, { status: 404 });
+					return new Response(null, {
+						headers: { [MEDIA_VERSION_HEADER]: version },
+					});
+				},
+				{ preconnect: fetch.preconnect },
+			),
+		);
+		const render = spyOn(editor.renderer, "exportProject")
+			.mockResolvedValueOnce({ success: false, error: "GPU lost" })
+			.mockResolvedValue({ success: true, buffer: new ArrayBuffer(16) });
+		const snapshot = takeDeliverySnapshot({ editor });
+		expect(
+			await editor.project.deliver({ snapshot, quality: "high" }),
+		).toMatchObject({
+			success: false,
+			failedStep: "render",
+		});
+		path = "Moved/rec.mkv";
+		version = "moved";
+		const moved = { ...file, path, version, url: `/splice/media/${path}` };
+		editor.media.setProjectItems({
+			projectItems: [{ ...item, file: moved, url: moved.url }],
+		});
+		expect(await editor.project.retryDelivery()).toMatchObject({
+			success: true,
+		});
+		expect(render.mock.calls[1][0].scene?.projectItems[0].url).toEndWith(
+			"Moved/rec.mkv?version=moved",
+		);
+		expect(splice.published[0].fingerprint).toBe(
+			await deliveryFingerprint(snapshot),
+		);
+	});
+
 	test("Retry after a lost publish answer returns the published pair instead of a second one", async () => {
 		const editor = horizontalEditor();
 		useCaptionsStore.setState({ spellingsLoaded: true });

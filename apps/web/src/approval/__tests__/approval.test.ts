@@ -1,3 +1,5 @@
+import { MEDIA_CONTENT_HEADER, MEDIA_VERSION_HEADER } from "@splice/bridge";
+import { IDBFactory, IDBKeyRange, IDBObjectStore } from "fake-indexeddb";
 import { BASE_STYLE } from "@splice/bridge/style";
 import { StyleUpdateApi } from "@/agent/style-update";
 import {
@@ -19,6 +21,8 @@ import type { EditorCore } from "@/core";
 import { deliveryFingerprint, takeDeliverySnapshot } from "@/export/deliver";
 import type { ProjectItem } from "@/media/types";
 import { buildDefaultSequence } from "@/timeline/sequences";
+import { IndexedDBAdapter } from "@/services/storage/indexeddb-adapter";
+import type { ProjectItemData } from "@/services/storage/types";
 import { normalizeMarkers, storageService } from "@/services/storage/service";
 import { ApprovalApi } from "../api";
 import {
@@ -74,6 +78,14 @@ function recording({
 			lastModified: 0,
 		},
 	};
+}
+
+function mockFootageFetch(
+	respond: (...args: Parameters<typeof fetch>) => Promise<Response>,
+) {
+	spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(respond, { preconnect: fetch.preconnect }),
+	);
 }
 
 function availableRecording() {
@@ -845,6 +857,317 @@ describe("review issues", () => {
 		);
 		expect(await approval.checkpointStatus()).toMatchObject({
 			matchesApproved: true,
+		});
+	});
+
+	test("verifies moves, retains approval and quarantines changes at the saved path", async () => {
+		const { editor, api, approval } = setUp();
+		const save = spyOn(storageService, "saveProjectItem").mockResolvedValue(
+			undefined,
+		);
+		const item = recording();
+		const { file } = item;
+		if (file instanceof File) throw new Error("Expected disk recording");
+		const originalHash = "a".repeat(64);
+		const original = { ...item, file: { ...file, contentHash: originalHash } };
+		editor.media.setProjectItems({ projectItems: [original] });
+		applyHighlight({ editor, api });
+		const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+		const tracks = editor.sequences.getActiveSequence().tracks;
+		const movedPath = "Moved/rec.mov";
+		let content = originalHash;
+		let version = "copy";
+		mockFootageFetch(async (...[input]) => {
+			if (!String(input).endsWith(movedPath))
+				return new Response(null, { status: 404 });
+			return new Response(null, {
+				headers: {
+					"content-type": "video/quicktime",
+					"content-length": "100",
+					[MEDIA_CONTENT_HEADER]: content,
+					[MEDIA_VERSION_HEADER]: version,
+				},
+			});
+		});
+		const first = editor.media.verifyRecordings();
+		expect(editor.media.verifyRecordings()).toBe(first);
+		expect(await first).toMatchObject([{ verification: "missing" }]);
+		expect(
+			await editor.media.relinkRecording({
+				request: { projectItemId: "rec", path: movedPath },
+			}),
+		).toMatchObject({
+			kind: "relinked",
+			verification: "match",
+			item: { id: "rec", path: movedPath },
+		});
+		expect(save).toHaveBeenCalledTimes(1);
+		expect(editor.sequences.getActiveSequence().tracks).toBe(tracks);
+		expect(editor.project.getActive().captions?.sources).toEqual(
+			checkpoint.captions?.sources,
+		);
+		expect(await approval.checkpointStatus()).toMatchObject({
+			matchesApproved: true,
+		});
+
+		content = "b".repeat(64);
+		version = "replacement";
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "changed", item: { missing: true } },
+		]);
+		expect(sinceApprovalSummary(reviewState({ editor }))).toContain(
+			"needs confirmation",
+		);
+		expect(await approval.checkpointStatus()).toMatchObject({
+			matchesApproved: false,
+		});
+		expect(
+			await editor.media.relinkRecording({
+				request: { projectItemId: "rec", path: movedPath },
+			}),
+		).toEqual({
+			kind: "confirmation-required",
+			verification: "changed",
+			version,
+		});
+		expect(save).toHaveBeenCalledTimes(1);
+		const review = reviewState({ editor }).issues.filter(
+			({ kind }) => kind === "replacement-passage",
+		);
+		expect(review).toMatchObject([
+			{ start: 0, end: 4, title: "Review clip and captions" },
+			{ start: 4, end: 8, title: "Review clip and captions" },
+			{ title: "Review graphic evidence" },
+		]);
+	});
+
+	test("commits replacement and invalidation together, preserving undo if the binding write fails", async () => {
+		const { editor } = setUp();
+		editor.save.stop();
+		spyOn(storageService, "saveProject").mockRestore();
+		const globals = { indexedDB: new IDBFactory(), IDBKeyRange };
+		const previous = Object.keys(globals).map(
+			(name) =>
+				[name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+		);
+		for (const [name, value] of Object.entries(globals))
+			Object.defineProperty(globalThis, name, { configurable: true, value });
+		try {
+			const item = recording();
+			const { file } = item;
+			if (file instanceof File) throw new Error("Expected disk recording");
+			editor.media.setProjectItems({
+				projectItems: [
+					{
+						...item,
+						type: "audio",
+						file: { ...file, path: "rec.wav", contentHash: "c".repeat(64) },
+					},
+				],
+			});
+			const projectId = editor.project.getActive().metadata.id;
+			const legacy = new IndexedDBAdapter<ProjectItemData>({
+				dbName: `splice-media-${projectId}`,
+				storeName: "media-metadata",
+			});
+			await legacy.set({
+				key: item.id,
+				value: {
+					id: item.id,
+					name: item.name,
+					type: "audio",
+					size: file.size,
+					lastModified: file.lastModified,
+					diskPath: "rec.wav",
+					diskContentHash: "c".repeat(64),
+				},
+			});
+			expect(
+				await storageService.loadAllProjectItems({ projectId }),
+			).toMatchObject([{ id: item.id, file: { contentHash: "c".repeat(64) } }]);
+			const { checkpoint } = await finalizeCut({ editor, origin: "editor" });
+			const api = new EditorApi(editor);
+			expect(
+				api.apply({
+					sequenceId: editor.sequences.getActiveSequence().id,
+					expectedRevision: api.getRevision(),
+					label: "Add marker",
+					ops: [{ op: "add_marker", at: { seconds: 1 } }],
+				}),
+			).toMatchObject({ ok: true });
+			const sequence = editor.sequences.getActiveSequence();
+			const loudness = {
+				targetLufs: -14,
+				ceilingDbtp: -1,
+				gainDb: 0,
+				measuredLufs: -14,
+				measuredTruePeakDbtp: -1,
+				expectedLufs: -14,
+				expectedTruePeakDbtp: -1,
+				fingerprint: "original",
+			};
+			editor.sequences.setSequences({
+				sequences: [{ ...sequence, mix: { loudness } }],
+			});
+			await editor.project.saveCurrentProject();
+			expect(editor.command.canUndo()).toBe(true);
+			const tracks = editor.sequences.getActiveSequence().tracks;
+			// One second of mono PCM, served the same way as a Footage range.
+			const wav = Buffer.alloc(44 + 16000);
+			wav.write("RIFF");
+			wav.writeUInt32LE(wav.length - 8, 4);
+			wav.write("WAVEfmt ", 8);
+			wav.writeUInt32LE(16, 16);
+			wav.writeUInt16LE(1, 20);
+			wav.writeUInt16LE(1, 22);
+			wav.writeUInt32LE(8000, 24);
+			wav.writeUInt32LE(16000, 28);
+			wav.writeUInt16LE(2, 32);
+			wav.writeUInt16LE(16, 34);
+			wav.write("data", 36);
+			wav.writeUInt32LE(wav.length - 44, 40);
+			mockFootageFetch(
+				async (...[, init]) =>
+					new Response(init?.method === "HEAD" ? null : wav, {
+						headers: {
+							"content-type": "audio/wav",
+							"content-length": String(wav.length),
+							[MEDIA_CONTENT_HEADER]: "d".repeat(64),
+							[MEDIA_VERSION_HEADER]: "v2",
+						},
+					}),
+			);
+			const request = { projectItemId: "rec", path: "rec.wav" };
+			expect(await editor.media.verifyRecordings()).toMatchObject([
+				{ verification: "changed" },
+			]);
+			expect(await editor.media.relinkRecording({ request })).toMatchObject({
+				kind: "confirmation-required",
+				version: "v2",
+			});
+			expect(
+				await editor.media.relinkRecording({
+					request: { ...request, replace: true, expectedVersion: "stale" },
+				}),
+			).toMatchObject({ kind: "confirmation-required", version: "v2" });
+			const confirmed = { ...request, replace: true, expectedVersion: "v2" };
+			const put = IDBObjectStore.prototype.put;
+			const writes: string[] = [];
+			const failBindingWrite = spyOn(
+				IDBObjectStore.prototype,
+				"put",
+			).mockImplementation(function (
+				this: IDBObjectStore,
+				...args: Parameters<IDBObjectStore["put"]>
+			) {
+				writes.push(this.name);
+				if (this.name === "recordings")
+					throw new Error("Failed to write replacement");
+				return put.apply(this, args);
+			});
+			try {
+				await expect(
+					editor.media.relinkRecording({ request: confirmed }),
+				).rejects.toThrow("Failed to write replacement");
+			} finally {
+				failBindingWrite.mockRestore();
+			}
+			expect(writes).toEqual(["projects", "recordings"]);
+			expect(editor.command.canUndo()).toBe(true);
+			expect(editor.project.getActive().captions?.sources).toEqual(
+				checkpoint.captions?.sources,
+			);
+			const persisted = (await storageService.loadProject({ id: projectId }))
+				?.project;
+			expect(persisted?.captions?.sources).toEqual(
+				checkpoint.captions?.sources,
+			);
+			expect(persisted?.sequences[0].mix?.loudness).toEqual(loudness);
+			expect(editor.sequences.getActiveSequence().mix?.loudness).toEqual(
+				loudness,
+			);
+			expect(
+				(await storageService.loadProjectItem({ projectId, id: "rec" }))?.file,
+			).toMatchObject({ contentHash: "c".repeat(64) });
+			expect(
+				await editor.media.relinkRecording({
+					request: confirmed,
+				}),
+			).toMatchObject({
+				kind: "relinked",
+				verification: "changed",
+				item: { id: "rec", missing: false, duration: 1 },
+			});
+			expect(editor.sequences.getActiveSequence().tracks).toBe(tracks);
+			expect(editor.project.getActive().captions?.sources).toEqual([]);
+			expect(editor.command.canUndo()).toBe(false);
+			const replaced = (await storageService.loadProject({ id: projectId }))
+				?.project;
+			expect(replaced?.captions?.sources).toEqual([]);
+			expect(replaced?.sequences[0].mix?.loudness).toBeUndefined();
+			expect(
+				editor.sequences.getActiveSequence().mix?.loudness,
+			).toBeUndefined();
+			expect(
+				await storageService.loadAllProjectItems({ projectId }),
+			).toMatchObject([{ id: item.id, file: { contentHash: "d".repeat(64) } }]);
+			expect(checkpoint.captions?.sources).toHaveLength(1);
+			expect(approvedIssues({ editor, checkpoint })).toContainEqual(
+				expect.objectContaining({ kind: "changed-footage" }),
+			);
+			expect(
+				reviewState({ editor }).issues.filter(
+					({ kind }) => kind === "replacement-passage",
+				),
+			).toHaveLength(2);
+		} finally {
+			for (const [name, descriptor] of previous) {
+				if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+				else Reflect.deleteProperty(globalThis, name);
+			}
+		}
+	});
+
+	test("backfills a legacy recording in place and keeps its fingerprint if it goes missing", async () => {
+		const { editor } = setUp();
+		const original = recording();
+		const save = spyOn(storageService, "saveProjectItem").mockResolvedValue(
+			undefined,
+		);
+		editor.media.setProjectItems({ projectItems: [original] });
+		let gone = false;
+		mockFootageFetch(async (...[input]) =>
+			gone && String(input).endsWith("Day%201/rec.mov")
+				? new Response(null, { status: 404 })
+				: new Response(null, {
+						headers: {
+							"content-type": "video/quicktime",
+							"content-length": "100",
+							[MEDIA_CONTENT_HEADER]: "a".repeat(64),
+							[MEDIA_VERSION_HEADER]: "v1",
+						},
+					}),
+		);
+		expect(
+			await editor.media.relinkRecording({
+				request: { projectItemId: "rec", path: "moved.mov" },
+			}),
+		).toMatchObject({
+			kind: "confirmation-required",
+			verification: "unverified",
+		});
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "backfilled" },
+		]);
+		expect(save.mock.calls[0][0].projectItem.file).toMatchObject({
+			contentHash: "a".repeat(64),
+		});
+		gone = true;
+		expect(await editor.media.verifyRecordings()).toMatchObject([
+			{ verification: "missing" },
+		]);
+		expect(editor.media.getProjectItems()[0].file).toMatchObject({
+			contentHash: "a".repeat(64),
 		});
 	});
 

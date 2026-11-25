@@ -1,7 +1,15 @@
 import { expect, test } from "bun:test";
 import type { RoughCutSources, Transcript } from "@splice/bridge";
 import { roughCutTabRequestSchema } from "@splice/bridge/ops";
-import { chmod, mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	stat,
+	utimes,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +21,7 @@ import {
 	parseSilencedetect,
 	silencedetectArgs,
 } from "../pauses";
+import { footageVersion } from "../footage";
 import { resolveRoughCutRequest } from "../rough-cut";
 import { extractAudio, parseHasAudio } from "../transcription-tools";
 
@@ -514,6 +523,22 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				await detector.fillerCuts({ path: "take.wav", paddingSeconds: 0.2 }),
 			).toBeNull();
 
+			await rename(
+				join(root, "Footage", "take.wav"),
+				join(root, "Footage", "moved.wav"),
+			);
+			expect(
+				await detector.detect({ params: { path: "moved.wav" } }),
+			).toMatchObject({
+				path: "moved.wav",
+				cached: true,
+				pauses: first.pauses,
+			});
+			await rename(
+				join(root, "Footage", "moved.wav"),
+				join(root, "Footage", "take.wav"),
+			);
+
 			cached = transcript({ words: [word(["uh", 2.7, 3])] });
 			const second = await detector.detect({
 				params: {
@@ -727,8 +752,8 @@ test("resolves automatic pauses and filler words for every recording on the sour
 		ok: true,
 		sequenceId: "raw",
 		items: [
-			{ id: "a", name: "A", path: "a.mp4" },
-			{ id: "b", name: "B", path: "b.mp4" },
+			{ id: "a", name: "A", path: "a.mp4", recordingVersion: "version-a" },
+			{ id: "b", name: "B", path: "b.mp4", recordingVersion: "version-b" },
 		],
 	};
 	const resolved = await resolveRoughCutRequest({
@@ -752,8 +777,8 @@ test("resolves automatic pauses and filler words for every recording on the sour
 	});
 	expect(listed).toEqual([{ sequenceId: undefined }]);
 	expect(detected).toEqual([
-		{ path: "a.mp4", noiseDb: -40 },
-		{ path: "b.mp4", noiseDb: -40 },
+		{ path: "a.mp4", expectedVersion: "version-a", noiseDb: -40 },
+		{ path: "b.mp4", expectedVersion: "version-b", noiseDb: -40 },
 	]);
 	expect(resolved).toEqual({
 		plan: {
@@ -938,7 +963,16 @@ test.skipIf(!Bun.which("ffmpeg"))(
 				listSources: async () => ({
 					ok: true,
 					sequenceId: "raw",
-					items: [{ id: "a", name: "A", path: "click.wav" }],
+					items: [
+						{
+							id: "a",
+							name: "A",
+							path: "click.wav",
+							recordingVersion: await footageVersion({
+								absolutePath: join(root, "Footage", "click.wav"),
+							}),
+						},
+					],
 				}),
 				pauseRanges: detector.pauseRanges,
 				fillerCuts: detector.fillerCuts,
