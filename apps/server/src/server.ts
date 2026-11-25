@@ -196,7 +196,7 @@ export function startServer({
 		"transcript.words": (params) => transcription.words(params),
 		"style.defaults": style.defaults,
 		"framing.list": style.listFraming,
-		"framing.record": style.recordFraming,
+		"framing.reconcile": style.reconcileFraming,
 		"spellings.list": () => spellings.list(),
 		"spellings.save": (params) => spellings.save(params),
 		"spellings.remove": (params) => spellings.remove(params),

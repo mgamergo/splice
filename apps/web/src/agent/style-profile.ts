@@ -4,7 +4,7 @@ import {
 	framingKind,
 	framingPreferencesSchema,
 	styleDefaultsSchema,
-	type FramingEvidence,
+	type FramingGroup,
 } from "@splice/bridge/style";
 import { readBridgeToken } from "@/bridge/token";
 import { callSplice } from "@/bridge/splice-api";
@@ -56,16 +56,10 @@ export async function readFraming() {
 		.filter(({ reverted }) => !reverted);
 }
 
-export function framingEvidence({
-	project,
-	sequences,
-}: {
-	project: TProject;
-	sequences: TSequence[];
-}): FramingEvidence[] {
+export function framingEvidence(sequences: TSequence[]): FramingGroup[] {
 	const groups = new Map<
-		FramingEvidence["kind"],
-		FramingEvidence["evidence"]
+		FramingGroup["kind"],
+		FramingGroup["evidence"]
 	>();
 	const seen = new Set<string>();
 	for (const sequence of sequences) {
@@ -93,30 +87,39 @@ export function framingEvidence({
 			: [
 					{
 						kind,
-						projectId: project.metadata.id,
 						evidence: group.slice(-FRAMING_THRESHOLD),
 					},
 				],
 	);
 }
 
-/** An individual correction stays in the project. Send only qualifying groups. */
-export function watchFramingCorrections(editor: EditorCore) {
-	let sent = "";
+/** Send qualifying groups together, including an empty set after undo. */
+export function watchFramingCorrections({
+	editor,
+	send = (params: { projectId: string; groups: FramingGroup[] }) =>
+		callSplice({ method: "framing.reconcile", params }),
+}: {
+	editor: EditorCore;
+	send?: (params: { projectId: string; groups: FramingGroup[] }) => Promise<unknown>;
+}) {
+	let last: { key: string } | undefined;
+	let pending = Promise.resolve();
 	return editor.command.subscribeRevision(() => {
 		const project = editor.project.getActiveOrNull();
 		if (!project) return;
-		const groups = framingEvidence({
-			project,
-			sequences: editor.sequences.getSequences(),
-		});
-		const key = JSON.stringify(groups);
-		if (key === sent || !groups.length) return;
-		sent = key;
-		void Promise.all(
-			groups.map((params) => callSplice({ method: "framing.record", params })),
-		).catch(() => {
-			if (sent === key) sent = "";
-		});
+		const params = {
+			projectId: project.metadata.id,
+			groups: framingEvidence(editor.sequences.getSequences()),
+		};
+		const snapshot = { key: JSON.stringify(params) };
+		if (last?.key === snapshot.key) return;
+		last = snapshot;
+		pending = pending
+			.then(async () => {
+				await send(params);
+			})
+			.catch(() => {
+				if (last === snapshot) last = undefined;
+			});
 	});
 }

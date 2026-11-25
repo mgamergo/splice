@@ -1194,26 +1194,43 @@ export function syncGraphics({
 			record = { ...record, framingCorrection: { before, after } };
 
 		const zoomTarget = record.target;
-		const oldZoomCap = record.zoomStyleMaxScale ?? previousStyle.zoom.maxScale;
+		const oldZoomCap = record.zoomStyleMaxScale;
 		const oldZoomMin = record.zoomStyleMinScale ?? previousStyle.zoom.minScale;
-		if (record.kind === "zoom" && zoomTarget && (style.zoom.minScale !== oldZoomMin ||
-			(record.maxZoom === undefined && style.zoom.maxScale !== oldZoomCap))) {
-			record = { ...record, zoomStyleMaxScale: oldZoomCap, zoomStyleMinScale: oldZoomMin };
-			if (anchor) {
-				const frame = screenFrame({ clip: anchor.clip, size: sizes.get(record.action.projectItemId), canvas });
-				const view = planZoomView({
-					frame,
-					target: targetOnCanvas({ frame, target: zoomTarget }),
-					canvas,
-					maxZoom: zoomLimit({ maxZoom: record.maxZoom, bias: record.zoomBias, style }),
-					minZoom: style.zoom.minScale,
-				});
-				record = { ...record, zoomStyleMaxScale: style.zoom.maxScale, zoomStyleMinScale: style.zoom.minScale, planned: {
+		// Older records did not save the requested cap. Keep their planned view.
+		if (
+			record.kind === "zoom" &&
+			zoomTarget &&
+			anchor &&
+			(oldZoomCap !== undefined || record.maxZoom !== undefined) &&
+			(style.zoom.minScale !== oldZoomMin ||
+				(record.maxZoom === undefined && style.zoom.maxScale !== oldZoomCap))
+		) {
+			const frame = screenFrame({
+				clip: anchor.clip,
+				size: sizes.get(record.action.projectItemId),
+				canvas,
+			});
+			const view = planZoomView({
+				frame,
+				target: targetOnCanvas({ frame, target: zoomTarget }),
+				canvas,
+				maxZoom: zoomLimit({
+					maxZoom: record.maxZoom,
+					bias: record.zoomBias,
+					style,
+				}),
+				minZoom: style.zoom.minScale,
+			});
+			record = {
+				...record,
+				zoomStyleMaxScale: style.zoom.maxScale,
+				zoomStyleMinScale: style.zoom.minScale,
+				planned: {
 					...record.planned,
 					position: view?.center ?? { x: 0, y: 0 },
 					scale: view?.scale ?? 1,
-				} };
-			}
+				},
+			};
 		}
 		const adjusted = { ...record, overrides };
 		if (!anchor) {
@@ -1372,12 +1389,7 @@ export function syncGraphics({
 				values.scale = (values.scale ?? 1) * scale;
 			}
 		}
-		if (
-			record.kind === "card" &&
-			shortStyle === "explainer" &&
-			!overrides.position &&
-			!hidden
-		) {
+		if (record.kind === "card" && !overrides.position && !hidden) {
 			const region = actionTargetRegion({
 				record,
 				anchor,
@@ -1404,8 +1416,17 @@ export function syncGraphics({
 			)?.placed?.position;
 			const top = { x: 0, y: -canvas.height * 0.25 };
 			const bottom = { x: 0, y: canvas.height * 0.25 };
+			const preferBottom = record.cardAnchor
+				? record.cardAnchor === "bottom"
+				: ((shortStyle === "explainer" ? previousCard : undefined) ??
+					values.position ??
+					top).y > 0;
+			const halves = preferBottom ? [bottom, top] : [top, bottom];
+			const targetAware = cardPosition({ canvas, target: region ?? null });
 			const positions =
-				(previousCard ? previousCard.y > 0 : (values.position?.y ?? 0) > 0) ? [bottom, top] : [top, bottom];
+				shortStyle === "explainer" || cardAnchor !== "auto"
+					? [...halves, ...(region ? [targetAware] : [])]
+					: [values.position ?? targetAware, ...halves];
 			const draft = newGraphicClip({
 				record,
 				params: paramsForValues(),
@@ -1453,10 +1474,7 @@ export function syncGraphics({
 				values.position = choice.position;
 				start = choice.at;
 				duration = Math.min(duration, pictureEnd - start);
-			} else if (
-				overrides.start === undefined &&
-				overrides.duration === undefined
-			) {
+			} else {
 				if (current)
 					tracks = filterGraphicTracks({
 						tracks,

@@ -91,7 +91,7 @@ export function useAgentBridge(): void {
 			recordRevisionFloor(revision);
 			client.notifyRevision(revision);
 		});
-		const stopWatchingFraming = watchFramingCorrections(editor);
+		const stopWatchingFraming = watchFramingCorrections({ editor });
 		client.start();
 		client.notifyRevision(api.getRevision());
 

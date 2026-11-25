@@ -95,18 +95,23 @@ export const framingKindSchema = z.enum([
 	"card-top",
 	"card-bottom",
 ]);
-export const framingEvidenceSchema = z.strictObject({
+const framingGroupSchema = z.strictObject({
 	kind: framingKindSchema,
-	projectId: z.string().min(1).max(200),
 	evidence: z.array(evidence).length(FRAMING_THRESHOLD),
 });
-export const framingPreferenceSchema = framingEvidenceSchema.extend({
+const framingProjectId = z.string().min(1).max(200);
+export const reconcileFramingSchema = z.strictObject({
+	projectId: framingProjectId,
+	groups: z.array(framingGroupSchema).max(framingKindSchema.options.length),
+});
+export const framingPreferenceSchema = framingGroupSchema.extend({
+	projectId: framingProjectId,
 	id: z.uuid(),
 	reverted: z.boolean(),
 });
 export const framingPreferencesSchema = z.array(framingPreferenceSchema);
 export const revertFramingPreferenceSchema = z.strictObject({ id: z.uuid() });
-export type FramingEvidence = z.infer<typeof framingEvidenceSchema>;
+export type FramingGroup = z.infer<typeof framingGroupSchema>;
 export type FramingPreference = z.infer<typeof framingPreferenceSchema>;
 
 /** Zoom evidence is measured in magnification. Card evidence is relative to frame height. */
@@ -118,7 +123,7 @@ export function framingKind({
 	property: "zoom" | "card";
 	before: number;
 	after: number;
-}): FramingEvidence["kind"] | undefined {
+}): FramingGroup["kind"] | undefined {
 	if (property === "zoom" && after >= 1 && after <= 4) {
 		if (after / before >= 1.15) return "zoom-closer";
 		if (after / before <= 0.85) return "zoom-wider";

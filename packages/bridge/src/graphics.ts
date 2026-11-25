@@ -175,6 +175,11 @@ export const graphicsApplyRequestSchema = z.strictObject({
 	sequenceId,
 	...passFields,
 	expectedRevision,
+	framingFingerprint: z
+		.string()
+		.max(100)
+		.optional()
+		.describe("Pass the framingFingerprint from graphics_plan when applying a previewed pass."),
 	label: z
 		.string()
 		.min(1)

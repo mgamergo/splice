@@ -351,6 +351,28 @@ describe("Short styles", () => {
 		).toEqual(["highlight", "card"]);
 	});
 
+	test("moves a creator-directed Raw card away from the action despite a learned top anchor", () => {
+		setRaw();
+		const learned = api.withFraming([{
+			kind: "card-top",
+			projectId: "project",
+			id: crypto.randomUUID(),
+			reverted: false,
+			evidence: [],
+		}]);
+		expect(learned.graphicsApply({
+			...revision(),
+			graphics: [{
+				...card,
+				creatorDirected: true,
+				target: { x: 0.42, y: 0.22, width: 0.12, height: 0.06 },
+			}],
+		})).toMatchObject({ ok: true });
+		const [graphic] = summarizeGraphics({ sequence: sequence() });
+		const placed = findGraphicClip({ tracks: sequence().tracks, graphicId: graphic.id });
+		expect(Number(placed?.clip.params["transform.positionY"])).toBeGreaterThan(0);
+	});
+
 	test("hides Explainer cards in Raw unless the creator directed them, and restores them on return", () => {
 		applyGraphics([card]);
 		const [initial] = summarizeGraphics({ sequence: sequence() });

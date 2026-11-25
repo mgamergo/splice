@@ -999,7 +999,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Apply a graphics pass",
 			description:
-				"Applies a basic graphics pass to the active sequence as one undo step: zooms (keyframes on the picture clip, with a Zoom handle on the Graphics track), highlight boxes and glass cards (on the Cards track), each linked to its passage, action and target. Rerunning with the same keys, or the same kind and action, updates graphics instead of duplicating them; properties the creator adjusted and graphics the creator deleted are kept as they are. Graphics then follow their actions through cuts and take swaps, and are flagged when a cut removes the action. Takes the same graphics as graphics_plan, plus expectedRevision from sequence_get.",
+				"Applies a basic graphics pass to the active sequence as one undo step: zooms (keyframes on the picture clip, with a Zoom handle on the Graphics track), highlight boxes and glass cards (on the Cards track), each linked to its passage, action and target. Rerunning with the same keys, or the same kind and action, updates graphics instead of duplicating them; properties the creator adjusted and graphics the creator deleted are kept as they are. Graphics then follow their actions through cuts and take swaps, and are flagged when a cut removes the action. Takes the same graphics as graphics_plan, plus expectedRevision. When applying a previewed pass, also pass its framingFingerprint to check that framing preferences still match.",
 			inputSchema: graphicsApplyRequestSchema.shape,
 		},
 		(args) =>

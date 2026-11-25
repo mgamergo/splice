@@ -57,25 +57,38 @@ test("requires distinct similar corrections, and reverted evidence cannot relear
 			before: 2.5,
 			after: 2,
 		}));
-		const proposal = { kind: "zoom-wider", projectId: "project", evidence };
+		const group = { kind: "zoom-wider", evidence };
+		const proposal = { projectId: "project", groups: [group] };
+		const undone = { ...proposal, groups: [] };
 		await expect(
-			profile.recordFraming({ ...proposal, evidence: evidence.slice(0, 1) }),
+			profile.reconcileFraming({
+				...proposal,
+				groups: [{ ...group, evidence: evidence.slice(0, 1) }],
+			}),
 		).rejects.toThrow();
 		await expect(
-			profile.recordFraming({
+			profile.reconcileFraming({
 				...proposal,
-				evidence: [evidence[0], evidence[0], evidence[1]],
+				groups: [{ ...group, evidence: [evidence[0], evidence[0], evidence[1]] }],
 			}),
 		).rejects.toThrow();
 		expect(await profile.listFraming()).toEqual([]);
-		const [preference] = await profile.recordFraming(proposal);
-		expect(preference).toMatchObject({ ...proposal, reverted: false });
-		await profile.revertFraming({ id: preference.id });
-		expect(await profile.recordFraming(proposal)).toEqual([
-			{ ...preference, reverted: true },
+		const [preference] = await profile.reconcileFraming(proposal);
+		expect(preference).toMatchObject({ ...group, projectId: proposal.projectId, reverted: false });
+		await profile.reconcileFraming({ ...undone, projectId: "other-project" });
+		expect(await profile.listFraming()).toEqual([preference]);
+		await profile.reconcileFraming(undone);
+		expect(await profile.listFraming()).toEqual([]);
+		const [reinstated] = await profile.reconcileFraming(proposal);
+		expect(reinstated).toMatchObject({ ...group, reverted: false });
+
+		await profile.revertFraming({ id: reinstated.id });
+		await profile.reconcileFraming(undone);
+		expect(await profile.reconcileFraming(proposal)).toEqual([
+			{ ...reinstated, reverted: true },
 		]);
 		expect(await createStyleProfile({ root }).listFraming()).toEqual([
-			{ ...preference, reverted: true },
+			{ ...reinstated, reverted: true },
 		]);
 		expect(
 			await Bun.file(join(root, "Profile", "style-defaults.json")).exists(),

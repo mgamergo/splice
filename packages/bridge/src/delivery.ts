@@ -208,7 +208,7 @@ export const TAB_API_METHODS = [
 	"transcript.words",
 	"style.defaults",
 	"framing.list",
-	"framing.record",
+	"framing.reconcile",
 	"spellings.list",
 	"spellings.save",
 	"spellings.remove",

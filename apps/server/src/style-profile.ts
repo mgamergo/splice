@@ -1,12 +1,11 @@
 import {
 	BASE_STYLE,
-	framingEvidenceSchema,
 	framingKind,
 	framingPreferencesSchema,
+	reconcileFramingSchema,
 	revertFramingPreferenceSchema,
 	setStyleDefaultsSchema,
 	styleDefaultsSchema,
-	type FramingPreference,
 } from "@splice/bridge/style";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm } from "node:fs/promises";
@@ -116,45 +115,60 @@ export function createStyleProfile({ root }: { root: string }) {
 		async listFraming() {
 			return (await framing.read()).preferences;
 		},
-		async recordFraming(params: unknown) {
-			const parsed = framingEvidenceSchema.safeParse(params);
+		async reconcileFraming(params: unknown) {
+			const parsed = reconcileFramingSchema.safeParse(params);
 			if (!parsed.success) throw invalidParams(parsed.error.message);
-			const { kind, projectId, evidence } = parsed.data;
-			const property = kind.startsWith("zoom") ? "zoom" : "card";
-			const ids = new Set(evidence.map(({ graphicId }) => graphicId));
+			const { projectId, groups } = parsed.data;
+			const byKind = new Map(groups.map((group) => [group.kind, group]));
 			if (
-				ids.size !== evidence.length ||
-				evidence.some(
-					({ before, after }) =>
-						framingKind({ property, before, after }) !== kind,
-				)
+				byKind.size !== groups.length ||
+				groups.some(({ kind, evidence }) => {
+					const property = kind.startsWith("zoom") ? "zoom" : "card";
+					return (
+						new Set(evidence.map(({ graphicId }) => graphicId)).size !==
+							evidence.length ||
+						evidence.some(
+							({ before, after }) =>
+								framingKind({ property, before, after }) !== kind,
+						)
+					);
+				})
 			)
 				throw invalidParams(
 					"Framing requires similar corrections to distinct graphics.",
 				);
 			return (
 				await framing.update((current) => {
-					const sameProperty = (entry: FramingPreference) =>
-						entry.kind.startsWith(property);
-					if (
-						current.preferences.some(
-							(entry) =>
-								sameProperty(entry) &&
-								(!entry.reverted ||
-									(entry.projectId === projectId &&
-										entry.evidence.some(({ graphicId }) =>
-											ids.has(graphicId),
-										))),
+					const preferences = current.preferences.flatMap((entry) => {
+						if (entry.reverted || entry.projectId !== projectId) return [entry];
+						const group = byKind.get(entry.kind);
+						return group ? [{ ...entry, evidence: group.evidence }] : [];
+					});
+					for (const group of groups) {
+						const property = group.kind.startsWith("zoom") ? "zoom" : "card";
+						const ids = new Set(group.evidence.map(({ graphicId }) => graphicId));
+						if (
+							preferences.some(
+								(entry) =>
+									entry.kind.startsWith(property) &&
+									(!entry.reverted ||
+										(entry.projectId === projectId &&
+											entry.evidence.some(({ graphicId }) =>
+												ids.has(graphicId),
+											))),
+							)
 						)
-					)
-						return current;
-					return {
-						...current,
-						preferences: [
-							...current.preferences,
-							{ ...parsed.data, id: randomUUID(), reverted: false },
-						],
-					};
+							continue;
+						preferences.push({
+							...group,
+							projectId,
+							id: randomUUID(),
+							reverted: false,
+						});
+					}
+					return JSON.stringify(preferences) === JSON.stringify(current.preferences)
+						? current
+						: { ...current, preferences };
 				})
 			).preferences;
 		},

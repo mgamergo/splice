@@ -185,6 +185,12 @@ export class EditorApi {
 		return api;
 	}
 
+	private framingFingerprint() {
+		return JSON.stringify(
+			this.framing.filter(({ reverted }) => !reverted).map(({ kind }) => kind),
+		);
+	}
+
 	getRevision(): number {
 		return this.editor.command.getRevision();
 	}
@@ -807,6 +813,7 @@ export class EditorApi {
 				ok: true as const,
 				sequenceId: found.sequence.id,
 				revision: this.getRevision(),
+				framingFingerprint: this.framingFingerprint(),
 				graphics: entries,
 				...(removed > 0 && { wouldRemove: removed }),
 			};
@@ -823,6 +830,16 @@ export class EditorApi {
 		if (!parsed.success) return this.invalidRequest(parsed.error);
 		const conflict = this.checkWrite(parsed.data);
 		if (conflict) return conflict;
+		if (
+			parsed.data.framingFingerprint !== undefined &&
+			parsed.data.framingFingerprint !== this.framingFingerprint()
+		)
+			return {
+				ok: false as const,
+				code: "REVISION_CONFLICT",
+				revision: this.getRevision(),
+				message: "Framing preferences changed. Preview the graphics pass again.",
+			};
 		const found = this.graphicsSequence(parsed.data);
 		if (found.error) return found.error;
 		const { graphics, prune, expectedRevision } = parsed.data;
