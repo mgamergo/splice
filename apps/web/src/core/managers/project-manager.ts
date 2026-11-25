@@ -254,6 +254,14 @@ export class ProjectManager {
 		};
 	}
 
+	private async saveProjectSnapshot({ project }: { project: TProject }) {
+		const events = this.editor.command.getUnsavedCorrections({
+			projectId: project.metadata.id,
+		});
+		await storageService.saveProject({ project, correctionEvents: events });
+		this.editor.command.markCorrectionsSaved({ events });
+	}
+
 	async saveCurrentProject(): Promise<void> {
 		const id = this.active?.metadata.id;
 		const generation = this.editor.media.getGeneration();
@@ -268,7 +276,7 @@ export class ProjectManager {
 					)
 						return;
 					const updatedProject = this.projectForStorage({ project });
-					await storageService.saveProject({ project: updatedProject });
+					await this.saveProjectSnapshot({ project: updatedProject });
 					// Edits made during this write belong to the pending save.
 					if (this.active === project) this.active = updatedProject;
 					this.updateMetadata(updatedProject);
@@ -356,7 +364,7 @@ export class ProjectManager {
 						},
 					});
 					try {
-						await storageService.saveProject({ project: updatedProject });
+						await this.saveProjectSnapshot({ project: updatedProject });
 					} catch (error) {
 						const detail =
 							error instanceof Error ? error.message : String(error);

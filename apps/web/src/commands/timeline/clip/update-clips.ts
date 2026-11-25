@@ -1,3 +1,5 @@
+import { retrimCorrections } from "@/agent/corrections";
+import type { CorrectionEdit } from "@splice/bridge/profile";
 import { EditorCore } from "@/core";
 import { Command, type CommandResult } from "@/commands/base-command";
 import type { SequenceTracks, TimelineClip } from "@/timeline";
@@ -32,6 +34,8 @@ export class UpdateClipsCommand extends Command {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.sequences.getActiveSequence().tracks;
 		let updatedTracks = this.savedState;
+		const items = editor.media.getProjectItems();
+		const corrections = new Map<string, CorrectionEdit>();
 
 		for (const updateEntry of this.updates) {
 			const currentTrack = findTrackInSequenceTracks({
@@ -54,6 +58,16 @@ export class UpdateClipsCommand extends Command {
 				},
 			});
 
+			for (const correction of retrimCorrections({
+				before: currentClip,
+				after: nextClip,
+				patch: updateEntry.patch,
+				items,
+			})) {
+				// Linked picture and audio can change the same source edge together.
+				corrections.set(JSON.stringify(correction), correction);
+			}
+
 			updatedTracks = updateClipInSequenceTracks({
 				tracks: updatedTracks,
 				trackId: updateEntry.trackId,
@@ -63,7 +77,9 @@ export class UpdateClipsCommand extends Command {
 		}
 
 		editor.timeline.updateTracks(updatedTracks);
-		return undefined;
+		return corrections.size > 0
+			? { corrections: [...corrections.values()] }
+			: undefined;
 	}
 
 	undo(): void {

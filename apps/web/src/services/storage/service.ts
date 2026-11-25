@@ -2,6 +2,7 @@ import { normalizeProjectBrief, projectBriefSchema } from "@splice/bridge/brief"
 import { BASE_STYLE, styleDefaultsSchema } from "@splice/bridge/style";
 import { savedShortCaptionsSchema } from "@/agent/short-caption-corrections";
 import { sequenceMixSchema } from "@splice/bridge/mix";
+import type { CorrectionEvent } from "@splice/bridge/profile";
 import { sequenceGraphicsSchema } from "@splice/bridge/graphics";
 import { parseProjectCaptions } from "@splice/bridge/delivery";
 import { parseProjectApproval } from "@/approval/checkpoint";
@@ -15,6 +16,7 @@ import { mediaUrlForPath } from "@splice/bridge";
 import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
 import type { DiskMedia, ProjectItem } from "@/media/types";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
+import { ProjectStorageAdapter } from "./project-storage-adapter";
 import { OPFSAdapter } from "./opfs-adapter";
 import {
 	type StorageCapacityCheckResult,
@@ -104,7 +106,8 @@ async function loadDiskProjectItem({
 }
 
 class StorageService {
-	private projectsAdapter: IndexedDBAdapter<SerializedProject>;
+	private projectsAdapter: ProjectStorageAdapter;
+	private correctionOutboxListeners = new Set<() => void>();
 	private savedSoundsAdapter: IndexedDBAdapter<SavedSoundsData>;
 	private config: StorageConfig;
 
@@ -116,10 +119,8 @@ class StorageService {
 			version: 1,
 		};
 
-		this.projectsAdapter = new IndexedDBAdapter<SerializedProject>({
+		this.projectsAdapter = new ProjectStorageAdapter({
 			dbName: this.config.projectsDb,
-			storeName: "projects",
-			version: this.config.version,
 		});
 
 		this.savedSoundsAdapter = new IndexedDBAdapter<SavedSoundsData>({
@@ -176,7 +177,13 @@ class StorageService {
 		};
 	}
 
-	async saveProject({ project }: { project: TProject }): Promise<void> {
+	async saveProject({
+		project,
+		correctionEvents = [],
+	}: {
+		project: TProject;
+		correctionEvents?: CorrectionEvent[];
+	}): Promise<void> {
 		const duration =
 			project.metadata.duration ??
 			getProjectDurationFromSequences({ sequences: project.sequences });
@@ -218,10 +225,25 @@ class StorageService {
 			...(project.approval && { approval: project.approval }),
 		};
 
-		await this.projectsAdapter.set({
-			key: project.metadata.id,
-			value: serializedProject,
+		await this.projectsAdapter.save({
+			project: serializedProject,
+			events: correctionEvents,
 		});
+		if (correctionEvents.length)
+			for (const listener of this.correctionOutboxListeners) listener();
+	}
+
+	subscribeCorrectionOutbox(listener: () => void): () => void {
+		this.correctionOutboxListeners.add(listener);
+		return () => this.correctionOutboxListeners.delete(listener);
+	}
+
+	readCorrectionBatch() {
+		return this.projectsAdapter.readCorrectionBatch();
+	}
+
+	acknowledgeCorrections({ keys }: { keys: IDBValidKey[] }) {
+		return this.projectsAdapter.acknowledgeCorrections({ keys });
 	}
 
 	async loadProject({

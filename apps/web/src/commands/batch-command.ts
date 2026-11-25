@@ -1,3 +1,4 @@
+import type { CorrectionEdit } from "@splice/bridge/profile";
 import { Command, type CommandResult } from "./base-command";
 
 export class BatchCommand extends Command {
@@ -9,12 +10,14 @@ export class BatchCommand extends Command {
 	execute(): CommandResult | undefined {
 		let latestSelectionResult: CommandResult | undefined;
 		const executed: Command[] = [];
+		const corrections: CorrectionEdit[] = [];
 
 		try {
 			for (const command of this.commands) {
 				// Recorded before it runs: a command may change state and then throw.
 				executed.push(command);
 				const result = command.execute();
+				if (result?.corrections) corrections.push(...result.corrections);
 				if (result?.selection !== undefined) {
 					latestSelectionResult = result;
 				}
@@ -26,7 +29,9 @@ export class BatchCommand extends Command {
 			throw error;
 		}
 
-		return latestSelectionResult;
+		return corrections.length
+			? { ...latestSelectionResult, corrections }
+			: latestSelectionResult;
 	}
 
 	undo(): void {

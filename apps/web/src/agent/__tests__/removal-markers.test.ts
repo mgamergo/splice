@@ -234,6 +234,7 @@ describe("removal markers", () => {
 		const { badTakePlacements, ...swapped } = markers()[0]?.data ?? {};
 		expect(swapped).toEqual({
 			...data,
+			agentBestTake: bestTake,
 			bestTake: first,
 			badTakes: [bestTake, second],
 		});

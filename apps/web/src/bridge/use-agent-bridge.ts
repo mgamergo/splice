@@ -12,6 +12,8 @@ import {
 	useAgentBridgeStore,
 } from "./bridge-store";
 import { createTabHandlers } from "./handlers";
+import { storageService } from "@/services/storage/service";
+import { flushCorrections } from "./report-corrections";
 import { ensureMediaSession } from "./media-session";
 import { captureBridgeToken, readBridgeToken } from "./token";
 
@@ -61,7 +63,10 @@ export function useAgentBridge(): void {
 			onStatus: (status) => {
 				store.setStatus(status);
 				// A restarted splice has a new media key.
-				if (status === "connected") void ensureMediaSession();
+				if (status === "connected") {
+					void ensureMediaSession();
+					void flushCorrections();
+				}
 			},
 			onRequest: (method) => {
 				if (
@@ -91,13 +96,18 @@ export function useAgentBridge(): void {
 			recordRevisionFloor(revision);
 			client.notifyRevision(revision);
 		});
+		const stopReporting = storageService.subscribeCorrectionOutbox(() => {
+			void flushCorrections();
+		});
 		const stopWatchingFraming = watchFramingCorrections({ editor });
 		client.start();
+		void flushCorrections();
 		client.notifyRevision(api.getRevision());
 
 		return () => {
 			stopWatchingFraming();
 			unsubscribe();
+			stopReporting();
 			window.removeEventListener("storage", onStorage);
 			client.stop();
 			store.setStatus("unavailable");

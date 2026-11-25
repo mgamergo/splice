@@ -12,6 +12,7 @@
 		"./approval": "./src/approval.ts",
 		"./mix": "./src/mix.ts",
 		"./transcript": "./src/transcript.ts",
+		"./profile": "./src/profile.ts",
 		"./style": "./src/style.ts"
 	},
 	"dependencies": {

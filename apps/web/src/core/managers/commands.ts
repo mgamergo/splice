@@ -1,3 +1,9 @@
+import type {
+	Correction,
+	CorrectionEvent,
+	CorrectionStatusEvent,
+} from "@splice/bridge/profile";
+import { generateUUID } from "@/utils/id";
 import type { EditorCore } from "@/core";
 import {
 	Command,
@@ -15,6 +21,7 @@ interface CommandHistoryEntry {
 	sequenceId: string | undefined;
 	previousSelection: EditorSelectionSnapshot;
 	selectionOverride?: EditorSelectionSnapshot;
+	corrections?: Pick<Correction, "id" | "projectId" | "sequenceId">[];
 }
 
 export class CommandManager {
@@ -25,11 +32,18 @@ export class CommandManager {
 	private followUpProducers: Array<(command: Command) => Command | null> = [];
 	/** Increments on every execute, undo and redo, so readers can detect change. */
 	private revision = 0;
+	private unsavedCorrections: CorrectionEvent[] = [];
 	private revisionListeners = new Set<(revision: number) => void>();
 
 	constructor(private editor: EditorCore) {}
 
-	execute({ command }: { command: Command }): Command {
+	execute({
+		command,
+		origin = "creator",
+	}: {
+		command: Command;
+		origin?: "creator" | "agent";
+	}): Command {
 		const sequenceId = this.editor.sequences.getActiveSequenceOrNull()?.id;
 		const beforeTracks = this.shouldRipple({ command })
 			? (this.editor.sequences.getActiveSequenceOrNull()?.tracks ?? null)
@@ -40,13 +54,40 @@ export class CommandManager {
 		const followUps = this.runFollowUps(command);
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
-		this.recordExecution({
+		const entry: CommandHistoryEntry = {
 			command,
 			followUps,
 			sequenceId,
 			previousSelection,
 			selectionOverride,
-		});
+		};
+		this.history.push(entry);
+		this.redoStack = [];
+		if (origin === "creator" && sequenceId && result?.corrections?.length) {
+			const projectId = this.editor.project.getActiveOrNull()?.metadata.id;
+			if (projectId) {
+				const timestamp = new Date().toISOString();
+				const corrections = result.corrections.map(
+					(correction): Correction => ({
+						...correction,
+						id: generateUUID(),
+						projectId,
+						sequenceId,
+						revision: this.revision + 1,
+						timestamp,
+					}),
+				);
+				entry.corrections = corrections.map(
+					({ id, projectId, sequenceId }) => ({
+						id,
+						projectId,
+						sequenceId,
+					}),
+				);
+				this.unsavedCorrections.push(...corrections);
+			}
+		}
+		this.bumpRevision();
 		return command;
 	}
 
@@ -60,7 +101,7 @@ export class CommandManager {
 		});
 	}
 
-	/** Publish the exact previewed state as one undo step. */
+	/** Publish the previewed state as an agent edit without recording creator Corrections. */
 	commitSequenceEdit({
 		sequences,
 		result,
@@ -85,17 +126,13 @@ export class CommandManager {
 		})();
 		command.execute();
 		const selectionOverride = this.applySelectionOverride(result);
-		this.recordExecution({
+		this.history.push({
 			command,
 			followUps: [],
 			sequenceId,
 			previousSelection,
 			selectionOverride,
 		});
-	}
-
-	private recordExecution(entry: CommandHistoryEntry): void {
-		this.history.push(entry);
 		this.redoStack = [];
 		this.bumpRevision();
 	}
@@ -112,6 +149,45 @@ export class CommandManager {
 		this.redoStack = [];
 		// The change was already applied (e.g. a committed drag preview), but it's still an edit.
 		this.bumpRevision();
+	}
+
+	getUnsavedCorrections({
+		projectId,
+	}: {
+		projectId: string;
+	}): CorrectionEvent[] {
+		return this.unsavedCorrections.filter(
+			(event) => event.projectId === projectId,
+		);
+	}
+
+	markCorrectionsSaved({ events }: { events: CorrectionEvent[] }): void {
+		const saved = new Set(events.map(({ id }) => id));
+		this.unsavedCorrections = this.unsavedCorrections.filter(
+			({ id }) => !saved.has(id),
+		);
+	}
+
+	private recordCorrectionStatus({
+		entry,
+		kind,
+	}: {
+		entry: CommandHistoryEntry;
+		kind: CorrectionStatusEvent["kind"];
+	}): void {
+		if (!entry.corrections?.length) return;
+		const timestamp = new Date().toISOString();
+		for (const { id, projectId, sequenceId } of entry.corrections) {
+			this.unsavedCorrections.push({
+				id: generateUUID(),
+				correctionId: id,
+				kind,
+				projectId,
+				sequenceId,
+				timestamp,
+				revision: this.revision + 1,
+			});
+		}
 	}
 
 	registerReactor(reactor: () => void): void {
@@ -146,6 +222,7 @@ export class CommandManager {
 				});
 			}
 			this.redoStack.push(entry);
+			this.recordCorrectionStatus({ entry, kind: "cancel" });
 			this.bumpRevision();
 		}
 	}
@@ -169,12 +246,11 @@ export class CommandManager {
 		this.runReactors();
 
 		this.history.push({
-			command: entry.command,
-			followUps: entry.followUps,
-			sequenceId: entry.sequenceId,
+			...entry,
 			previousSelection,
 			selectionOverride,
 		});
+		this.recordCorrectionStatus({ entry, kind: "reactivate" });
 		this.bumpRevision();
 	}
 
@@ -236,6 +312,7 @@ export class CommandManager {
 	clear(): void {
 		this.history = [];
 		this.redoStack = [];
+		this.unsavedCorrections = [];
 	}
 
 	private getSelectionSnapshot(): EditorSelectionSnapshot {
