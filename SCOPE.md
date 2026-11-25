@@ -18,11 +18,7 @@ What the editor itself offers for finishing is still thin: one effect (Blur), no
 
 ## TODO
 
-- [ ] **Filler words survive the rough cut.** "I say uh uh uh" keeps every "uh" in the final version. Likely causes, to confirm on a real recording before changing anything:
-  - `removeFillerWords` is off by default in `rough_cut`, so nothing is cut unless the agent asks.
-  - `findFillerWords` (`apps/server/src/pauses.ts`) only aligns a filler to a sound of at most 1 s with silence on both sides. Back-to-back fillers have no silence between them, so they form one sound (often over 1 s) or sit inside continuous speech. They stay `aligned: false`, and unaligned fillers are never cut.
-  - Whisper `base.en` can merge repeated fillers into one token or drop some, so the transcript under-counts them.
-  - Fix direction: treat a run of consecutive fillers as one cut unit bounded by the silences around the whole run, keep the "never cut a real word" rule, make filler removal the default for the Prepare flow (with the toggle kept), and add a fixture with a stuttered "uh uh uh" run. Verify against captions, which keep deliberately kept fillers.
+- [x] **Filler words survive the rough cut.** "I say uh uh uh" kept every "uh". `findFillerWords` (`apps/server/src/pauses.ts`) only cut a filler that was a short sound with silence on both sides, and back-to-back fillers have no silence between them. A run of fillers with no other word between them is now aligned and cut as one, bounded by the silences around the whole run, and a real word heard in the same sound still keeps the run. Still to check on a real recording: whether Whisper `base.en` merges or drops repeated fillers.
 
 ## Plan
 
@@ -35,7 +31,7 @@ After importing recordings, one button in the Project items panel (and a matchin
 1. Transcribe every recording with audio (whisper.cpp, cached).
 2. Detect pauses and filler words on every recording.
 3. Build the Raw sequence in recording order.
-4. Build the Rough Cut: take removal, pauses, false starts, filler words, loudness. Take ranking needs a model; use the configured profile-agent provider (OpenAI-compatible API or the opt-in CLI). With no provider, tighten only (pauses, fillers, loudness), skip take removal, and say so in the result.
+4. Build the Rough Cut: take removal, pauses, false starts, filler words (on by default here, with the toggle kept), loudness. Take ranking needs a model; use the configured profile-agent provider (OpenAI-compatible API or the opt-in CLI). With no provider, tighten only (pauses, fillers, loudness), skip take removal, and say so in the result.
 5. Generate timed captions (SRT cues for Horizontal, burned-in word captions for Shorts) and the cut transcript, ready in their panels.
 
 The button shows each step's progress, can be cancelled, and resumes from the last finished step after a reload, reusing cached analysis whose inputs still match. Reruns never overwrite a sequence the creator edited; they create a new Rough Cut. Implementation: a job on `splice` that chains the existing tools (`apps/server/src/transcription.ts`, `pauses.ts`, `rough-cut.ts`) plus the tab-side captions step, with status over the bridge.

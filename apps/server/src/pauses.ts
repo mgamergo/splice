@@ -228,7 +228,10 @@ export function normalizeWord(text: string): string {
 	return text.toLowerCase().replace(/^[\p{P}\s]+|[\p{P}\s]+$/gu, "");
 }
 
-/** A filler is a short sound between two silences. */
+/**
+ * A filler is a short sound between two silences; a run of n back-to-back
+ * fillers may last n times as long.
+ */
 const FILLER_MAX_SECONDS = 1;
 /** How far Whisper's time for a word may be from its sound. */
 const FILLER_REACH_SECONDS = 0.8;
@@ -290,7 +293,9 @@ function soundsAround(
  * overlap as closeness and a gap as distance: Whisper can miss a word's sound
  * by a few milliseconds and leave the word in silence. A filler keeps the
  * sound only when its times are clearly closer, so a few milliseconds of
- * drift on either side don't decide which word the sound is.
+ * drift on either side don't decide which word the sound is. Back-to-back
+ * fillers heard as one sound are returned as one filler with their texts
+ * joined, under the same rules.
  */
 export function findFillerWords({
 	transcript,
@@ -327,18 +332,28 @@ export function findFillerWords({
 			closeness({ range: filler, sound }) - FILLER_MARGIN_SECONDS
 		);
 	};
-	return words.flatMap((word) => {
-		if (!isFiller(word.text)) return [];
-		const distance = (sound: TimeRange) => gap({ a: word, b: sound });
+	/**
+	 * The sound between two silences that `range` (one filler or a run of
+	 * them) was heard as, unless a real word may be that sound or `range` lies
+	 * more in another sound.
+	 */
+	const soundOf = ({
+		range,
+		maxSeconds,
+	}: {
+		range: TimeRange;
+		maxSeconds: number;
+	}) => {
+		const distance = (sound: TimeRange) => gap({ a: range, b: sound });
 		const sound = audible
 			.filter(
 				(candidate) =>
 					candidate.before &&
 					candidate.after &&
-					candidate.end - candidate.start <= FILLER_MAX_SECONDS &&
+					candidate.end - candidate.start <= maxSeconds &&
 					distance(candidate) <= FILLER_REACH_SECONDS &&
 					!spoken.some((other) =>
-						claims({ word: other, sound: candidate, filler: word }),
+						claims({ word: other, sound: candidate, filler: range }),
 					),
 			)
 			// Two sounds can both touch the filler's times; the one it overlaps
@@ -346,28 +361,72 @@ export function findFillerWords({
 			.sort(
 				(a, b) =>
 					distance(a) - distance(b) ||
-					overlap({ a: b, b: word }) - overlap({ a, b: word }),
+					overlap({ a: b, b: range }) - overlap({ a, b: range }),
 			)[0];
 		const heardElsewhere =
 			sound !== undefined &&
 			audible.some(
 				(other) =>
 					other !== sound &&
-					overlap({ a: other, b: word }) > overlap({ a: sound, b: word }),
+					overlap({ a: other, b: range }) > overlap({ a: sound, b: range }),
 			);
-		return [
-			sound && !heardElsewhere
-				? {
-						start: sound.start,
-						end: sound.end,
-						text: word.text,
-						aligned: true,
-						silenceBefore: sound.before,
-						silenceAfter: sound.after,
-					}
-				: { start: word.start, end: word.end, text: word.text, aligned: false },
-		];
+		return sound && !heardElsewhere ? sound : undefined;
+	};
+	const aligned = ({
+		text,
+		sound,
+	}: {
+		text: string;
+		sound: (typeof audible)[number];
+	}): FillerWord => ({
+		start: sound.start,
+		end: sound.end,
+		text,
+		aligned: true,
+		silenceBefore: sound.before,
+		silenceAfter: sound.after,
 	});
+	const single = words.map((word) => {
+		if (!isFiller(word.text)) return null;
+		const sound = soundOf({ range: word, maxSeconds: FILLER_MAX_SECONDS });
+		return sound
+			? aligned({ text: word.text, sound })
+			: { start: word.start, end: word.end, text: word.text, aligned: false };
+	});
+	// Back-to-back fillers ("uh uh uh") have no silence between them, so none
+	// of them is a short sound between two silences on its own. A run of
+	// unaligned fillers with no other word between them, each heard soon after
+	// the one before, is aligned as one.
+	const result: FillerWord[] = [];
+	let run: FillerWord[] = [];
+	const endRun = () => {
+		const sound =
+			run.length > 1
+				? soundOf({
+						range: { start: run[0].start, end: run[run.length - 1].end },
+						maxSeconds: FILLER_MAX_SECONDS * run.length,
+					})
+				: undefined;
+		if (sound)
+			result.push(
+				aligned({ text: run.map(({ text }) => text).join(" "), sound }),
+			);
+		else result.push(...run);
+		run = [];
+	};
+	for (const filler of single) {
+		if (filler && !filler.aligned) {
+			const previous = run.at(-1);
+			if (previous && filler.start - previous.end > FILLER_REACH_SECONDS)
+				endRun();
+			run.push(filler);
+			continue;
+		}
+		endRun();
+		if (filler) result.push(filler);
+	}
+	endRun();
+	return result;
 }
 
 /**

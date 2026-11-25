@@ -315,6 +315,58 @@ test("aligns each of two isolated fillers whose times touch both sounds", () => 
 	]);
 });
 
+test("cuts back-to-back fillers heard as one sound between two silences", () => {
+	// Heard: "I say" at 0.2–0.9 s, then "uh uh uh" at 1.4–2.6 s with no silence
+	// between the fillers, so none of them is a short sound on its own.
+	const silences = [
+		{ start: 0, end: 0.2 },
+		{ start: 0.9, end: 1.4 },
+		{ start: 2.6, end: 3.2 },
+		{ start: 3.6, end: 4.2 },
+	];
+	const before = [word(["I", 0.25, 0.4]), word(["say", 0.45, 0.85])];
+	const stutter = [
+		word(["uh", 1.4, 1.7]),
+		word(["uh", 1.75, 2.1]),
+		word(["uh", 2.15, 2.55]),
+	];
+	const fillers = findFillerWords({
+		transcript: transcript({
+			words: [...before, ...stutter, word(["then", 3.25, 3.55])],
+		}),
+		silences,
+	});
+	expect(fillers).toEqual([
+		{
+			start: 1.4,
+			end: 2.6,
+			text: "uh uh uh",
+			aligned: true,
+			silenceBefore: silences[1],
+			silenceAfter: silences[2],
+		},
+	]);
+	expect(fillerCut({ filler: fillers[0], paddingSeconds: 0.2 })).toEqual({
+		start: 1.1,
+		end: 3,
+	});
+	// A real word heard in the same sound keeps the whole run.
+	expect(
+		findFillerWords({
+			transcript: transcript({
+				words: [
+					...before,
+					word(["uh", 1.4, 1.7]),
+					word(["uh", 1.75, 2.1]),
+					word(["go", 2.2, 2.58]),
+					word(["then", 3.25, 3.55]),
+				],
+			}),
+			silences,
+		}).map(({ aligned }) => aligned),
+	).toEqual([false, false]);
+});
+
 test("leaves a filler in place when its sound could be a real word", () => {
 	// "um" sits inside continuous speech; the next isolated sound is "go",
 	// whose transcript time drifted past it.
