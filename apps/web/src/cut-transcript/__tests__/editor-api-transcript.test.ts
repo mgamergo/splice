@@ -114,6 +114,50 @@ describe("Cut transcript through the editor API", () => {
 		});
 	});
 
+	test("transcript_selection returns edit bounds that round-trip through scoped edits", async () => {
+		const { editor, api } = horizontalEditor();
+		editor.save.pause();
+		expect(
+			api.addCaptions({
+				expectedRevision: api.getRevision(),
+				sources: [
+					{ projectItemId: "rec", words: [word(2.01, 3.74, "Selected.")] },
+				],
+			}),
+		).toMatchObject({ ok: true });
+		const transcript = await api.cutTranscript({});
+		if (!transcript.ok) throw new Error(transcript.message);
+		const { paragraphs, sequenceId } = transcript;
+		useTranscriptStore.getState().select({
+			sequenceId,
+			sentenceId: paragraphs[0].sentences[0].id,
+		});
+		const selected = await api.transcriptSelection({});
+		if (!selected.ok || !selected.selection)
+			throw new Error("No selected passage");
+		const { start, end, editBounds } = selected.selection;
+		expect({ start, end, editBounds }).toEqual({
+			start: 2.01,
+			end: 3.99,
+			editBounds: { start: 2, end: 4 },
+		});
+		expect(
+			api.apply({
+				sequenceId,
+				expectedRevision: api.getRevision(),
+				label: "Mark selected passage",
+				scope: {
+					start: { seconds: editBounds.start },
+					end: { seconds: editBounds.end },
+				},
+				ops: [{ op: "add_marker", at: { seconds: start } }],
+			}),
+		).toMatchObject({
+			ok: true,
+			impact: { scope: editBounds, outsideScopeUntouched: true },
+		});
+	});
+
 	test("deleting a repeated passage does not select the surviving copy", async () => {
 		const { api } = horizontalEditor([
 			videoClip({ id: "first", start: 0, duration: 3 }),

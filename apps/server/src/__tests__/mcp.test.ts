@@ -52,6 +52,8 @@ describe("splice mcp tools", () => {
 		const client = await connect(async () => null);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
+			"brief_get",
+			"brief_set",
 			"captions_add",
 			"captions_correct",
 			"captions_list",
@@ -87,6 +89,7 @@ describe("splice mcp tools", () => {
 			"rough_cut",
 			"sequence_apply",
 			"sequence_get",
+			"sequence_preview_ops",
 			"short_caption_placement",
 			"short_hook",
 			"short_srt",
@@ -100,6 +103,62 @@ describe("splice mcp tools", () => {
 			"transcribe_status",
 			"transcript_selection",
 		]);
+	});
+
+	test("brief and scoped edit tools forward revisions, restructure, and frame bounds", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const brief = { text: "Show the result after the setup", targetDurationSeconds: 60 };
+		const editBounds = { start: 2, end: 5 };
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			if (method === "editor.transcriptSelection")
+				return { ok: true, selection: { sequenceId: "sequence", editBounds } };
+			if (method === "editor.previewOps" || method === "editor.apply")
+				return { ok: true, impact: { scope: editBounds } };
+			return { ok: true, brief };
+		});
+		const briefArgs = { projectId: "project", expectedRevision: 4, brief };
+		const previewArgs = {
+			sequenceId: "sequence",
+			expectedRevision: 5,
+			label: "Mark passage",
+			restructure: true,
+			scope: { start: { seconds: 2 }, end: { seconds: 5 } },
+			ops: [{ op: "add_marker", at: { seconds: 3 } }],
+		};
+		try {
+			const get = await client.callTool({ name: "brief_get" });
+			expect(JSON.parse(textOf(get))).toMatchObject({ ok: true, brief });
+			const set = await client.callTool({ name: "brief_set", arguments: briefArgs });
+			expect(set.isError).toBeFalsy();
+			const selection = await client.callTool({ name: "transcript_selection" });
+			expect(JSON.parse(textOf(selection))).toMatchObject({
+				selection: { editBounds },
+			});
+			const preview = await client.callTool({
+				name: "sequence_preview_ops",
+				arguments: previewArgs,
+			});
+			expect(JSON.parse(textOf(preview))).toMatchObject({
+				impact: { scope: editBounds },
+			});
+			const applied = await client.callTool({
+				name: "sequence_apply",
+				arguments: previewArgs,
+			});
+			expect(JSON.parse(textOf(applied))).toMatchObject({
+				impact: { scope: editBounds },
+			});
+			expect(calls).toEqual([
+				["editor.briefGet", undefined],
+				["editor.briefSet", briefArgs],
+				["editor.transcriptSelection", {}],
+				["editor.previewOps", previewArgs],
+				["editor.apply", previewArgs],
+			]);
+		} finally {
+			await client.close();
+		}
 	});
 
 	test("profile tools process corrections without an editor tab and keep profile writes off the tab API", async () => {

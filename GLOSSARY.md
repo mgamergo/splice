@@ -123,6 +123,9 @@ Whether a project is a horizontal video (16:9, 1920×1080) or a short (9:16, 108
 A vertical video made from its own vertical recordings, never cut from a horizontal video. Its rough cut always gets burned-in captions.
 _Avoid_: Reel, clip (a clip is an item on a track)
 
+**Project brief**:
+Optional creator direction for one project's edit, such as the intended audience, goal, target duration, must-keep points and tone.
+
 **Raw sequence**:
 A sequence holding every recording for a video, in recording order, as one continuous session. The agent never edits it.
 

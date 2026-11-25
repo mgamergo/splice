@@ -54,6 +54,7 @@ export function createTabHandlers({
 							name: project.metadata.name,
 							format: projectFormat({ project }),
 							shortStyle: projectShortStyle({ project }),
+							brief: project.brief,
 						}
 					: null,
 				sequenceId: editor.sequences.getActiveSequenceOrNull()?.id ?? null,
@@ -67,6 +68,12 @@ export function createTabHandlers({
 				: undefined;
 			checkAgentAllowed();
 			return (framing ? api.withFraming(framing) : api).apply(params);
+		},
+		"editor.previewOps": (params) => api.previewOps(params),
+		"editor.briefGet": () => api.briefGet(),
+		"editor.briefSet": (params) => {
+			checkAgentAllowed();
+			return api.briefSet(params);
 		},
 		"editor.rawSequence": (params) => {
 			if (isBlocked()) throw new AgentBlockedError();

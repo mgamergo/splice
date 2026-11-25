@@ -1,6 +1,7 @@
 import type { StyleDefaults } from "@splice/bridge/style";
 import type { FrameRate } from "opencut-wasm";
 import type { ProjectFormat, ShortStyle } from "@splice/bridge";
+import type { ProjectBrief } from "@splice/bridge/brief";
 import type { ProjectCaptions } from "@splice/bridge/delivery";
 import type { ProjectApproval } from "@/approval/types";
 import type { TSequence } from "@/timeline/types";
@@ -55,6 +56,7 @@ export interface TProject {
 	currentSequenceId: string;
 	settings: TProjectSettings;
 	version: number;
+	brief?: ProjectBrief;
 	timelineViewState?: TTimelineViewState;
 	/** Horizontal projects: the transcript words and corrections SRT captions come from. */
 	captions?: ProjectCaptions;

@@ -3,6 +3,8 @@
  * `splice mcp`. Messages are JSON-RPC 2.0.
  */
 
+import type { ProjectBrief } from "./brief";
+
 export const BRIDGE_PATHS = {
 	/** WebSocket the editor tab connects to. */
 	tab: "/splice/tab",
@@ -27,6 +29,9 @@ export const SERVER_NAME = "splice";
 export const TAB_METHODS = [
 	"editor.getState",
 	"editor.apply",
+	"editor.previewOps",
+	"editor.briefGet",
+	"editor.briefSet",
 	"editor.listItems",
 	"editor.importItems",
 	"editor.rawSequence",
@@ -112,6 +117,7 @@ export interface EditorState {
 		name: string;
 		format: ProjectFormat;
 		shortStyle?: ShortStyle;
+		brief?: ProjectBrief;
 	} | null;
 	/** The active sequence; `editor.apply` must name it. */
 	sequenceId: string | null;
