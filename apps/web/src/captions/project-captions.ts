@@ -156,7 +156,7 @@ export async function correctCaption({
 	return plan.scope === "project" ? { replacement: plan.replacement } : {};
 }
 
-let stopPassage: (() => void) | null = null;
+const passageStops = new WeakMap<EditorCore["playback"], () => void>();
 
 /**
  * Plays one cue's passage and pauses with the playhead on its end, unless the
@@ -166,33 +166,34 @@ export function playCue({
 	editor,
 	cue,
 }: {
-	editor: EditorCore;
+	editor: Pick<EditorCore, "playback">;
 	cue: Pick<CaptionCue, "start" | "end">;
 }): void {
-	stopPassage?.();
+	const { playback } = editor;
+	passageStops.get(playback)?.();
 	const end = mediaTimeFromSeconds({ seconds: cue.end });
-	editor.playback.seek({ time: mediaTimeFromSeconds({ seconds: cue.start }) });
-	editor.playback.play();
+	playback.seek({ time: mediaTimeFromSeconds({ seconds: cue.start }) });
+	playback.play();
 	const finish = () => {
 		stop();
-		editor.playback.pause();
-		editor.playback.seek({ time: end });
+		playback.pause();
+		playback.seek({ time: end });
 	};
 	// Frames can come slowly, so a timer ends the passage on time too.
 	const timer = setTimeout(finish, (cue.end - cue.start) * 1000);
-	const unsubscribeUpdate = editor.playback.onUpdate((time) => {
+	const unsubscribeUpdate = playback.onUpdate((time) => {
 		if (time >= end) finish();
 	});
-	const unsubscribeSeek = editor.playback.onSeek(() => stop());
-	const unsubscribePause = editor.playback.subscribe(() => {
-		if (!editor.playback.getIsPlaying()) stop();
+	const unsubscribeSeek = playback.onSeek(() => stop());
+	const unsubscribePause = playback.subscribe(() => {
+		if (!playback.getIsPlaying()) stop();
 	});
 	function stop() {
 		clearTimeout(timer);
 		unsubscribeUpdate();
 		unsubscribeSeek();
 		unsubscribePause();
-		if (stopPassage === stop) stopPassage = null;
+		passageStops.delete(playback);
 	}
-	stopPassage = stop;
+	passageStops.set(playback, stop);
 }

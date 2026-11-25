@@ -124,6 +124,8 @@ export class ProjectManager {
 	}
 
 	async loadProject({ id }: { id: string }): Promise<void> {
+		this.cancelExport();
+		this.clearExportState();
 		if (!this.isInitialized) {
 			this.isLoading = true;
 			this.notify();
@@ -257,9 +259,16 @@ export class ProjectManager {
 	 * Exports the active Horizontal sequence as it is now: renders the MP4,
 	 * times the SRT against the same tracks and publishes both under Exports.
 	 */
-	deliver({ quality }: { quality: ExportQuality }): Promise<ExportResult> {
+	deliver({
+		quality,
+		snapshot = takeDeliverySnapshot({ editor: this.editor }),
+	}: {
+		quality: ExportQuality;
+		/** An approved checkpoint's edit, in place of the edit as it is now. */
+		snapshot?: DeliverySnapshot;
+	}): Promise<ExportResult> {
 		this.delivery = {
-			snapshot: takeDeliverySnapshot({ editor: this.editor }),
+			snapshot,
 			quality,
 			video: null,
 		};
@@ -296,11 +305,11 @@ export class ProjectManager {
 						options: {
 							format: "mp4",
 							quality: delivery.quality,
-							fps: this.getActive().settings.fps,
+							fps: delivery.snapshot.fps,
 							includeAudio: true,
 						},
 						signal,
-						tracks: delivery.snapshot.tracks,
+						scene: delivery.snapshot.scene,
 						// Rendering is most of the work; writing the files is the rest.
 						onProgress: ({ progress }) => update({ progress: progress * 0.9 }),
 					});
@@ -336,6 +345,10 @@ export class ProjectManager {
 		if (!isCurrent()) return { success: false, cancelled: true };
 		// The render is kept only to retry a failure.
 		if (result.success || result.cancelled) this.delivery = null;
+		if (result.success && this.editor.command.getRevision() !== delivery.snapshot.requestedRevision) {
+			result.newerEdit = true;
+			toast.success("Exported the approved revision. A newer edit is available.");
+		}
 		this.exportState = result.cancelled
 			? IDLE_EXPORT_STATE
 			: {

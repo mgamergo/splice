@@ -23,7 +23,11 @@ export class PlaybackManager {
 	private playbackStartTime: MediaTime = ZERO_MEDIA_TIME;
 	private timelineScopeBound = false;
 
-	constructor(private editor: EditorCore) {}
+	constructor(private editor: {
+		timeline: Pick<EditorCore["timeline"], "getTotalDuration" | "subscribe">;
+		sequences: Pick<EditorCore["sequences"], "subscribe">;
+		project: Pick<EditorCore["project"], "getActive">;
+	}) {}
 
 	bindTimelineScope(): void {
 		if (this.timelineScopeBound) {

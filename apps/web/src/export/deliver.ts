@@ -1,3 +1,5 @@
+import { PROJECT_FORMATS } from "@splice/bridge";
+import type { FrameRate } from "opencut-wasm";
 import {
 	type ExportRecord,
 	type ExportSource,
@@ -11,7 +13,7 @@ import {
 	sequenceEndSeconds,
 } from "@/captions/project-captions";
 import type { EditorCore } from "@/core";
-import type { SequenceTracks } from "@/timeline/types";
+import type { ExportScene } from "@/core/managers/renderer-manager";
 import type { DeliveryStep } from "./index";
 
 /**
@@ -19,30 +21,44 @@ import type { DeliveryStep } from "./index";
  * sequence's tracks for the MP4 and the SRT timed against those same tracks.
  */
 export interface DeliverySnapshot {
-	tracks: SequenceTracks;
+	scene: ExportScene;
+	/** The live edit at the Export click, even when exporting a past checkpoint. */
+	requestedRevision: number;
+	fps: FrameRate;
 	srt: string;
 	source: Omit<ExportSource, "fingerprint">;
 }
 
 export function takeDeliverySnapshot({
 	editor,
+	cues: reviewedCues,
 }: {
 	editor: EditorCore;
+	cues?: ReturnType<typeof sequenceCaptionCues>;
 }): DeliverySnapshot {
 	const project = editor.project.getActive();
 	const sequence = editor.sequences.getActiveSequence();
-	const cues = sequenceCaptionCues({ editor, sequence }).filter(
+	const cues = (reviewedCues ?? sequenceCaptionCues({ editor, sequence })).filter(
 		({ text }) => text,
 	);
+	const { width, height, fps } = PROJECT_FORMATS.horizontal;
+	const revision = editor.command.getRevision();
 	return {
-		tracks: sequence.tracks,
+		requestedRevision: revision,
+		scene: {
+			tracks: sequence.tracks,
+			projectItems: [...editor.media.getProjectItems()],
+			canvasSize: { width, height },
+			background: project.settings.background,
+		},
+		fps: { numerator: fps, denominator: 1 },
 		srt: cuesToSrt(cues),
 		source: {
 			projectId: project.metadata.id,
 			projectName: project.metadata.name,
 			sequenceId: sequence.id,
 			sequenceName: sequence.name,
-			revision: editor.command.getRevision(),
+			revision,
 			durationSeconds: sequenceEndSeconds({ sequence }),
 			cueCount: cues.length,
 		},
@@ -54,9 +70,9 @@ export function takeDeliverySnapshot({
  * the exported tracks and SRT. Decoded audio buffers are left out.
  */
 export async function deliveryFingerprint({
-	tracks,
+	scene: { tracks },
 	srt,
-}: Pick<DeliverySnapshot, "tracks" | "srt">): Promise<string> {
+}: Pick<DeliverySnapshot, "scene" | "srt">): Promise<string> {
 	/* eslint-disable opencut/prefer-object-params -- JSON.stringify calls replacers with (key, value). */
 	const withoutBuffers = (key: string, value: unknown) =>
 		key === "buffer" ? undefined : value;

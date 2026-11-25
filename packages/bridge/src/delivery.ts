@@ -96,7 +96,8 @@ export const exportSourceSchema = z.strictObject({
 	projectName: z.string().min(1).max(200),
 	sequenceId: z.string().min(1).max(200),
 	sequenceName: z.string().max(200),
-	/** The editor's command revision when the export started. */
+	checkpointId: z.string().min(1).max(200).optional(),
+	/** The editor's command revision when the cut was approved. */
 	revision: z.number().int().nonnegative(),
 	/** A hash of the exported sequence and its captions, stable across reloads. */
 	fingerprint: z.string().regex(/^[0-9a-f]{8,64}$/),

@@ -52,7 +52,12 @@ export class AudioManager {
 	private playbackLatencyCompensationSeconds = 0;
 	private unsubscribers: Array<() => void> = [];
 
-	constructor(private editor: EditorCore) {
+	constructor(private editor: {
+		playback: EditorCore["playback"];
+		timeline: Pick<EditorCore["timeline"], "getTotalDuration" | "subscribe">;
+		media: Pick<EditorCore["media"], "getProjectItems" | "subscribe">;
+		sequences: { getActiveSequence: () => Pick<ReturnType<EditorCore["sequences"]["getActiveSequence"]>, "tracks"> };
+	}) {
 		this.lastVolume = this.editor.playback.getVolume();
 
 		this.unsubscribers.push(
@@ -205,10 +210,16 @@ export class AudioManager {
 					sessionId: this.playbackSessionId,
 				});
 			} else {
+				const sessionId = this.playbackSessionId;
 				void this.runClipIterator({
 					clip,
 					startTime: currentTime,
-					sessionId: this.playbackSessionId,
+					sessionId,
+				}).catch((error: unknown) => {
+					// Closing the approved viewer disposes the input while it may
+					// still be waiting for another audio buffer.
+					if (sessionId !== this.playbackSessionId || !this.editor.playback.getIsPlaying()) return;
+					console.error("Could not play clip audio:", error);
 				});
 			}
 		}
@@ -323,7 +334,7 @@ export class AudioManager {
 						}
 						const resyncStartTime = this.getPlaybackTime();
 						this.clipIterators.delete(clip.id);
-						void this.runClipIterator({
+						await this.runClipIterator({
 							clip,
 							startTime: resyncStartTime,
 							sessionId,
