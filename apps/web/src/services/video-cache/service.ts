@@ -2,20 +2,88 @@ import {
 	Input,
 	ALL_FORMATS,
 	CanvasSink,
-	type WrappedCanvas,
+	VideoSampleSink,
+	type InputVideoTrack,
 } from "mediabunny";
 import { createMediaSource } from "@/media/media-data";
 import type { MediaData } from "@/media/types";
 
+/** One decoded frame of a video, ready to draw or upload to the GPU. */
+export interface DecodedFrame {
+	/**
+	 * A WebCodecs VideoFrame, which the compositor copies on the GPU straight
+	 * from the decoder's memory, or a canvas for rotated video.
+	 */
+	source: VideoFrame | OffscreenCanvas | HTMLCanvasElement;
+	width: number;
+	height: number;
+	/** Seconds. */
+	timestamp: number;
+	duration: number;
+}
+
+/**
+ * Decoded frames kept open per video. A render reads a frame some time after
+ * the cache handed it out, and the decoder stalls if too many stay open, so
+ * the oldest closes once this many newer ones exist.
+ */
+const OPEN_FRAMES = 4;
+
 interface VideoSinkData {
 	input: Input;
-	sink: CanvasSink;
-	iterator: AsyncGenerator<WrappedCanvas, void, unknown> | null;
-	currentFrame: WrappedCanvas | null;
-	nextFrame: WrappedCanvas | null;
+	frames: (startTimestamp: number) => AsyncGenerator<DecodedFrame, void, unknown>;
+	iterator: AsyncGenerator<DecodedFrame, void, unknown> | null;
+	currentFrame: DecodedFrame | null;
+	nextFrame: DecodedFrame | null;
+	/** Frames handed out, oldest first; closed as newer ones arrive. */
+	open: VideoFrame[];
 	lastTime: number;
 	prefetching: boolean;
 	prefetchPromise: Promise<void> | null;
+}
+
+/**
+ * Decodes to VideoFrames, which stay in the decoder's (GPU) memory until the
+ * compositor copies them, instead of drawing every frame into a 2D canvas
+ * first. Rotated video keeps the canvas path, which applies the rotation.
+ */
+function frameSource({
+	track,
+	open,
+}: {
+	track: InputVideoTrack;
+	open: VideoFrame[];
+}): VideoSinkData["frames"] {
+	if (track.rotation !== 0 || typeof VideoFrame === "undefined") {
+		const sink = new CanvasSink(track, { poolSize: OPEN_FRAMES, fit: "contain" });
+		return async function* (startTimestamp) {
+			for await (const { canvas, timestamp, duration } of sink.canvases(
+				startTimestamp,
+			))
+				yield { source: canvas, width: canvas.width, height: canvas.height, timestamp, duration };
+		};
+	}
+	const sink = new VideoSampleSink(track);
+	return async function* (startTimestamp) {
+		for await (const sample of sink.samples(startTimestamp)) {
+			const { timestamp, duration } = sample;
+			let frame: VideoFrame;
+			try {
+				frame = sample.toVideoFrame();
+			} finally {
+				sample.close();
+			}
+			open.push(frame);
+			while (open.length > OPEN_FRAMES) open.shift()?.close();
+			yield {
+				source: frame,
+				width: frame.displayWidth,
+				height: frame.displayHeight,
+				timestamp,
+				duration,
+			};
+		}
+	};
 }
 
 export class VideoCache {
@@ -38,7 +106,7 @@ export class VideoCache {
 		mediaId: string;
 		file: MediaData;
 		time: number;
-	}): Promise<WrappedCanvas | null> {
+	}): Promise<DecodedFrame | null> {
 		await this.ensureSink({ mediaId, file });
 
 		const sinkData = this.sinks.get(mediaId);
@@ -67,7 +135,7 @@ export class VideoCache {
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
-	}): Promise<WrappedCanvas | null> {
+	}): Promise<DecodedFrame | null> {
 		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
 			sinkData.currentFrame = sinkData.nextFrame;
 			sinkData.nextFrame = null;
@@ -110,7 +178,7 @@ export class VideoCache {
 		frame,
 		time,
 	}: {
-		frame: WrappedCanvas;
+		frame: DecodedFrame;
 		time: number;
 	}): boolean {
 		return time >= frame.timestamp && time < frame.timestamp + frame.duration;
@@ -121,7 +189,7 @@ export class VideoCache {
 	}: {
 		sinkData: VideoSinkData;
 		targetTime: number;
-	}): Promise<WrappedCanvas | null> {
+	}): Promise<DecodedFrame | null> {
 		if (!sinkData.iterator) return null;
 
 		try {
@@ -170,7 +238,7 @@ export class VideoCache {
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
-	}): Promise<WrappedCanvas | null> {
+	}): Promise<DecodedFrame | null> {
 		try {
 			if (sinkData.prefetching && sinkData.prefetchPromise) {
 				await sinkData.prefetchPromise;
@@ -182,7 +250,7 @@ export class VideoCache {
 			}
 
 			sinkData.nextFrame = null;
-			sinkData.iterator = sinkData.sink.canvases(time);
+			sinkData.iterator = sinkData.frames(time);
 			sinkData.lastTime = time;
 
 			// Fetch current frame
@@ -285,14 +353,11 @@ export class VideoCache {
 				throw new Error("Video codec not supported for decoding");
 			}
 
-			const sink = new CanvasSink(videoTrack, {
-				poolSize: 3,
-				fit: "contain",
-			});
-
+			const open: VideoFrame[] = [];
 			this.sinks.set(mediaId, {
 				input,
-				sink,
+				frames: frameSource({ track: videoTrack, open }),
+				open,
 				iterator: null,
 				currentFrame: null,
 				nextFrame: null,
@@ -316,6 +381,7 @@ export class VideoCache {
 			}
 
 			sinkData.input.dispose();
+			for (const frame of sinkData.open.splice(0)) frame.close();
 			this.sinks.delete(mediaId);
 		}
 

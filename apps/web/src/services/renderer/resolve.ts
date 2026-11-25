@@ -231,8 +231,8 @@ async function resolveVideoNode({
 	const visualState = resolveVisualState({
 		params: node.params,
 		context,
-		sourceWidth: frame.canvas.width,
-		sourceHeight: frame.canvas.height,
+		sourceWidth: frame.width,
+		sourceHeight: frame.height,
 	});
 	if (!visualState) {
 		return null;
@@ -240,9 +240,9 @@ async function resolveVideoNode({
 
 	return {
 		...visualState,
-		source: frame.canvas,
-		sourceWidth: frame.canvas.width,
-		sourceHeight: frame.canvas.height,
+		source: frame.source,
+		sourceWidth: frame.width,
+		sourceHeight: frame.height,
 	};
 }
 
@@ -446,9 +446,9 @@ async function resolveBackdropSource({
 		}
 
 		return {
-			source: frame.canvas,
-			width: frame.canvas.width,
-			height: frame.canvas.height,
+			source: frame.source,
+			width: frame.width,
+			height: frame.height,
 		};
 	}
 

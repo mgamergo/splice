@@ -271,8 +271,10 @@ try {
 			peakBrowserMemoryMb: peakMemory.browserMb || null,
 			encoder: exported.encoder ?? null,
 		};
+		results.output = checkOutput();
+		console.error(`Export: ${JSON.stringify(results.export)}`);
+		console.error(`Output: ${JSON.stringify(results.output)}`);
 	}
-	console.error(`Export: ${JSON.stringify(results.export)}`);
 
 	if (!flag("skip-mix")) {
 		const { sequenceId } = await rpc("editor.getState");
@@ -311,6 +313,53 @@ appendFileSync(
 	`${JSON.stringify(results)}\n`,
 );
 process.exit(0);
+
+/**
+ * What the export published: its streams and duration, whether the index is
+ * at the front, and whether a frame from the middle shows the picture.
+ */
+function checkOutput() {
+	const find = spawnSync("find", [join(root, "Exports"), "-name", "*.mp4"]);
+	const file = find.stdout?.toString().trim().split("\n")[0];
+	if (!file) return { found: false };
+	const probe = JSON.parse(
+		spawnSync("ffprobe", [
+			"-v",
+			"error",
+			"-show_entries",
+			"stream=codec_name,sample_rate:format=duration",
+			"-of",
+			"json",
+			file,
+		]).stdout.toString(),
+	);
+	const head = spawnSync("head", ["-c", "4096", file]).stdout.toString("latin1");
+	const stats = spawnSync("ffmpeg", [
+		"-v",
+		"info",
+		"-ss",
+		String(seconds / 2),
+		"-i",
+		file,
+		"-frames:v",
+		"1",
+		"-vf",
+		"signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+		"-f",
+		"null",
+		"-",
+	]);
+	const output = `${stats.stdout}${stats.stderr}`;
+	return {
+		found: true,
+		codecs: probe.streams.map((stream: { codec_name: string }) => stream.codec_name),
+		audioRate: probe.streams.find((stream: { sample_rate?: string }) => stream.sample_rate)
+			?.sample_rate,
+		duration: Number(probe.format.duration),
+		indexAtFront: head.includes("moov"),
+		middleFrameBrightness: Number(output.match(/YAVG=([\d.]+)/)?.[1] ?? -1),
+	};
+}
 
 /** The main thread's self time by function, heaviest first. */
 function summarizeProfile(profile: {
