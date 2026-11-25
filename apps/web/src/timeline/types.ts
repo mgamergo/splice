@@ -1,8 +1,10 @@
+import type { ScalarAnimationChannel } from "@/animation/types";
 import type { ClipAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
 import type { SequenceGraphics } from "@splice/bridge/graphics";
+import type { SequenceMix } from "@splice/bridge/mix";
 import type { CaptionsRequest, RemovalMarkerData } from "@splice/bridge/ops";
 import type { MediaTime } from "@/wasm";
 
@@ -37,6 +39,8 @@ export interface TSequence {
 	captions?: CaptionsRequest;
 	/** The graphics pass: each graphic's evidence, plan and the creator's changes. */
 	graphics?: SequenceGraphics;
+	/** The final mix: fitted music and the whole-mix gain. */
+	mix?: SequenceMix;
 	createdAt: Date;
 	updatedAt: Date;
 }
@@ -100,6 +104,8 @@ export interface RetimeConfig {
 }
 
 interface BaseAudioClip extends BaseTimelineClip {
+	/** Generated on render tracks from the current narration. */
+	musicDucking?: ScalarAnimationChannel;
 	type: "audio";
 	buffer?: AudioBuffer;
 	retime?: RetimeConfig;
@@ -144,6 +150,11 @@ export interface VideoClip extends BaseTimelineClip {
 	type: "video";
 	mediaId: string;
 	isSourceAudioEnabled?: boolean;
+	/**
+	 * Shows picture from a replacement take over narration kept from another.
+	 * Its own audio starts muted; sounds brought in from it play as audio clips.
+	 */
+	pictureRepair?: boolean;
 	hidden?: boolean;
 	retime?: RetimeConfig;
 	effects?: Effect[];

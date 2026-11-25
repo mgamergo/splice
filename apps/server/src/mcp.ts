@@ -26,6 +26,12 @@ import {
 	graphicsPlanRequestSchema,
 } from "@splice/bridge/graphics";
 import {
+	addMusicRequestSchema,
+	mixLoudnessRequestSchema,
+	removeMusicRequestSchema,
+	updateMusicRequestSchema,
+} from "@splice/bridge/mix";
+import {
 	cutTranscriptRequestSchema,
 	transcriptSelectionRequestSchema,
 } from "@splice/bridge/transcript";
@@ -326,7 +332,7 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		{
 			title: "Edit the active sequence",
 			description:
-				'Applies a batch of edit ops to the active sequence as one undo step. It is refused with REVISION_CONFLICT if the creator changed the sequence since expectedRevision or switched to another sequence; re-read with sequence_get and plan again. Times are {seconds}, {frame} or {timecode: "HH:MM:SS:FF"} on the sequence timeline. If any op fails, nothing is applied.',
+				'Applies a batch of edit ops to the active sequence as one undo step. It is refused with REVISION_CONFLICT if the creator changed the sequence since expectedRevision or switched to another sequence; re-read with sequence_get and plan again. Times are {seconds}, {frame} or {timecode: "HH:MM:SS:FF"} on the sequence timeline. If any op fails, nothing is applied. picture_repair keeps the narration and shows picture from another take over it, its audio muted; repair_sound then brings in one specific sound (e.g. a click) from that take. Only suggest a repair; the creator decides whether to use it.',
 			inputSchema: applyRequestSchema.shape,
 		},
 		(args) =>
@@ -868,6 +874,82 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 		},
 		(args) =>
 			guard(async () => text(await rpc({ method: "exports.list", params: args }))),
+	);
+
+	server.registerTool(
+		"music_add",
+		{
+			title: "Add music to the sequence",
+			description:
+				"Music is opt-in: only add it when the creator asked for it and chose the track. Uses an audio file from Footage (path, imported if needed) or an audio project item as the sequence's music, replacing any music it had, as one undo step. Splice fits it to the sequence (trims it, or loops it when it's shorter), fades both ends, and ducks it under speech on a Music track: it dips under every spoken passage, including short pauses, and rises gently in longer quiet passages. Speech comes from the recordings' transcripts; a recording without one counts as speaking wherever it plays. The level defaults to 10 LU under the narration target from a measurement of the track. Pass overrides to keep the music ducked where application sounds must stay audible. Run mix_loudness afterwards: the music changes the mix.",
+			inputSchema: addMusicRequestSchema.shape,
+		},
+		(args) =>
+			guard(async () => {
+				const parsed = addMusicRequestSchema.safeParse(args);
+				if (!parsed.success)
+					return {
+						...text("Pass either path or projectItemId."),
+						isError: true,
+					};
+				return editorResult(
+					await rpc({ method: "editor.addMusic", params: parsed.data }),
+				);
+			}),
+	);
+
+	server.registerTool(
+		"music_adjust",
+		{
+			title: "Adjust the sequence's music",
+			description:
+				"Changes the music's level, ducking depth, fades, the pause length that keeps it ducked, or the passages kept ducked for application sounds (overrides replace the saved list), as one undo step. Speech ducking follows recuts automatically. An override or ducking-depth edit preserves clip trims and volume keyframes. Use refit or change the level or fades to rebuild the music clips and keyframes.",
+			inputSchema: updateMusicRequestSchema.shape,
+		},
+		(args) =>
+			guard(async () =>
+				editorResult(await rpc({ method: "editor.updateMusic", params: args })),
+			),
+	);
+
+	server.registerTool(
+		"music_remove",
+		{
+			title: "Remove the sequence's music",
+			description: "Removes the Music track and its settings, as one undo step.",
+			inputSchema: removeMusicRequestSchema.shape,
+		},
+		(args) =>
+			guard(async () =>
+				editorResult(await rpc({ method: "editor.removeMusic", params: args })),
+			),
+	);
+
+	server.registerTool(
+		"mix_loudness",
+		{
+			title: "Set the whole mix's loudness",
+			description: `Renders the complete mix the way export does (narration, application sounds and any music, at their clip volumes and keyframes) and measures its integrated loudness and true peak (ITU-R BS.1770). Then saves one gain for the whole mix that reaches ${DEFAULT_TARGET_LUFS} LUFS (or targetLufs) with a true-peak ceiling of ${MAX_TRUE_PEAK_DBTP} dBTP (or ceilingDbtp), as one undo step. The final preview and export both use the same look-ahead limiter to keep peaks under the ceiling before encoding. Pass apply: false to only measure. Run it last, after cuts and music: any later change to the audio makes the gain stale (mix_status says so). Long sequences take a while.`,
+			inputSchema: mixLoudnessRequestSchema.shape,
+		},
+		(args) =>
+			guard(async () =>
+				editorResult(await rpc({ method: "editor.mixLoudness", params: args })),
+			),
+	);
+
+	server.registerTool(
+		"mix_status",
+		{
+			title: "Read the final mix",
+			description:
+				"The sequence's music settings (track, level, ducking, fades, overrides), its saved whole-mix gain with the loudness measured and expected and whether later edits made it stale, and its picture repairs with their clip ids for repair_sound.",
+			inputSchema: removeMusicRequestSchema.pick({ sequenceId: true }).shape,
+		},
+		(args) =>
+			guard(async () =>
+				editorResult(await rpc({ method: "editor.mixStatus", params: args })),
+			),
 	);
 
 	server.registerTool(

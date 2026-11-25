@@ -40,6 +40,11 @@ export const TAB_METHODS = [
 	"editor.graphicsPlan",
 	"editor.graphicsApply",
 	"editor.graphicsList",
+	"editor.addMusic",
+	"editor.updateMusic",
+	"editor.removeMusic",
+	"editor.mixLoudness",
+	"editor.mixStatus",
 	"editor.cutTranscript",
 	"editor.transcriptSelection",
 ] as const;

@@ -191,6 +191,30 @@ export const editOpSchema = z.discriminatedUnion("op", [
 		gainDb: gainDbSchema,
 	}),
 	z.strictObject({
+		op: z.literal("picture_repair"),
+		at: timeSpecSchema.describe("Where the repair starts on the sequence"),
+		duration: timeSpecSchema.describe("How long the replacement picture shows"),
+		projectItemId: z
+			.string()
+			.min(1)
+			.describe("The video recording of the replacement take"),
+		sourceIn: z
+			.number()
+			.nonnegative()
+			.describe(
+				"Source seconds in the replacement recording that show at `at`",
+			),
+	}),
+	z.strictObject({
+		op: z.literal("repair_sound"),
+		clipId: z
+			.string()
+			.min(1)
+			.describe("The picture repair clip whose replacement take the sound comes from"),
+		start: timeSpecSchema.describe("Sequence time the sound starts, inside the repair"),
+		end: timeSpecSchema.describe("Sequence time the sound ends, inside the repair"),
+	}),
+	z.strictObject({
 		op: z.literal("set_noise_reduction"),
 		clipIds: z.array(z.string().min(1)).min(1),
 		enabled: z
