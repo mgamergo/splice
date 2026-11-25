@@ -252,19 +252,23 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		});
 
 		const outputCanvas = this.renderer.getOutputCanvas();
-		const scaled = this.outputSize && createCanvasSurface(this.outputSize);
+		// The encoder reads a 2D canvas each frame is copied into, never the
+		// compositor's WebGPU canvas: on Windows a frame taken from a WebGPU
+		// canvas is in a GPU-only format the encoders refuse ("Unexpected frame
+		// format"). The copy stays on the GPU, and also scales to the delivery
+		// size where that differs.
+		const encoded = createCanvasSurface(
+			this.outputSize ?? { width: this.renderer.width, height: this.renderer.height },
+		);
 		// Keep the saved composition's aspect ratio on legacy custom canvases.
-		const scale = scaled
-			? Math.min(
-					scaled.canvas.width / this.renderer.width,
-					scaled.canvas.height / this.renderer.height,
-				)
-			: 1;
+		const scale = Math.min(
+			encoded.canvas.width / this.renderer.width,
+			encoded.canvas.height / this.renderer.height,
+		);
 		const width = this.renderer.width * scale;
 		const height = this.renderer.height * scale;
-		const drawScaled = () => {
-			if (!scaled) return;
-			const { canvas, context } = scaled;
+		const drawEncoded = () => {
+			const { canvas, context } = encoded;
 			context.fillRect(0, 0, canvas.width, canvas.height);
 			context.drawImage(
 				outputCanvas,
@@ -279,16 +283,16 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 		if (this.hardwareEncoder) {
 			// The test encode reads the canvas, so give it the first frame.
 			await this.renderer.render({ node: rootNode, time: 0 });
-			if (scaled) drawScaled();
+			drawEncoded();
 		}
 		const encoder = this.hardwareEncoder
 			? await chooseEncoder({
-					canvas: scaled?.canvas ?? outputCanvas,
+					canvas: encoded.canvas,
 					codec,
 					bitrate,
 				})
 			: "default";
-		const videoSource = new CanvasSource(scaled?.canvas ?? outputCanvas, {
+		const videoSource = new CanvasSource(encoded.canvas, {
 			codec,
 			bitrate,
 			...(encoder === "hardware" && { hardwareAcceleration: "prefer-hardware" }),
@@ -358,8 +362,11 @@ export class SequenceExporter extends EventEmitter<SequenceExporterEvents> {
 						await addAudioUntil(timeSeconds);
 						// Renders this frame while the encoder takes the last one.
 						await this.renderer.render({ node: rootNode, time: timeTicks });
+						// Copied while the WebGPU canvas still holds this frame. The
+						// last frame was captured when it was added, so the copy
+						// can't change what the encoder is taking.
+						drawEncoded();
 						await encoding;
-						if (scaled) drawScaled();
 						// The canvas is captured before `add` returns, so the next
 						// frame can draw over it straight away.
 						encoding = videoSource
