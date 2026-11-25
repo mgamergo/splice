@@ -5,7 +5,7 @@ import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
 import type { SequenceGraphics } from "@splice/bridge/graphics";
 import type { SequenceMix } from "@splice/bridge/mix";
-import type { RemovalMarkerData } from "@splice/bridge/ops";
+import type { ProtectedSection, RemovalMarkerData } from "@splice/bridge/ops";
 import type { MediaTime } from "@/wasm";
 import type { CaptionPart, SavedShortCaptions } from "@/agent/short-caption-corrections";
 
@@ -36,6 +36,8 @@ export interface TSequence {
 	isMain: boolean;
 	tracks: SequenceTracks;
 	markers: Marker[];
+	/** Teaching sections anchored to tagged clips and bounded by source ranges. */
+	protectedSections?: ProtectedSection[];
 	/** Transcript words and style the Captions track is rebuilt from. */
 	captions?: SavedShortCaptions;
 	/** The graphics pass: each graphic's evidence, plan and the creator's changes. */
@@ -132,7 +134,7 @@ interface BaseTimelineClip {
 	trimStart: MediaTime;
 	trimEnd: MediaTime;
 	sourceDuration?: MediaTime;
-	/** Removal markers whose best take is represented by this clip. */
+	/** Removal markers or protected sections whose best take this clip represents. */
 	bestTakeMarkerIds?: string[];
 	/** Shared by a video clip and the audio extracted from it. */
 	sourceAudioGroupId?: string;

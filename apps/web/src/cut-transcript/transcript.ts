@@ -1,10 +1,10 @@
-import type { FrameRate } from "opencut-wasm";
-import { resolveEditRange } from "@/agent/time";
 /**
  * The cut transcript: the narration heard in a sequence, read as sentences
  * and paragraphs. Like the SRT cues it is built from, it is derived, never
  * stored, so every cut, take swap and restore updates its passage.
  */
+import type { FrameRate } from "opencut-wasm";
+import { resolveEditRange } from "@/agent/time";
 import type {
 	TranscriptParagraphSummary,
 	TranscriptSelectionSummary,

@@ -1,3 +1,4 @@
+import { validateProtectedSections } from "@/agent/protected-sections";
 import { briefSetRequestSchema, normalizeProjectBrief } from "@splice/bridge/brief";
 import { sequenceEditImpact } from "@/agent/sequence-edit-impact";
 import { fillExplainerPicture } from "@/agent/explainer-picture";
@@ -115,7 +116,7 @@ import {
 	resolveTimeSpec,
 	TimeSpecError,
 } from "@/agent/time";
-import { Command, type CommandResult } from "@/commands/base-command";
+import { Command } from "@/commands/base-command";
 import { BatchCommand } from "@/commands/batch-command";
 import { EditRemovalMarkerCommand } from "@/commands/sequence/edit-removal-marker";
 import {
@@ -998,7 +999,8 @@ export class EditorApi {
 				sentences,
 				fps: project.settings.fps,
 			}),
-			...(sequence.id !== this.editor.sequences.getActiveSequenceOrNull()?.id && {
+			...(sequence.id !==
+				this.editor.sequences.getActiveSequenceOrNull()?.id && {
 				hint: "The selection is on a sequence the creator is not viewing now.",
 			}),
 		};
@@ -1432,35 +1434,44 @@ export class EditorApi {
 					return command;
 				}),
 		);
-		const batch = new AgentBatchCommand({ editor: this.editor, commands });
+		const batch = new BatchCommand(commands);
 
 		let impact: SequenceEditImpact | undefined;
 		try {
-			if (preview || request.scope) {
-				const before = this.editor.sequences.getActiveSequence();
-				const scope =
-					request.scope &&
-					resolveEditRange({
-						...request.scope,
-						fps: this.editor.project.getActive().settings.fps,
-					});
-				const staged = this.editor.command.previewSequenceEdit({ command: batch });
-				const after = staged.sequences.find(({ id }) => id === before.id);
-				if (!after) throw new Error("A sequence edit removed the active sequence.");
+			const before = this.editor.sequences.getActiveSequence();
+			const scope =
+				request.scope &&
+				resolveEditRange({
+					...request.scope,
+					fps: this.editor.project.getActive().settings.fps,
+				});
+			const staged = this.editor.command.previewSequenceEdit({
+				command: batch,
+			});
+			const after = staged.sequences.find(({ id }) => id === before.id);
+			if (!after)
+				throw new Error("A sequence edit removed the active sequence.");
+			if (preview || scope)
 				impact = sequenceEditImpact({ before, after, scope });
-				if (!preview) {
-					if (impact.outsideScopeUntouched === false && !request.allowOutsideScope)
-						return {
-							ok: false,
-							code: "OUTSIDE_SCOPE",
-							message: "This batch changes edits outside the selected passage. Revise the batch or obtain the creator's authorization to expand its scope.",
-							revision: this.getRevision(),
-							impact,
-						};
-					this.editor.command.commitSequenceEdit(staged);
-				}
-			} else {
-				this.editor.command.execute({ command: batch });
+			validateProtectedSections({
+				before,
+				after,
+				restructure: request.restructure,
+			});
+			if (!preview) {
+				if (
+					impact?.outsideScopeUntouched === false &&
+					!request.allowOutsideScope
+				)
+					return {
+						ok: false,
+						code: "OUTSIDE_SCOPE",
+						message:
+							"This batch changes edits outside the selected passage. Revise the batch or obtain the creator's authorization to expand its scope.",
+						revision: this.getRevision(),
+						impact,
+					};
+				this.editor.command.commitSequenceEdit(staged);
 			}
 		} catch (error) {
 			// BatchCommand has already undone the ops that ran before the failure.
@@ -1477,6 +1488,7 @@ export class EditorApi {
 					code: "INVALID_OP",
 					message: error.message,
 					revision,
+					...(impact && { impact }),
 				};
 			}
 			throw error;
@@ -1750,43 +1762,6 @@ export class EditorApi {
 			throw new InvalidOpError(`Unknown clip id(s): ${missing.join(", ")}`);
 		}
 		return refs;
-	}
-}
-
-/**
- * An agent batch. The creator's ripple toggle never changes it, and redo
- * restores exactly the sequences the batch produced, with the same clip ids,
- * so later batches that reference those ids still redo correctly. That is
- * sound because undo and redo are a linear stack: before a redo, the state is
- * the one the batch originally ran on.
- */
-class AgentBatchCommand extends BatchCommand {
-	readonly ignoresRippleToggle = true;
-	private readonly editor: EditorCore;
-	private sequencesAfter: TSequence[] | null = null;
-	private executeResult: CommandResult | undefined;
-
-	constructor({
-		editor,
-		commands,
-	}: {
-		editor: EditorCore;
-		commands: Command[];
-	}) {
-		super(commands);
-		this.editor = editor;
-	}
-
-	execute() {
-		this.executeResult = super.execute();
-		this.sequencesAfter = this.editor.sequences.getSequences();
-		return this.executeResult;
-	}
-
-	redo() {
-		if (!this.sequencesAfter) return this.execute();
-		this.editor.sequences.setSequences({ sequences: this.sequencesAfter });
-		return this.executeResult;
 	}
 }
 

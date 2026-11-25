@@ -6,7 +6,10 @@ import { parseProjectCaptions } from "@splice/bridge/delivery";
 import { parseProjectApproval } from "@/approval/checkpoint";
 import type { TProject, TProjectMetadata } from "@/project/types";
 import { getProjectDurationFromSequences } from "@/timeline/sequences";
-import { removalMarkerDataSchema } from "@splice/bridge/ops";
+import {
+	protectedSectionSchema,
+	removalMarkerDataSchema,
+} from "@splice/bridge/ops";
 import { mediaUrlForPath } from "@splice/bridge";
 import { isDiskMedia, probeDiskMedia } from "@/media/media-data";
 import type { DiskMedia, ProjectItem } from "@/media/types";
@@ -183,6 +186,9 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: this.stripAudioBuffers({ tracks: sequence.tracks }),
 				markers: sequence.markers,
+				...(sequence.protectedSections && {
+					protectedSections: sequence.protectedSections,
+				}),
 				...(sequence.captions && { captions: sequence.captions }),
 				...(sequence.graphics && { graphics: sequence.graphics }),
 				...(sequence.mix && { mix: sequence.mix }),
@@ -253,6 +259,12 @@ class StorageService {
 				isMain: sequence.isMain,
 				tracks: sequence.tracks,
 				markers: normalizeMarkers({ raw: sequence.markers }),
+				protectedSections: Array.isArray(sequence.protectedSections)
+					? sequence.protectedSections.flatMap((section) => {
+							const parsed = protectedSectionSchema.safeParse(section);
+							return parsed.success ? [parsed.data] : [];
+						})
+					: undefined,
 				captions: savedShortCaptionsSchema.safeParse(sequence.captions).data,
 				graphics: sequenceGraphicsSchema.safeParse(sequence.graphics).data,
 				mix: sequenceMixSchema.safeParse(sequence.mix).data,

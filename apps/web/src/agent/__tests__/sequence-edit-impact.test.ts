@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { s, setUpEditor, videoClip } from "@/agent/__tests__/fixtures";
 import { EditorApi } from "@/agent/editor-api";
+import { validateProtectedSections } from "@/agent/protected-sections";
+import { RippleDeleteRangesCommand } from "@/commands/sequence/ripple-delete-ranges";
 import type { ApplyRequest } from "@splice/bridge/ops";
 
 const time = (seconds: number) => ({ seconds });
@@ -293,4 +295,117 @@ test("scoped ops and markers share the frame grid", () => {
 			scope: range([2.02, 2.01]),
 		}),
 	).toMatchObject({ code: "INVALID_OP" });
+});
+
+test("staged preview and unscoped apply protect a tagged removal-marker section", () => {
+	const { editor, api, sequence, request } = fixture();
+	const before = sequence();
+	const take = { projectItemId: "rec", sourceIn: 2, sourceOut: 4 };
+	const tagged = {
+		...before,
+		markers: [
+			{
+				id: "takes",
+				time: s(2),
+				data: {
+					kind: "removal" as const,
+					sectionName: "Setup",
+					bestTake: take,
+					badTakes: [{ ...take, sourceIn: 6, sourceOut: 8 }],
+				},
+			},
+		],
+		tracks: {
+			...before.tracks,
+			main: {
+				...before.tracks.main,
+				clips: before.tracks.main.clips.map((clip) =>
+					clip.id === "detail"
+						? { ...clip, bestTakeMarkerIds: ["takes"] }
+						: clip,
+				),
+			},
+		},
+	};
+	editor.sequences.setSequences({ sequences: [tagged] });
+	const { scope: _scope, ...unscoped } = request;
+	const edit: ApplyRequest = {
+		...unscoped,
+		ops: [{ op: "ripple_delete", ranges: [range([2, 4])] }],
+	};
+	const error = {
+		code: "INVALID_OP",
+		message: expect.stringContaining("whole “Setup” section"),
+	};
+	expect(api.previewOps(edit)).toMatchObject(error);
+	expect(api.apply(edit)).toMatchObject(error);
+	expect(
+		api.apply({ ...edit, scope: request.scope, allowOutsideScope: true }),
+	).toMatchObject(error);
+	expect(sequence()).toBe(tagged);
+	expect(api.getRevision()).toBe(request.expectedRevision);
+	expect(editor.command.canUndo()).toBe(false);
+	expect(api.previewOps({ ...edit, restructure: true })).toMatchObject({
+		ok: true,
+	});
+	expect(api.apply({ ...edit, restructure: true })).toMatchObject({ ok: true });
+	editor.command.undo();
+	expect(sequence()).toBe(tagged);
+
+	editor.command.execute({
+		command: new RippleDeleteRangesCommand([{ start: s(2), end: s(4) }]),
+	});
+	expect(sequence().tracks.main.clips.map(({ id }) => id)).toEqual([
+		"setup",
+		"payoff",
+	]);
+});
+
+test("section validation rejects an inversion even when both tagged source spans survive", () => {
+	const { sequence } = fixture();
+	const source = sequence();
+	const bestTake = (sourceIn: number) => ({
+		projectItemId: "rec",
+		sourceIn,
+		sourceOut: sourceIn + 2,
+	});
+	const main = {
+		...source.tracks.main,
+		clips: source.tracks.main.clips.map((clip) => ({
+			...clip,
+			bestTakeMarkerIds: [clip.id],
+		})),
+	};
+	const before = {
+		...source,
+		protectedSections: [
+			{ id: "setup", sectionName: "Setup", bestTake: bestTake(0) },
+			{ id: "payoff", sectionName: "Payoff", bestTake: bestTake(4) },
+		],
+		tracks: { ...source.tracks, main },
+	};
+	const after = {
+		...before,
+		tracks: {
+			...before.tracks,
+			main: {
+				...main,
+				clips: main.clips.map((clip) => ({
+					...clip,
+					startTime:
+						clip.id === "setup"
+							? s(4)
+							: clip.id === "payoff"
+								? s(0)
+								: clip.startTime,
+				})),
+			},
+		},
+	};
+	expect(() => validateProtectedSections({ before, after })).toThrow(
+		"This edit puts “Payoff” before “Setup”",
+	);
+	expect(() =>
+		validateProtectedSections({ before, after, restructure: true }),
+	).not.toThrow();
 });

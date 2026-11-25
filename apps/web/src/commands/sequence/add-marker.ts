@@ -26,7 +26,20 @@ export class AddMarkerCommand extends Command {
 			sequences: updateSequenceInArray({
 				sequences,
 				sequenceId: sequence.id,
-				updates: { markers, tracks },
+				updates: {
+					markers,
+					tracks,
+					...(marker.data && {
+						protectedSections: [
+							...(sequence.protectedSections ?? []),
+							{
+								id: marker.id,
+								sectionName: marker.data.sectionName,
+								bestTake: marker.data.bestTake,
+							},
+						],
+					}),
+				},
 			}),
 		});
 		return undefined;

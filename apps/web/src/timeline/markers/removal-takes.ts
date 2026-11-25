@@ -369,8 +369,12 @@ type AudioSegment = {
 	end: MediaTime;
 };
 
-type RangeWindow = {
-	range: ResolvedRange;
+type SourceWindow = Pick<ResolvedRange, "sourceIn" | "sourceOut"> & {
+	item: { id: string };
+};
+
+type RangeWindow<Range = ResolvedRange> = {
+	range: Range;
 	start: MediaTime;
 	end: MediaTime;
 	sourceIn: number;
@@ -380,7 +384,7 @@ type RangeWindow = {
 	audioSegments: AudioSegment[];
 };
 
-function findTakeWindows({
+function findTakeWindows<Range extends SourceWindow>({
 	track,
 	take,
 	markerId,
@@ -388,12 +392,12 @@ function findTakeWindows({
 	complete,
 }: {
 	track: TimelineTrack;
-	take: ResolvedRange;
+	take: Range;
 	markerId?: string;
 	audioGroupIds?: Set<string>;
 	complete: boolean;
-}): RangeWindow[] {
-	const windows: RangeWindow[] = [];
+}): RangeWindow<Range>[] {
+	const windows: RangeWindow<Range>[] = [];
 	for (const clip of [...track.clips].sort(
 		(a, b) => a.startTime - b.startTime,
 	)) {
@@ -553,12 +557,14 @@ type PathNode = { part: RangeWindow; routes: number; previous?: PathNode };
 export function mapSourceRangeToSequence({
 	tracks,
 	range,
+	markerId,
 }: {
 	tracks: SequenceTracks;
-	range: ResolvedRange;
+	range: SourceWindow;
+	markerId?: string;
 }): Array<{ start: MediaTime; end: MediaTime }> {
 	return [tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
-		findTakeWindows({ track, take: range, complete: false }).map(
+		findTakeWindows({ track, take: range, markerId, complete: false }).map(
 			({ start, end }) => ({ start, end }),
 		),
 	);

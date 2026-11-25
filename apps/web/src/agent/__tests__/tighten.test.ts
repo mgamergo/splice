@@ -1013,3 +1013,40 @@ test("tightening preserves a one-take section and reports a missed brief target"
 		targetDuration: { targetSeconds: 1, overBySeconds: 20 },
 	});
 });
+
+test("a one-take section stays protected through later cuts without removal markers", () => {
+	expect(
+		api.roughCut({
+			expectedRevision: api.getRevision(),
+			sections: [
+				{ name: "Payoff", takes: [at([first, 3, 6])], bestTakeIndex: 0 },
+			],
+			falseStarts: [at([first, 0, 1])],
+		}),
+	).toMatchObject({ ok: true });
+	expect(active().markers).toEqual([]);
+	expect(active().protectedSections).toMatchObject([{ sectionName: "Payoff" }]);
+
+	expect(
+		api.roughCut({
+			sequenceId: active().id,
+			expectedRevision: api.getRevision(),
+			falseStarts: [at([first, 3, 4])],
+		}),
+	).toMatchObject({ ok: true });
+	const kept = active();
+	const removeRemainder = {
+		sequenceId: kept.id,
+		expectedRevision: api.getRevision(),
+		falseStarts: [at([first, 4, 6])],
+	};
+	expect(api.roughCut({ ...removeRemainder, plan: true })).toMatchObject({
+		code: "INVALID_OP",
+		message: expect.stringContaining("whole “Payoff” section"),
+	});
+	expect(api.roughCut(removeRemainder)).toMatchObject({ code: "INVALID_OP" });
+	expect(active()).toBe(kept);
+	expect(api.roughCut({ ...removeRemainder, restructure: true })).toMatchObject(
+		{ ok: true },
+	);
+});

@@ -90,6 +90,14 @@ const takePlacementSchema = z.strictObject({
 	audioSegments: z.array(takeAudioSegmentSchema).min(2).optional(),
 });
 
+export const protectedSectionSchema = z.strictObject({
+	id: z.string().min(1),
+	sectionName: z.string().trim().min(1),
+	bestTake: takeSchema,
+});
+
+export type ProtectedSection = z.infer<typeof protectedSectionSchema>;
+
 export const removalMarkerDataSchema = z
 	.strictObject({
 		kind: z.literal("removal"),
@@ -226,6 +234,13 @@ export const editOpSchema = z.discriminatedUnion("op", [
 	}),
 ]);
 
+const restructure = z
+	.boolean()
+	.optional()
+	.describe(
+		"Set only when the creator explicitly asks to remove a whole section or change teaching order.",
+	);
+
 export const applyRequestSchema = z.strictObject({
 	sequenceId: z
 		.string()
@@ -240,6 +255,7 @@ export const applyRequestSchema = z.strictObject({
 		.max(120)
 		.describe('Short undo label shown to the creator, e.g. "Remove bad takes"'),
 	ops: z.array(editOpSchema).min(1),
+	restructure,
 	scope: rangeSchema.optional().describe(
 		"Selected passage in sequence time. Use transcript_selection to get its start and end.",
 	),
@@ -377,9 +393,7 @@ const roughCutBaseSchema = z.strictObject({
 		.describe('Source sequence ID. Defaults to the sequence named "Raw".'),
 	expectedRevision,
 	label: applyRequestSchema.shape.label.optional(),
-	restructure: z.boolean().optional().describe(
-		"Set only when the creator explicitly asks to restructure, for example to remove a whole section or choose a take out of teaching order.",
-	),
+	restructure,
 	sections: z
 		.array(
 			z.strictObject({

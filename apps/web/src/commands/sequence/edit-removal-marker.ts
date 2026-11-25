@@ -14,7 +14,6 @@ import type { EditorCore } from "@/core";
 import type { Marker, RemovalMarker, TSequence } from "@/timeline";
 import {
 	RemovalTakeError,
-	clearBestTake,
 	resolveTake,
 	restoreTakeClips,
 	swapTakeClips,
@@ -161,18 +160,27 @@ export class EditRemovalMarkerCommand extends Command {
 		});
 		const tracks = rebuildCaptions({
 			sequence: { ...sequence, captions, tracks: previousTracks },
-			tracks:
-				edit.op === "restore_takes" && (!chosen || remaining.length === 0)
-					? clearBestTake({ tracks: update.tracks, markerId: marker.id })
-					: update.tracks,
+			tracks: update.tracks,
 			canvasSize,
 			window: update,
 		});
+		// A restore can retire the removal marker. Keep its section and the tags
+		// on its best take so later agent edits still see the protected passage.
+		const protectedSections = [
+			...(sequence.protectedSections ?? []).filter(
+				({ id }) => id !== marker.id,
+			),
+			{
+				id: marker.id,
+				sectionName: data.sectionName,
+				bestTake: swap && chosen ? chosen : bestTake,
+			},
+		];
 		this.before = editor.sequences.getSequences();
 		this.after = updateSequenceInArray({
 			sequences: this.before,
 			sequenceId: sequence.id,
-			updates: { tracks, markers, captions },
+			updates: { tracks, markers, captions, protectedSections },
 		});
 		const remainingIds = new Set(
 			[
