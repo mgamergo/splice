@@ -20,6 +20,7 @@ export function useCaptionCues(): CaptionCue[] {
 						captions,
 						spellings,
 						sequenceEnd: sequenceEndSeconds({ sequence }),
+						sequenceId: sequence.id,
 					})
 				: [],
 		[sequence, isHorizontal, captions, spellings],

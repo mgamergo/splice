@@ -13,7 +13,12 @@ import { summarizeItem } from "@/media/import-disk";
 import { calculateTotalDuration } from "@/timeline";
 import type { TSequence } from "@/timeline/types";
 import { mediaTimeFromSeconds, mediaTimeToSeconds } from "@/wasm";
-import { buildCaptionCues, type CaptionCue, planCorrection } from "./cues";
+import {
+	buildCaptionCues,
+	type CaptionCue,
+	planCorrection,
+	withoutRuleFor,
+} from "./cues";
 import { useCaptionsStore } from "./store";
 
 const EMPTY_CAPTIONS: ProjectCaptions = {
@@ -43,6 +48,7 @@ export function sequenceCaptionCues({
 		captions: editor.project.getActiveOrNull()?.captions,
 		spellings,
 		sequenceEnd: sequenceEndSeconds({ sequence }),
+		sequenceId: sequence.id,
 	});
 }
 
@@ -130,19 +136,35 @@ export async function loadCaptionWords({
  */
 export async function correctCaption({
 	editor,
+	sequenceId,
 	cue,
 	text,
 	scope,
 }: {
 	editor: EditorCore;
+	/** The sequence the cue is on. */
+	sequenceId: string;
 	cue: CaptionCue;
 	text: string;
 	scope: CaptionScope;
 }): Promise<{ replacement?: Replacement }> {
 	const captions = editor.project.getActive().captions ?? EMPTY_CAPTIONS;
-	const plan = planCorrection({ cue, text, scope, captions });
+	const plan = planCorrection({ cue, text, scope, captions, sequenceId });
 	if (plan.scope === "spelling") {
 		await useCaptionsStore.getState().saveSpelling(plan.replacement);
+		// The project's own correction of these words would hide the spelling.
+		const withoutRule = withoutRuleFor({
+			captions: editor.project.getActive().captions ?? EMPTY_CAPTIONS,
+			spelling: plan.replacement,
+		});
+		if (withoutRule)
+			editor.command.execute({
+				command: new UpdateProjectCaptionsCommand({
+					editor,
+					captions: withoutRule,
+					label: "Use the saved spelling",
+				}),
+			});
 		return { replacement: plan.replacement };
 	}
 	editor.command.execute({

@@ -177,7 +177,7 @@ export function DeliveryPopover() {
 								<Check className="text-constructive size-4" /> Exported
 							</p>
 							<p className="text-muted-foreground text-xs break-all">
-								{record.stem}.mp4 and {record.stem}.srt
+								{record.stem}.mp4 and .srt, in the folder {record.stem}
 							</p>
 							{(result?.newerEdit ||
 								(currentFingerprint && record.fingerprint !== currentFingerprint)) && (
@@ -253,7 +253,8 @@ function ExportFailure({
 				</p>
 				<p className="text-muted-foreground text-xs break-words">{error}</p>
 				<p className="text-muted-foreground text-xs">
-					Nothing was published, and earlier exports are unchanged.
+					Earlier exports are unchanged. Retry exports the same edit and
+					never publishes it twice.
 				</p>
 			</div>
 			<div className="flex gap-2">

@@ -16,10 +16,12 @@ import type {
 } from "@/export";
 import { ExportJobs } from "@/export/export-jobs";
 import {
+	captureDelivery,
 	DeliveryError,
+	type DeliveryInput,
 	type DeliverySnapshot,
+	prepareDelivery,
 	publishDelivery,
-	takeDeliverySnapshot,
 } from "@/export/deliver";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
@@ -38,6 +40,8 @@ import { DEFAULTS } from "@/timeline/defaults";
 import { getClipFontFamilies } from "@/timeline/clip-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
 import type { ProjectItem } from "@/media/types";
+import { projectFormat } from "@/project/format";
+import { useCaptionsStore } from "@/captions/store";
 
 const IDLE_EXPORT_STATE: ExportState = {
 	isExporting: false,
@@ -54,9 +58,13 @@ export class ProjectManager {
 	private listeners = new Set<() => void>();
 	private exportState: ExportState = IDLE_EXPORT_STATE;
 	private exportJobs = new ExportJobs();
-	/** A Horizontal export that can be retried: its snapshot and any finished render. */
+	/**
+	 * A Horizontal export that can be retried with its approved edit and any
+	 * finished snapshot and render.
+	 */
 	private delivery: {
-		snapshot: DeliverySnapshot;
+		input: DeliveryInput;
+		snapshot: DeliverySnapshot | null;
 		quality: ExportQuality;
 		video: ArrayBuffer | null;
 	} | null = null;
@@ -153,6 +161,16 @@ export class ProjectManager {
 					currentSequenceId: project.currentSequenceId,
 				});
 			}
+
+			// Exports and the caption list apply the saved spellings, so fetching
+			// them starts now; an export waits for them.
+			if (projectFormat({ project }) === "horizontal")
+				useCaptionsStore
+					.getState()
+					.loadSpellings()
+					.catch((error: unknown) =>
+						console.error("Failed to load saved spellings:", error),
+					);
 
 			await this.editor.media.loadProjectMedia({ projectId: id });
 
@@ -256,26 +274,27 @@ export class ProjectManager {
 	}
 
 	/**
-	 * Exports the active Horizontal sequence as it is now: renders the MP4,
-	 * times the SRT against the same tracks and publishes both under Exports.
+	 * Captures the approved Horizontal edit, then loads the saved spellings,
+	 * renders the MP4 at 1080p30 and publishes it with the SRT under Exports.
 	 */
 	deliver({
 		quality,
-		snapshot = takeDeliverySnapshot({ editor: this.editor }),
+		snapshot,
 	}: {
 		quality: ExportQuality;
 		/** An approved checkpoint's edit, in place of the edit as it is now. */
 		snapshot?: DeliverySnapshot;
 	}): Promise<ExportResult> {
 		this.delivery = {
-			snapshot,
+			input: captureDelivery({ editor: this.editor }),
+			snapshot: snapshot ?? null,
 			quality,
 			video: null,
 		};
 		return this.runDelivery();
 	}
 
-	/** Retries a failed Horizontal export, reusing its render if it finished. */
+	/** Retries a failed Horizontal export, reusing its snapshot and any finished render. */
 	retryDelivery(): Promise<ExportResult> {
 		if (!this.delivery)
 			return Promise.resolve({ success: false, error: "Nothing to retry." });
@@ -289,7 +308,11 @@ export class ProjectManager {
 			isExporting: true,
 			progress: delivery.video ? 0.9 : 0,
 			result: null,
-			step: delivery.video ? "upload-video" : "render",
+			step: delivery.video
+				? "upload-video"
+				: delivery.snapshot
+					? "render"
+					: "spellings",
 		};
 		// Register the job before notifying, as export() does, so a subscriber
 		// that cancels on seeing it start cancels this one.
@@ -300,16 +323,31 @@ export class ProjectManager {
 					this.exportState = { ...this.exportState, ...patch };
 					this.notify();
 				};
+				if (!delivery.snapshot) {
+					try {
+						delivery.snapshot = await prepareDelivery({ input: delivery.input });
+					} catch (error) {
+						if (signal.aborted) return { success: false, cancelled: true };
+						return {
+							success: false,
+							error: `Couldn't load the saved spellings the captions use: ${error instanceof Error ? error.message : String(error)}`,
+							failedStep: "spellings",
+						};
+					}
+					if (signal.aborted) return { success: false, cancelled: true };
+					update({ step: "render" });
+				}
+				const { snapshot } = delivery;
 				if (!delivery.video) {
 					const rendered = await this.editor.renderer.exportProject({
 						options: {
 							format: "mp4",
 							quality: delivery.quality,
-							fps: delivery.snapshot.fps,
+							fps: snapshot.fps,
 							includeAudio: true,
 						},
 						signal,
-						scene: delivery.snapshot.scene,
+						scene: snapshot.scene,
 						// Rendering is most of the work; writing the files is the rest.
 						onProgress: ({ progress }) => update({ progress: progress * 0.9 }),
 					});
@@ -324,7 +362,7 @@ export class ProjectManager {
 				}
 				try {
 					const record = await publishDelivery({
-						snapshot: delivery.snapshot,
+						snapshot,
 						video: delivery.video,
 						signal,
 						onStep: (step) => update({ step }),
@@ -345,7 +383,8 @@ export class ProjectManager {
 		if (!isCurrent()) return { success: false, cancelled: true };
 		// The render is kept only to retry a failure.
 		if (result.success || result.cancelled) this.delivery = null;
-		if (result.success && this.editor.command.getRevision() !== delivery.snapshot.requestedRevision) {
+		const requestedRevision = delivery.snapshot?.requestedRevision ?? delivery.input.source.revision;
+		if (result.success && this.editor.command.getRevision() !== requestedRevision) {
 			result.newerEdit = true;
 			toast.success("Exported the approved revision. A newer edit is available.");
 		}
