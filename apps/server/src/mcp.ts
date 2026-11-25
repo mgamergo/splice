@@ -1,4 +1,8 @@
 import {
+	storageCleanupSchema,
+	storageSelectionSchema,
+} from "@splice/bridge/storage";
+import {
 	applyStyleUpdateSchema,
 	revertFramingPreferenceSchema,
 	setStyleDefaultsSchema,
@@ -1036,6 +1040,30 @@ export function createMcpServer({ rpc }: { rpc: RpcCall }): McpServer {
 					await rpc({ method: "editor.transcriptSelection", params: args }),
 				),
 			),
+	);
+
+	server.registerTool(
+		"storage_report",
+		{
+			title: "Report Splice disk storage",
+			description:
+				"Reports reclaimable disk bytes by cache category and what Splice keeps, with reasons. Optional filters restrict the preview to selected categories or older files.",
+			inputSchema: storageSelectionSchema.shape,
+		},
+		(args) =>
+			guard(async () => text(await rpc({ method: "storage.report", params: args }))),
+	);
+
+	server.registerTool(
+		"storage_cleanup",
+		{
+			title: "Clean up Splice disk storage",
+			description:
+				"Previews cleanup by default. With the creator's confirmation, pass dryRun: false to remove eligible caches and abandoned export staging files. Returns freed bytes and any removal failures. Get storage_report first if you need to review the categories and sizes.",
+			inputSchema: storageCleanupSchema.shape,
+		},
+		(args) =>
+			guard(async () => text(await rpc({ method: "storage.cleanup", params: args }))),
 	);
 
 	server.registerTool(

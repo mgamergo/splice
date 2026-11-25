@@ -217,6 +217,8 @@ export const TAB_API_METHODS = [
 	"exports.publish",
 	"exports.abort",
 	"exports.open",
+	"storage.report",
+	"storage.cleanup",
 ] as const;
 export type TabApiMethod = (typeof TAB_API_METHODS)[number];
 

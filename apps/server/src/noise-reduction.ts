@@ -1,3 +1,4 @@
+import { createCacheUse, type CacheUse } from "./cache-use";
 import { DENOISED_AUDIO } from "@splice/bridge";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
@@ -369,8 +370,10 @@ export type NoiseReducer = ReturnType<typeof createNoiseReducer>;
 export function createNoiseReducer({
 	root,
 	render = renderDenoised,
+	cacheUse = createCacheUse(),
 }: {
 	root: string;
+	cacheUse?: CacheUse;
 	render?: RenderDenoised;
 }) {
 	const stop = new AbortController();
@@ -437,8 +440,9 @@ export function createNoiseReducer({
 		return renders.run({
 			key: identity.key,
 			signal,
-			work: (jobSignal) =>
+			work: (jobSignal) => cacheUse.use("noise-reduction", () =>
 				renderAndCache({ path, ...identity, signal: jobSignal }),
+			),
 		});
 	}
 

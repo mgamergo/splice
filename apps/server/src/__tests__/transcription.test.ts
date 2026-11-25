@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcClient } from "../rpc-client";
 import { startServer } from "../server";
+import { createCacheUse } from "../cache-use";
+import { createExportStore } from "../exports";
+import { createStorage } from "../storage";
 import {
 	DISFLUENCY_PROMPT,
 	extractAudio,
@@ -128,9 +131,15 @@ test("concurrent requests join one job, then read the full cache and compact pag
 	const gate = Promise.withResolvers<void>();
 	const started = Promise.withResolvers<void>();
 	let runs = 0;
+	const cacheUse = createCacheUse();
+	const storage = createStorage({ root, cacheUse, exportStore: createExportStore({ root }) });
 	const jobs = createTranscriptionJobs({
 		root,
-		extract: async () => 9.7,
+		cacheUse,
+		extract: async ({ wav }) => {
+			await writeFile(wav, "working audio");
+			return 9.7;
+		},
 		createTools: () => ({
 			async transcribe({ onProgress }) {
 				runs++;
@@ -151,6 +160,12 @@ test("concurrent requests join one job, then read the full cache and compact pag
 		expect(one.status).toBe("running");
 		expect(two.jobId).toBe(one.jobId);
 		await started.promise;
+		expect(await storage.cleanup({ dryRun: false })).toMatchObject({
+			freedBytes: 0,
+			kept: expect.arrayContaining([expect.objectContaining({
+				category: "temporary-renders", reason: "In use by a running job", bytes: 13,
+			})]),
+		});
 		expect(await jobs.status({ path: source })).toMatchObject({
 			jobId: one.jobId,
 			progress: 42,
@@ -179,6 +194,9 @@ test("concurrent requests join one job, then read the full cache and compact pag
 				},
 			],
 		});
+		expect(await storage.cleanup({ dryRun: false })).toMatchObject({ freedBytes: 0 });
+		expect(await jobs.start({ path: source })).toMatchObject({ cached: true });
+		// A missing transcript still rebuilds on the next explicit transcription.
 		await rm(cached.cachePath);
 		expect(await jobs.start({ path: source, waitSeconds: 1 })).toMatchObject({
 			cached: false,

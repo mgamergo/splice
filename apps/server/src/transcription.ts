@@ -1,3 +1,4 @@
+import { createCacheUse, type CacheUse } from "./cache-use";
 import { RPC_ERRORS, isFootagePath, type Transcript } from "@splice/bridge";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
@@ -141,9 +142,11 @@ async function waitFor({
 export function createTranscriptionJobs({
 	root,
 	extract = extractAudio,
+	cacheUse = createCacheUse(),
 	createTools = createWhisperTools,
 }: {
 	root: string;
+	cacheUse?: CacheUse;
 	extract?: typeof extractAudio;
 	createTools?: typeof createWhisperTools;
 }) {
@@ -282,12 +285,9 @@ export function createTranscriptionJobs({
 					.then(async () => {
 						if (created.state.status === "completed") return;
 						try {
-							const backend = await transcribe({
-								job: created,
-								source,
-								model,
-								key,
-							});
+							const backend = await cacheUse.use("transcripts", () =>
+								transcribe({ job: created, source, model, key }),
+							);
 							created.state = { status: "completed", cached: false, backend };
 						} catch (error) {
 							created.state = {

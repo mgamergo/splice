@@ -85,6 +85,8 @@ describe("splice mcp tools", () => {
 			"short_hook",
 			"short_srt",
 			"short_style",
+			"storage_cleanup",
+			"storage_report",
 			"style_defaults_get",
 			"style_defaults_set",
 			"style_update_apply",
@@ -94,6 +96,30 @@ describe("splice mcp tools", () => {
 			"transcribe_status",
 			"transcript_selection",
 		]);
+	});
+
+	test("storage tools forward filters and require an explicit apply flag", async () => {
+		const calls: Array<[string, unknown]> = [];
+		const client = await connect(async ({ method, params }) => {
+			calls.push([method, params]);
+			return { freedBytes: 0 };
+		});
+		try {
+			for (const request of [
+				{ name: "storage_report", arguments: { olderThanDays: 7 } },
+				{ name: "storage_cleanup" },
+				{ name: "storage_cleanup", arguments: { dryRun: false, categories: ["pauses"] } },
+			]) {
+				expect((await client.callTool(request)).isError).toBeFalsy();
+			}
+			expect(calls).toEqual([
+				["storage.report", { olderThanDays: 7 }],
+				["storage.cleanup", { dryRun: true }],
+				["storage.cleanup", { dryRun: false, categories: ["pauses"] }],
+			]);
+		} finally {
+			await client.close();
+		}
 	});
 
 	test("checkpoint status identifies the exported checkpoint even when SRT and MP4 match a later approval", async () => {

@@ -1,3 +1,4 @@
+import { createCacheUse, type CacheUse } from "./cache-use";
 import type { Transcript, TranscriptWord } from "@splice/bridge";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
@@ -386,8 +387,10 @@ const roundRange = ({ start, end }: TimeRange): TimeRange => ({
 export function createPauseDetector({
 	root,
 	readTranscript,
+	cacheUse = createCacheUse(),
 }: {
 	root: string;
+	cacheUse?: CacheUse;
 	readTranscript: (input: { path: string }) => Promise<Transcript | null>;
 }) {
 	const stop = new AbortController();
@@ -418,7 +421,7 @@ export function createPauseDetector({
 				.catch(() => null),
 		);
 		if (cached.success) return { scan: cached.data, cached: true };
-		const work = async (jobSignal: AbortSignal) => {
+		const work = (jobSignal: AbortSignal) => cacheUse.use("pauses", async () => {
 			const command = await findFfmpeg({ root });
 			const probe = await probeRecording({
 				command,
@@ -455,7 +458,7 @@ export function createPauseDetector({
 				await rm(temporary, { recursive: true, force: true });
 			}
 			return result;
-		};
+		});
 		return { scan: await scans.run({ key, signal, work }), cached: false };
 	}
 
@@ -475,7 +478,7 @@ export function createPauseDetector({
 		} = parsed.data;
 		const [{ scan: result, cached }, { transcript, transcriptError }] =
 			await Promise.all([
-				scan({ path, noiseDb, signal }),
+				cacheUse.use("pauses", () => scan({ path, noiseDb, signal })),
 				// Pause edges come from the audio, and the transcript only joins
 				// silences and finds fillers, so a transcript that can't be read
 				// leaves the audio's pauses.
