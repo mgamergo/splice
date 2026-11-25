@@ -167,7 +167,7 @@ Built on the official MCP TypeScript SDK, over stdio. The tools:
 | Edit | `sequence_apply` (a batch of `EditOp`s), `normalize_loudness`, `noise_reduction` |
 | Analysis | `transcribe`, `detect_pauses`, `measure_loudness` |
 | Rough cut | `rough_cut` (the whole pipeline in §5, as one undo step), `takes_list` |
-| Profile | `profile_get`, `profile_pending`, `profile_apply` |
+| Profile | `profile_read`, `profile_pending`, `profile_apply` |
 | Output | `export` (long-running, with progress) |
 
 Long jobs (transcription, rough cut, export) report progress and can be polled. Tools take handles as arguments rather than relying on protocol sessions, which matches the MCP 2026-07-28 direction.
@@ -180,7 +180,7 @@ Long jobs (transcription, rough cut, export) report progress and can be polled. 
   - It updates `profile.md` and asks at most one **profile question**.
   - It never edits the sequence.
 - With no provider set up, corrections queue in `pending.jsonl`. The MCP tools `profile_pending` and `profile_apply` let the T3 Code agent process them.
-- The agent reads `profile.md` before every rough cut.
+- The agent calls `profile_read` before planning a rough cut or tightening.
 
 ## 9. Security
 

@@ -7,8 +7,11 @@ import { basename, join } from "node:path";
 import { createLoudnessMeter } from "../loudness";
 import { createMcpServer } from "../mcp";
 import { createNoiseReducer, renderDenoised } from "../noise-reduction";
-import { RpcCallError, type RpcCall } from "../rpc-client";
+import { createRpcClient, RpcCallError, type RpcCall } from "../rpc-client";
 import { BridgeError } from "../tab-bridge";
+import { startServer } from "../server";
+import { BRIDGE_PATHS, RPC_ERRORS } from "@splice/bridge";
+import { randomUUID } from "node:crypto";
 
 async function connect(rpc: RpcCall) {
 	const server = createMcpServer({ rpc });
@@ -77,6 +80,9 @@ describe("splice mcp tools", () => {
 			"music_remove",
 			"noise_reduction",
 			"normalize_loudness",
+			"profile_apply",
+			"profile_pending",
+			"profile_read",
 			"raw_sequence",
 			"rough_cut",
 			"sequence_apply",
@@ -96,6 +102,123 @@ describe("splice mcp tools", () => {
 			"transcribe_status",
 			"transcript_selection",
 		]);
+	});
+
+	test("profile tools process corrections without an editor tab and keep profile writes off the tab API", async () => {
+		const root = await mkdtemp(join(tmpdir(), "splice-mcp-profile-"));
+		const token = "profile-test-token";
+		const server = startServer({ port: 0, root, token, upstream: null });
+		const client = await connect(
+			createRpcClient({ origin: server.origin, token }),
+		);
+		try {
+			const tabCall = async ({
+				method,
+				params,
+			}: {
+				method: string;
+				params?: unknown;
+			}) => {
+				const response = await fetch(server.origin + BRIDGE_PATHS.api, {
+					method: "POST",
+					headers: { origin: server.origin, authorization: `Bearer ${token}` },
+					body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+				});
+				return response.json();
+			};
+			const id = randomUUID();
+			const before = {
+				projectItemId: "item",
+				recording: "talk.wav",
+				sourceIn: 1,
+				sourceOut: 4,
+			};
+			expect(
+				await tabCall({
+					method: "profile.capture",
+					params: {
+						corrections: [
+							{
+								id,
+								kind: "retrim",
+								projectId: "project",
+								sequenceId: "rough",
+								revision: 14,
+								timestamp: "2026-11-25T12:00:00.000Z",
+								before: [before],
+								after: [{ ...before, sourceOut: 4.2 }],
+								decision: {
+									kind: "pause",
+									edge: "out",
+									sourceIn: 4,
+									sourceOut: 6,
+									removedSeconds: 2,
+								},
+							},
+						],
+					},
+				}),
+			).toMatchObject({ result: { recorded: 1 } });
+			const blocked = { error: { code: RPC_ERRORS.METHOD_NOT_FOUND } };
+			expect(await tabCall({ method: "profile.read" })).toMatchObject(blocked);
+			expect(await tabCall({ method: "profile.pending" })).toMatchObject(
+				blocked,
+			);
+			expect(
+				await tabCall({
+					method: "profile.apply",
+					params: { text: "# Unwanted edit", correctionIds: [id] },
+				}),
+			).toMatchObject(blocked);
+
+			const { tools } = await client.listTools();
+			expect(
+				tools.find(({ name }) => name === "rough_cut")?.description,
+			).toContain("profile_read");
+			expect(
+				tools.find(({ name }) => name === "detect_pauses")?.description,
+			).toContain("profile_read");
+			const profile = JSON.parse(
+				textOf(await client.callTool({ name: "profile_read" })),
+			);
+			expect(profile.text).toContain("# Editing profile");
+			const pending = await client.callTool({
+				name: "profile_pending",
+				arguments: { limit: 1 },
+			});
+			expect(JSON.parse(textOf(pending))).toMatchObject({
+				corrections: [{ id }],
+				nextCursor: null,
+			});
+			const text = "# Keep longer breaths";
+			const metadata = tools.find(({ name }) => name === "profile_apply");
+			expect(metadata?.inputSchema.required).toEqual(
+				expect.arrayContaining(["expectedVersion", "operationId"]),
+			);
+			const applied = await client.callTool({
+				name: "profile_apply",
+				arguments: {
+					text,
+					correctionIds: [id],
+					expectedVersion: profile.version,
+					operationId: crypto.randomUUID(),
+				},
+			});
+			expect(JSON.parse(textOf(applied))).toMatchObject({
+				applied: 1,
+				updateId: expect.any(String),
+			});
+			expect(
+				JSON.parse(textOf(await client.callTool({ name: "profile_read" }))),
+			).toMatchObject({ text });
+			expect(
+				JSON.parse(textOf(await client.callTool({ name: "profile_pending" }))),
+			).toEqual({ corrections: [], nextCursor: null });
+		} finally {
+			await client.close();
+			await server.stop();
+			await rm(root, { force: true, recursive: true });
+		}
 	});
 
 	test("storage tools forward filters and require an explicit apply flag", async () => {

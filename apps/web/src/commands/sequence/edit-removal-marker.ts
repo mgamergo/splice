@@ -1,3 +1,4 @@
+import { recordingRanges } from "@/agent/corrections";
 import {
 	rebuildCaptions,
 	recoverCaptionLayouts,
@@ -18,6 +19,7 @@ import {
 	resolveTake,
 	restoreTakeClips,
 	swapTakeClips,
+	takeRanges,
 } from "@/timeline/markers/removal-takes";
 import { updateSequenceInArray } from "@/timeline/sequences";
 import { roundMediaTime } from "@/wasm";
@@ -58,6 +60,7 @@ export class EditRemovalMarkerCommand extends Command {
 		if (edit.takeIndex !== undefined && !chosen) {
 			throw new RemovalTakeError("That stored take is no longer available.");
 		}
+		const selected = chosen ? [chosen] : badTakes;
 		const remaining = badTakes.filter((_, index) => index !== edit.takeIndex);
 		// Derived captions neither block nor follow the take edit; they're rebuilt after.
 		const sourceTracks = sequence.captions
@@ -128,6 +131,7 @@ export class EditRemovalMarkerCommand extends Command {
 								data: {
 									...markerData,
 									bestTake: chosen,
+									agentBestTake: data.agentBestTake ?? bestTake,
 									badTakes: badTakes.map((take, index) =>
 										index === edit.takeIndex ? bestTake : take,
 									),
@@ -181,14 +185,38 @@ export class EditRemovalMarkerCommand extends Command {
 				...update.tracks.audio,
 			].flatMap((track) => track.clips.map(({ id }) => id)),
 		);
-		const selected = editor.selection.getSnapshot().selectedClips;
-		const stillSelected = selected.filter(({ clipId }) =>
+		const selectedClips = editor.selection.getSnapshot().selectedClips;
+		const stillSelected = selectedClips.filter(({ clipId }) =>
 			remainingIds.has(clipId),
 		);
-		this.result =
-			stillSelected.length < selected.length
-				? createClipSelectionResult(stillSelected)
-				: undefined;
+		const agentBestTake = data.agentBestTake ?? bestTake;
+		this.result = {
+			...(stillSelected.length < selectedClips.length &&
+				createClipSelectionResult(stillSelected)),
+			corrections: [
+				{
+					kind: edit.op,
+					before: recordingRanges({
+						ranges: swap?.previousRanges ?? [],
+						items: projectItems,
+					}),
+					after: recordingRanges({
+						ranges: selected.flatMap(takeRanges),
+						items: projectItems,
+					}),
+					decision: {
+						markerId: marker.id,
+						sectionName: data.sectionName,
+						agentBestTake,
+						agentBestRanges: recordingRanges({
+							ranges: takeRanges(agentBestTake),
+							items: projectItems,
+						}),
+						selectedTakes: selected,
+					},
+				},
+			],
+		};
 		editor.sequences.setSequences({ sequences: this.after });
 		return this.result;
 	}

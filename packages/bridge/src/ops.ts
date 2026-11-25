@@ -32,16 +32,23 @@ const itemRangeSchema = z
 	.strictObject(sourceRangeFields)
 	.refine(sourceOutAfterIn, sourceOutMessage);
 
+const takeRankingSchema = z.strictObject({
+	completeness: z.number().optional(),
+	fluency: z.number().optional(),
+	pacing: z.number().optional(),
+});
+
 const takeSourceRangeSchema = z
 	.strictObject({
 		...sourceRangeFields,
 		label: z.string().optional(),
 		transcriptSnippet: z.string().optional(),
+		ranking: takeRankingSchema.optional(),
 	})
 	.refine(sourceOutAfterIn, sourceOutMessage);
 
 // Keep the original single-range marker shape readable on disk.
-const takeSchema = z.union([
+export const takeSchema = z.union([
 	takeSourceRangeSchema,
 	z.strictObject({
 		ranges: z
@@ -52,6 +59,7 @@ const takeSchema = z.union([
 			),
 		label: z.string().optional(),
 		transcriptSnippet: z.string().optional(),
+		ranking: takeRankingSchema.optional(),
 	}),
 ]);
 
@@ -95,6 +103,7 @@ export const removalMarkerDataSchema = z
 		kind: z.literal("removal"),
 		sectionName: z.string().trim().min(1),
 		bestTake: takeSchema,
+		agentBestTake: takeSchema.optional(),
 		badTakes: z.array(takeSchema).min(1),
 		// A stored take can retain its original layers when it was swapped out.
 		badTakePlacements: z

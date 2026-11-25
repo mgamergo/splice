@@ -1,0 +1,231 @@
+import type { ItemRange } from "@splice/bridge/ops";
+import type {
+	CorrectionEdit,
+	TighteningEdge,
+	TighteningKind,
+} from "@splice/bridge/profile";
+import { isDiskMedia } from "@/media/media-data";
+import type { ProjectItem } from "@/media/types";
+import { getSourceSpanAtClipTime } from "@/retime";
+import { hasMediaId, isRetimableClip, type TimelineClip } from "@/timeline";
+import { normalizeRanges, type TimeRange } from "@/timeline/ripple-delete";
+import { type MediaTime, mediaTimeToSeconds, roundMediaTime } from "@/wasm";
+
+export function recordingRanges({
+	ranges,
+	items,
+}: {
+	ranges: ItemRange[];
+	items: ProjectItem[];
+}) {
+	return ranges.map(({ projectItemId, sourceIn, sourceOut }) => {
+		const item = items.find(({ id }) => id === projectItemId);
+		return {
+			projectItemId,
+			recording:
+				item && isDiskMedia(item.file)
+					? item.file.path
+					: (item?.name ?? projectItemId),
+			sourceIn,
+			sourceOut,
+		};
+	});
+}
+
+const seconds = (time: number) =>
+	mediaTimeToSeconds({ time: roundMediaTime({ time }) });
+
+export function retrimCorrections({
+	before,
+	after,
+	patch,
+	items,
+}: {
+	before: TimelineClip;
+	after: TimelineClip;
+	patch: Partial<TimelineClip>;
+	items: ProjectItem[];
+}): CorrectionEdit[] {
+	if (
+		!isRetimableClip(before) ||
+		!isRetimableClip(after) ||
+		!("mediaId" in before) ||
+		!("mediaId" in after) ||
+		before.mediaId !== after.mediaId ||
+		(!(before.tighteningIn && patch.trimStart !== undefined) &&
+			!(before.tighteningOut && patch.trimEnd !== undefined)) ||
+		before.retime?.rate !== after.retime?.rate
+	)
+		return [];
+
+	const sourceRange = (clip: typeof before) => ({
+		projectItemId: before.mediaId,
+		sourceIn: seconds(clip.trimStart),
+		sourceOut: seconds(
+			clip.trimStart +
+				getSourceSpanAtClipTime({
+					clipTime: clip.duration,
+					retime: clip.retime,
+				}),
+		),
+	});
+	const previous = sourceRange(before);
+	const next = sourceRange(after);
+	const changed: Array<{ edge: "in" | "out"; cut: TighteningEdge }> = [];
+	if (
+		before.tighteningIn &&
+		patch.trimStart !== undefined &&
+		previous.sourceIn !== next.sourceIn
+	)
+		changed.push({ edge: "in", cut: before.tighteningIn });
+	if (
+		before.tighteningOut &&
+		patch.trimEnd !== undefined &&
+		previous.sourceOut !== next.sourceOut
+	)
+		changed.push({ edge: "out", cut: before.tighteningOut });
+	return changed.map(({ edge, cut }) => ({
+		kind: "retrim",
+		before: recordingRanges({ ranges: [previous], items }),
+		after: recordingRanges({ ranges: [next], items }),
+		decision: { edge, ...cut },
+	}));
+}
+
+type PlacedWindow = TimeRange & {
+	placement: {
+		projectItemId: string;
+		clipIds: Set<string>;
+		sourceAudioGroupIds: Set<string>;
+	};
+};
+type CutDecision = PlacedWindow & {
+	kind: TighteningKind;
+	pauseSeconds?: number;
+};
+
+/** Tags the surviving clip edges before ripple moves them away from the cut. */
+export function tagTighteningEdges({
+	cuts,
+	takeCuts,
+	falseStarts,
+	fillerWords,
+	pauses,
+}: {
+	cuts: TimeRange[];
+	takeCuts: TimeRange[];
+	falseStarts: PlacedWindow[];
+	fillerWords: PlacedWindow[];
+	pauses: Array<{ windows: PlacedWindow[]; pauseSeconds: number }>;
+}) {
+	const silent: CutDecision[] = pauses.flatMap(({ windows, pauseSeconds }) =>
+		windows.map((window) => ({ ...window, kind: "pause", pauseSeconds })),
+	);
+	// A spoken cut can start or end in breath padding after it snaps to silence.
+	const spoken = ({
+		windows,
+		kind,
+	}: {
+		windows: PlacedWindow[];
+		kind: TighteningKind;
+	}): CutDecision[] =>
+		windows.map(({ start, end, placement }) => ({
+			start:
+				silent.find(
+					(pause) =>
+						pause.placement === placement &&
+						pause.start <= start &&
+						start < pause.end,
+				)?.start ?? start,
+			end:
+				silent.find(
+					(pause) =>
+						pause.placement === placement &&
+						pause.start < end &&
+						end <= pause.end,
+				)?.end ?? end,
+			placement,
+			kind,
+		}));
+	const decisions = [
+		...spoken({ windows: falseStarts, kind: "false_start" }),
+		...spoken({ windows: fillerWords, kind: "filler_word" }),
+		...silent,
+	];
+	const removed = normalizeRanges({ ranges: cuts });
+	const atEdge = (edge: "start" | "end") => {
+		const byTime = new Map<MediaTime, CutDecision[]>();
+		for (const cut of removed) {
+			const time = cut[edge];
+			const touches = ({ start, end }: TimeRange) =>
+				edge === "start"
+					? start <= time && time < end
+					: start < time && time <= end;
+			if (takeCuts.some(touches)) continue;
+			const matching = decisions
+				.filter(touches)
+				.map((decision) => ({ ...decision, ...cut }));
+			if (matching.length) byTime.set(time, matching);
+		}
+		return byTime;
+	};
+	const afterCut = atEdge("end");
+	const beforeCut = atEdge("start");
+
+	return <TClip extends TimelineClip>({
+		piece,
+		original,
+	}: {
+		piece: TClip;
+		original: TClip;
+	}): TClip => {
+		if (!isRetimableClip(original) || !hasMediaId(original)) return piece;
+		const originalEnd = roundMediaTime({
+			time: original.startTime + original.duration,
+		});
+		const pieceEnd = roundMediaTime({ time: piece.startTime + piece.duration });
+		const toSource = (time: number) =>
+			seconds(
+				original.trimStart +
+					getSourceSpanAtClipTime({
+						clipTime: roundMediaTime({ time: time - original.startTime }),
+						retime: original.retime,
+					}),
+			);
+		const describe = (
+			candidates: CutDecision[] | undefined,
+		): TighteningEdge | undefined => {
+			const decision = candidates?.find(
+				({ placement }) =>
+					original.mediaId === placement.projectItemId &&
+					(placement.clipIds.has(original.id) ||
+						(original.sourceAudioGroupId !== undefined &&
+							placement.sourceAudioGroupIds.has(original.sourceAudioGroupId))),
+			);
+			if (!decision) return undefined;
+			const sourceIn = toSource(Math.max(decision.start, original.startTime));
+			const sourceOut = toSource(Math.min(decision.end, originalEnd));
+			if (sourceOut <= sourceIn) return undefined;
+			return {
+				kind: decision.kind,
+				sourceIn,
+				sourceOut,
+				removedSeconds: sourceOut - sourceIn,
+				...(decision.pauseSeconds !== undefined && {
+					pauseSeconds: decision.pauseSeconds,
+				}),
+			};
+		};
+		const tighteningIn =
+			piece.startTime !== original.startTime
+				? describe(afterCut.get(piece.startTime))
+				: undefined;
+		const tighteningOut =
+			pieceEnd !== originalEnd ? describe(beforeCut.get(pieceEnd)) : undefined;
+		return {
+			...piece,
+			...(tighteningIn && { tighteningIn }),
+			...(tighteningOut && { tighteningOut }),
+		};
+	};
+}
