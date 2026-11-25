@@ -10,6 +10,7 @@ import {
 	HeadphonesIcon,
 	MagicWand05Icon,
 	TextIcon,
+	TextAlignLeftIcon,
 	Settings01Icon,
 	SlidersHorizontalIcon,
 	ColorsIcon,
@@ -24,6 +25,7 @@ export const TAB_KEYS = [
 	"effects",
 	"transitions",
 	"captions",
+	"transcript",
 	"review",
 	"adjustment",
 	"settings",
@@ -70,6 +72,10 @@ export const tabs = {
 	review: {
 		icon: createHugeiconsIcon({ icon: CheckmarkBadge01Icon }),
 		label: "Review",
+	},
+	transcript: {
+		icon: createHugeiconsIcon({ icon: TextAlignLeftIcon }),
+		label: "Transcript",
 	},
 	adjustment: {
 		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),

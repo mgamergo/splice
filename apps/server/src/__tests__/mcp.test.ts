@@ -55,6 +55,7 @@ describe("splice mcp tools", () => {
 			"checkpoint_compare",
 			"checkpoint_status",
 			"cut_finalize",
+			"cut_transcript",
 			"detect_pauses",
 			"editor_status",
 			"exports_list",
@@ -73,6 +74,7 @@ describe("splice mcp tools", () => {
 			"takes_list",
 			"transcribe",
 			"transcribe_status",
+			"transcript_selection",
 		]);
 	});
 

@@ -27,7 +27,11 @@ const EMPTY_CAPTIONS: ProjectCaptions = {
 	replacements: [],
 };
 
-export function sequenceEndSeconds({ sequence }: { sequence: TSequence }) {
+export function sequenceEndSeconds({
+	sequence,
+}: {
+	sequence: Pick<TSequence, "tracks">;
+}) {
 	return mediaTimeToSeconds({
 		time: calculateTotalDuration({ tracks: sequence.tracks }),
 	});

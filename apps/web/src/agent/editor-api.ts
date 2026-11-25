@@ -23,6 +23,20 @@ import {
 	setCaptionSources,
 } from "@/captions/project-captions";
 import { useCaptionsStore } from "@/captions/store";
+import {
+	hasTranscriptWords,
+	sequenceTranscript,
+} from "@/cut-transcript/sequence-transcript";
+import { useTranscriptStore } from "@/cut-transcript/store";
+import {
+	selectedSentences,
+	summarizeSelection,
+	summarizeSentence,
+} from "@/cut-transcript/transcript";
+import {
+	cutTranscriptRequestSchema,
+	transcriptSelectionRequestSchema,
+} from "@splice/bridge/transcript";
 import { projectFormat } from "@/project/format";
 import { UpdateSequenceCommand } from "@/commands/sequence/update-sequence";
 import {
@@ -479,6 +493,82 @@ export class EditorApi {
 		}
 	}
 
+	/** The narration heard in a sequence, as the transcript panel shows it. */
+	async cutTranscript(request: unknown) {
+		const parsed = cutTranscriptRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const spellings = await useCaptionsStore.getState().loadSpellings();
+		const project = this.editor.project.getActiveOrNull();
+		if (!project) return this.noProject();
+		const { sequenceId } = parsed.data;
+		const sequence = sequenceId
+			? this.editor.sequences.getSequences().find(({ id }) => id === sequenceId)
+			: this.editor.sequences.getActiveSequenceOrNull();
+		if (!sequence)
+			return this.invalidOp(
+				sequenceId ? `Unknown sequence ${sequenceId}.` : "No active sequence.",
+			);
+		const revision = this.getRevision();
+		const { paragraphs } = sequenceTranscript({ project, sequence, spellings });
+		return {
+			ok: true as const,
+			sequenceId: sequence.id,
+			revision,
+			paragraphs: paragraphs.map(({ section, sentences }) => ({
+				...(section && { section }),
+				sentences: sentences.map(summarizeSentence),
+			})),
+			...(!hasTranscriptWords({ project, sequence }) && {
+				hint:
+					projectFormat({ project }) === "horizontal"
+						? "No transcript words yet. Transcribe the recordings, then run captions_add."
+						: "No transcript words yet. Transcribe the recordings, then run captions_add on this sequence.",
+			}),
+		};
+	}
+
+	/** The passage the creator selected in the transcript panel, read now. */
+	async transcriptSelection(request: unknown) {
+		const parsed = transcriptSelectionRequestSchema.safeParse(request ?? {});
+		if (!parsed.success) return this.invalidRequest(parsed.error);
+		const spellings = await useCaptionsStore.getState().loadSpellings();
+		const project = this.editor.project.getActiveOrNull();
+		if (!project) return this.noProject();
+		const revision = this.getRevision();
+		const selection = useTranscriptStore.getState().selection;
+		const sequence =
+			selection &&
+			this.editor.sequences
+				.getSequences()
+				.find(({ id }) => id === selection.sequenceId);
+		if (!selection || !sequence)
+			return {
+				ok: true as const,
+				revision,
+				selection: null,
+				hint: "Nothing is selected. Ask the creator to select sentences in Splice's Transcript panel, or read cut_transcript.",
+			};
+		const sentences = selectedSentences({
+			sentences: sequenceTranscript({ project, sequence, spellings }).sentences,
+			...selection,
+		});
+		if (!sentences)
+			return {
+				ok: true as const,
+				revision,
+				selection: null,
+				hint: "An edit changed the passage the creator selected. Ask them to select it again.",
+			};
+		return {
+			ok: true as const,
+			revision,
+			selection: summarizeSelection({ sequence, sentences }),
+			...(sequence.id !== this.editor.sequences.getActiveSequenceOrNull()?.id && {
+				hint: "The selection is on a sequence the creator is not viewing now.",
+			}),
+		};
+	}
+
 	takesList(request: unknown) {
 		const parsed = takesListRequestSchema.safeParse(request ?? {});
 		if (!parsed.success) return this.invalidRequest(parsed.error);
@@ -574,6 +664,15 @@ export class EditorApi {
 					(issue) => `${issue.path.join(".") || "request"}: ${issue.message}`,
 				)
 				.join("; "),
+			revision: this.getRevision(),
+		};
+	}
+
+	private noProject(): EditorError {
+		return {
+			ok: false,
+			code: "NO_PROJECT",
+			message: "No project is open",
 			revision: this.getRevision(),
 		};
 	}

@@ -42,6 +42,8 @@ export const TAB_METHODS = [
 	"editor.checkpointCompare",
 	"editor.issuesList",
 	"editor.dismissIssue",
+	"editor.cutTranscript",
+	"editor.transcriptSelection",
 ] as const;
 export type TabMethod = (typeof TAB_METHODS)[number];
 
