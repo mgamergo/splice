@@ -4,7 +4,7 @@
  * `splice`. Also records how long the page's main thread stalls meanwhile.
  *
  *   bun run bench [--minutes 5 | --seconds 20] [--chrome <path>] [--headed]
- *                 [--skip-mix] [--skip-export] [--profile]
+ *                 [--skip-mix] [--skip-export] [--profile] [--scrub]
  *
  * Needs FFmpeg on PATH and `bun run build:web` first. Results print as JSON
  * and append to bench/results.jsonl, so runs on different machines compare.
@@ -208,6 +208,40 @@ try {
 	await page.evaluate(() => {
 		(window as any).__benchStalls.length = 0;
 	});
+	if (flag("scrub")) {
+		results.scrub = await page.evaluate(async (fixtureSeconds: number) => {
+			const editor = (window as any).__spliceEditor;
+			const Cache = (window as any).__spliceVideoCache;
+			const item = editor.media.getProjectItems()[0];
+			// Late in each 250-frame GOP: the worst case for an exact seek.
+			const targets = [7.9, 24.5, 41.1, 57.8, 16.2, 49.4].filter(
+				(time) => time < fixtureSeconds,
+			);
+			const run = async (keyFrameFirst: boolean) => {
+				const cache = new Cache();
+				const read = (time: number) =>
+					cache.getFrameAt({ mediaId: item.id, file: item.file, time, keyFrameFirst });
+				await read(0);
+				const firstMs: number[] = [];
+				const exactMs: number[] = [];
+				for (const time of targets) {
+					const started = performance.now();
+					let frame = await read(time);
+					firstMs.push(performance.now() - started);
+					while (frame && !(time >= frame.timestamp && time < frame.timestamp + frame.duration))
+						frame = await read(time);
+					exactMs.push(performance.now() - started);
+				}
+				cache.clearAll();
+				const mean = (values: number[]) =>
+					Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+				return { firstFrameMs: mean(firstMs), exactFrameMs: mean(exactMs) };
+			};
+			return { exact: await run(false), keyFrameFirst: await run(true) };
+		}, seconds);
+		console.error(`Scrub: ${JSON.stringify(results.scrub)}`);
+	}
+
 	if (!flag("skip-export")) {
 		const peakMemory = { browserMb: 0 };
 		const sampler = setInterval(async () => {

@@ -50,8 +50,10 @@ function getVideoFrameAt({
 	cache,
 	params,
 	clipTime,
+	keyFrameFirst,
 }: {
 	cache: VideoCache;
+	keyFrameFirst: boolean;
 	params: Pick<
 		VideoNode["params"],
 		"mediaId" | "file" | "trimStart" | "retime"
@@ -65,6 +67,7 @@ function getVideoFrameAt({
 		mediaId: params.mediaId,
 		file: params.file,
 		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+		keyFrameFirst,
 	});
 }
 
@@ -221,6 +224,7 @@ async function resolveVideoNode({
 
 	const frame = await getVideoFrameAt({
 		cache: context.renderer.videoCache,
+		keyFrameFirst: context.renderer.keyFrameFirst,
 		params: node.params,
 		clipTime,
 	});
@@ -408,6 +412,7 @@ async function resolveBlurBackgroundNode({
 		node,
 		clipTime,
 		cache: context.renderer.videoCache,
+		keyFrameFirst: context.renderer.keyFrameFirst,
 	});
 	if (!backdropSource) {
 		return null;
@@ -434,13 +439,20 @@ async function resolveBackdropSource({
 	node,
 	clipTime,
 	cache,
+	keyFrameFirst,
 }: {
 	node: BlurBackgroundNode;
 	clipTime: number;
 	cache: VideoCache;
+	keyFrameFirst: boolean;
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
-		const frame = await getVideoFrameAt({ cache, params: node.params, clipTime });
+		const frame = await getVideoFrameAt({
+			cache,
+			keyFrameFirst,
+			params: node.params,
+			clipTime,
+		});
 		if (!frame) {
 			return null;
 		}

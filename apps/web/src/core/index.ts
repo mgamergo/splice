@@ -14,6 +14,7 @@ import { registerDefaultEffects } from "@/effects";
 import { registerDefaultMasks } from "@/masks";
 import { registerTranscriptionDiagnostics } from "@/transcription/diagnostics";
 import { graphicsFollowUp } from "@/agent/graphics-follow-up";
+import { VideoCache } from "@/services/video-cache/service";
 
 export class EditorCore {
 	private static instance: EditorCore | null = null;
@@ -114,7 +115,10 @@ function exposeForBenchmark(editor: EditorCore): void {
 			typeof window !== "undefined" &&
 			window.localStorage.getItem("splice:bench") === "1"
 		)
-			Object.assign(window, { __spliceEditor: editor });
+			Object.assign(window, {
+				__spliceEditor: editor,
+				__spliceVideoCache: VideoCache,
+			});
 	} catch {
 		// Storage can be blocked; the benchmark then can't run, nothing else changes.
 	}

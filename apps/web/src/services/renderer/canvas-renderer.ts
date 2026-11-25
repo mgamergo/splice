@@ -17,6 +17,8 @@ export type CanvasRendererParams = {
 	fps: FrameRate;
 	/** Where video frames are decoded; defaults to the cache the preview shares. */
 	videoCache?: VideoCache;
+	/** Scrubbing shows a video's nearest key frame until the exact frame decodes. */
+	keyFrameFirst?: boolean;
 };
 
 export class CanvasRenderer {
@@ -26,10 +28,18 @@ export class CanvasRenderer {
 	height: number;
 	fps: FrameRate;
 	readonly videoCache: VideoCache;
+	readonly keyFrameFirst: boolean;
 	private lastRenderedFrame = -1;
 
-	constructor({ width, height, fps, videoCache: cache }: CanvasRendererParams) {
+	constructor({
+		width,
+		height,
+		fps,
+		videoCache: cache,
+		keyFrameFirst = false,
+	}: CanvasRendererParams) {
 		this.videoCache = cache ?? videoCache;
+		this.keyFrameFirst = keyFrameFirst;
 		this.width = width;
 		this.height = height;
 		this.fps = fps;

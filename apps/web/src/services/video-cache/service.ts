@@ -2,6 +2,7 @@ import {
 	Input,
 	ALL_FORMATS,
 	CanvasSink,
+	EncodedPacketSink,
 	VideoSampleSink,
 	type InputVideoTrack,
 } from "mediabunny";
@@ -37,6 +38,12 @@ interface VideoSinkData {
 	nextFrame: DecodedFrame | null;
 	/** Frames handed out, oldest first; closed as newer ones arrive. */
 	open: VideoFrame[];
+	/** Finds the key frame a seek can show at once. */
+	packets: EncodedPacketSink;
+	/** The time a key frame was shown for, while decoding on towards it. */
+	refining: number | null;
+	/** When a render last asked this video for a frame. */
+	requestedAt: number;
 	lastTime: number;
 	prefetching: boolean;
 	prefetchPromise: Promise<void> | null;
@@ -98,14 +105,33 @@ export class VideoCache {
 		this.signal = signal;
 	}
 
+	/**
+	 * Whether a video shown recently is still on a key frame while the exact
+	 * frame decodes. The preview keeps rendering until it is not.
+	 */
+	isRefining(): boolean {
+		const recent = performance.now() - 1000;
+		for (const sink of this.sinks.values())
+			if (sink.refining !== null && sink.requestedAt >= recent) return true;
+		return false;
+	}
+
 	async getFrameAt({
 		mediaId,
 		file,
 		time,
+		keyFrameFirst = false,
 	}: {
 		mediaId: string;
 		file: MediaData;
 		time: number;
+		/**
+		 * Answers a far seek with the key frame before it at once, then decodes
+		 * on to the exact frame over the following requests. A recording's key
+		 * frames can be eight seconds apart, so an exact seek decodes up to 240
+		 * frames before anything shows; scrubbing should never wait for that.
+		 */
+		keyFrameFirst?: boolean;
 	}): Promise<DecodedFrame | null> {
 		await this.ensureSink({ mediaId, file });
 
@@ -114,13 +140,15 @@ export class VideoCache {
 
 		const generation = (this.seekGenerations.get(mediaId) ?? 0) + 1;
 		this.seekGenerations.set(mediaId, generation);
+		sinkData.requestedAt = performance.now();
+		const isCurrent = () => this.seekGenerations.get(mediaId) === generation;
 
 		const previous = this.frameChain.get(mediaId) ?? Promise.resolve();
 		const current = previous.then(() => {
-			if (this.seekGenerations.get(mediaId) !== generation) {
+			if (!isCurrent()) {
 				return sinkData.currentFrame ?? null;
 			}
-			return this.resolveFrame({ sinkData, time });
+			return this.resolveFrame({ sinkData, time, isCurrent, keyFrameFirst });
 		});
 		this.frameChain.set(
 			mediaId,
@@ -132,9 +160,39 @@ export class VideoCache {
 	private async resolveFrame({
 		sinkData,
 		time,
+		isCurrent,
+		keyFrameFirst,
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
+		/** False once a newer request for this video has come in. */
+		isCurrent: () => boolean;
+		keyFrameFirst: boolean;
+	}): Promise<DecodedFrame | null> {
+		const frame = await this.findFrame({
+			sinkData,
+			time,
+			isCurrent: keyFrameFirst ? isCurrent : () => true,
+			keyFrameFirst,
+		});
+		sinkData.refining =
+			frame && keyFrameFirst && !this.isFrameValid({ frame, time })
+				? time
+				: null;
+		return frame;
+	}
+
+	private async findFrame({
+		sinkData,
+		time,
+		isCurrent,
+		keyFrameFirst,
+	}: {
+		sinkData: VideoSinkData;
+		time: number;
+		/** Iteration stops early, showing what it has, once this is false. */
+		isCurrent: () => boolean;
+		keyFrameFirst: boolean;
 	}): Promise<DecodedFrame | null> {
 		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
 			sinkData.currentFrame = sinkData.nextFrame;
@@ -152,13 +210,23 @@ export class VideoCache {
 			return sinkData.currentFrame;
 		}
 
+		// Decoding on is cheaper than a seek within two seconds, and always is
+		// from the key frame a key-frame-first seek showed for this time.
+		const continuing =
+			sinkData.refining !== null &&
+			time >= sinkData.lastTime &&
+			time <= sinkData.refining;
 		if (
 			sinkData.iterator &&
 			sinkData.currentFrame &&
 			time >= sinkData.lastTime &&
-			time < sinkData.lastTime + 2.0
+			(time < sinkData.lastTime + 2.0 || continuing)
 		) {
-			const frame = await this.iterateToTime({ sinkData, targetTime: time });
+			const frame = await this.iterateToTime({
+				sinkData,
+				targetTime: time,
+				isCurrent,
+			});
 			if (frame) {
 				if (!sinkData.nextFrame && !sinkData.prefetching) {
 					this.startPrefetch({ sinkData });
@@ -167,7 +235,9 @@ export class VideoCache {
 			}
 		}
 
-		const frame = await this.seekToTime({ sinkData, time });
+		const frame = keyFrameFirst
+			? await this.seekToKeyFrame({ sinkData, time })
+			: await this.seekToTime({ sinkData, time });
 		if (frame && !sinkData.nextFrame && !sinkData.prefetching) {
 			this.startPrefetch({ sinkData });
 		}
@@ -186,14 +256,18 @@ export class VideoCache {
 	private async iterateToTime({
 		sinkData,
 		targetTime,
+		isCurrent,
 	}: {
 		sinkData: VideoSinkData;
 		targetTime: number;
+		isCurrent: () => boolean;
 	}): Promise<DecodedFrame | null> {
 		if (!sinkData.iterator) return null;
 
 		try {
 			while (true) {
+				// A newer request wants another time: show what is decoded so far.
+				if (!isCurrent() && sinkData.currentFrame) return sinkData.currentFrame;
 				// Wait for any pending prefetch to finish before touching iterator
 				if (sinkData.prefetching && sinkData.prefetchPromise) {
 					await sinkData.prefetchPromise;
@@ -266,6 +340,20 @@ export class VideoCache {
 		}
 
 		return null;
+	}
+
+	/** Starts decoding at the key frame before `time` and returns that frame. */
+	private async seekToKeyFrame({
+		sinkData,
+		time,
+	}: {
+		sinkData: VideoSinkData;
+		time: number;
+	}): Promise<DecodedFrame | null> {
+		const key = await sinkData.packets
+			.getKeyPacket(time, { verifyKeyPackets: true })
+			.catch(() => null);
+		return this.seekToTime({ sinkData, time: key?.timestamp ?? time });
 	}
 
 	private startPrefetch({ sinkData }: { sinkData: VideoSinkData }): void {
@@ -358,6 +446,9 @@ export class VideoCache {
 				input,
 				frames: frameSource({ track: videoTrack, open }),
 				open,
+				packets: new EncodedPacketSink(videoTrack),
+				refining: null,
+				requestedAt: 0,
 				iterator: null,
 				currentFrame: null,
 				nextFrame: null,
