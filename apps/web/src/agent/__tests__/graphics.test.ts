@@ -515,7 +515,11 @@ describe("graphics pass", () => {
 			const { trackId, clip } = clipOf(key);
 			return { trackId, clipId: clip.id };
 		});
-		const clipboard = ClipsClipboardHandler.copy({ editor, selectedClips });
+		const clipboard = ClipsClipboardHandler.copy({
+			editor,
+			selectedClips,
+			selectedKeyframes: [],
+		});
 		if (!clipboard) throw new Error("Expected copied clips");
 
 		const duplicates = editor.timeline.duplicateClips({ clips: selectedClips });
