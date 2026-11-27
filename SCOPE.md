@@ -1,6 +1,6 @@
 # Splice scope
 
-What Splice does today, what's next and in what order. Settled product decisions are in [docs/decisions.md](docs/decisions.md), terms in [GLOSSARY.md](GLOSSARY.md), checks that need the creator's laptop in [LAPTOP-CHECKS.md](LAPTOP-CHECKS.md). Last updated 2026-11-25.
+What Splice does today, what's next and in what order. Settled product decisions are in [docs/decisions.md](docs/decisions.md), terms in [GLOSSARY.md](GLOSSARY.md), checks that need the creator's laptop in [LAPTOP-CHECKS.md](LAPTOP-CHECKS.md). Last updated 2026-11-27.
 
 ## Built
 
@@ -118,11 +118,129 @@ Let Splice look at the recording itself, so graphics and checks are grounded in 
 3. **Screenshot access.** Off by default, enabled per project. `frame_screenshot` returns a frame or crop to the agent, and the creator can see which frames were shared and turn it off.
 4. **Use.** The graphics pass uses observations for zoom targets and highlights, placed with the existing graphics tools; take review flags an action missing from the kept take; later, a highlight follows a moving control.
 
+### Gaps against premium editors
+
+Milestones 10–24 come from comparing Splice with Premiere, Resolve, Final Cut, Descript, Screen Studio, Camtasia, CapCut, Gling, Auphonic and Frame.io (2026-11-27). They follow milestone 9 in this order, but 10–12 make the existing rough cut feel finished and can move ahead of milestones 2–9 if the creator chooses.
+
+### 10. Word timing and transcription accuracy
+
+Whisper's word times drift by up to half a second, which limits every cut, filler and caption that depends on them.
+
+- Forced alignment after transcription (a wav2vec2 CTC aligner, as WhisperX does) moves each word to its sound, cached next to the transcript and keyed by the same fingerprint. Pause detection, filler alignment, karaoke captions and false-start edges use the aligned times.
+- Offer `large-v3-turbo` on CUDA as a model choice beside `base.en`.
+- Feed the creator's reusable caption spellings into Whisper's prompt as vocabulary, so product names come out right the first time.
+
+Done when: on a generated fixture with known word times, aligned words land within one frame, and a filler cut leaves no audible fragment.
+
+### 11. Clean audio at every cut
+
+- A short fade (5–10 ms, set in settings) on both sides of every speech cut, in preview and export, so ripple-deleted pauses, false starts and fillers never click.
+- Room tone: capture a stretch of the recording's quietest audio and optionally fill cut pauses with it instead of digital silence.
+- Turn down breaths and mouth clicks without cutting them, using the clicks `detect_pauses` already finds between silences. Off by default; a toggle in the rough cut and Prepare.
+
+### 12. Trimming
+
+- Trim tools beside Razor: ripple, roll, slip and slide, each with a keyboard nudge by frame.
+- Trim mode: a two-up preview of the outgoing and incoming frames while trimming an edit.
+- J-K-L shuttle with rising speeds, in and out marks on the sequence, and insert, overwrite, lift and extract.
+- Split edits (J-cuts and L-cuts): trim a clip's audio apart from its picture while they stay linked.
+- Snap to transcript word boundaries while trimming.
+
+### 13. Source editing and timeline structure
+
+- A source monitor: open a project item, mark a range, then insert or overwrite it into the sequence at the playhead.
+- Track targeting and source patching, sync lock and track lock.
+- Nested sequences: a sequence used as a clip in another, edited in place.
+- Close all gaps, select forward from the playhead, match frame and replace edit.
+- Keyboard shortcut presets that match Premiere and Resolve, on top of the existing keybindings.
+- Agent: the same edits as `sequence_apply` ops.
+
+### 14. Cursor and input data
+
+What makes Screen Studio recordings look finished comes from knowing where the cursor was and when it clicked.
+
+- A small companion recorder (or an OBS script) logs cursor position, clicks and keystrokes with timestamps beside each recording in `Footage`. Splice links the log to the project item and keeps it through relinks.
+- From the log: cursor smoothing, a larger or replaced vector cursor, a ripple on each click, hiding the cursor when idle, and shortcut pills ("Ctrl+K") over the frame.
+- Zooms that follow the cursor with spring easing and motion blur, with the cursor held steady inside the zoom so small movements don't shake the framing. Agent zooms keep their placement rules; following is a per-zoom option.
+- Without a log, the cursor and clicks come from frames once milestone 9 can find them.
+
+### 15. Activity-aware tightening
+
+Silence on a screen recording often means something is happening on screen, such as an install or a build.
+
+- Measure how much the picture changes in each pause. Pause removal speeds up a busy pause (with an optional "4×" badge) instead of cutting it, and `rough_cut` reports the time each choice saved.
+- Speed ramps with presets, reverse, and freeze or hold frame to cover narration over a still screen, in the Speed tab and as ops.
+- Typing and scroll speed-up presets, using the input log from milestone 14 when there is one.
+
+### 16. Automatic redaction
+
+- Read on-screen text locally (OCR) and find emails, API keys, tokens, `.env` values and other secrets.
+- Add a region blur (milestone 2) that follows each match while it is visible, and list every match in the export review so the creator keeps or removes it.
+- A redaction check runs before every export even when the creator added no blurs.
+
+### 17. Voice enhancement and audio effects
+
+- A one-step voice cleanup preset (like Studio Sound): de-reverb, EQ, compression and de-essing, run locally (DeepFilterNet or Resemble Enhance), measured before loudness.
+- Audio effects per clip and per track: parametric EQ, compressor, gate, limiter, high-pass and de-esser, keyframable like video effects.
+- Volume drawn on the clip over the existing volume keyframes; per-track meters, solo, mute and pan.
+- Loudness presets per platform (YouTube −14, podcast −16, broadcast −23 LUFS).
+- Record a voiceover pickup inside Splice from the microphone, placed at the playhead on a new track, to replace a fluffed sentence.
+
+### 18. Music tools
+
+- Beat detection on a music track, with beats as snap points and a cut-to-beat option.
+- Remix a track to the sequence's length by looping and cutting at beats, instead of only fading the end.
+- Stem separation, so the music's vocals duck harder than its instruments under speech.
+
+### 19. Markers, chapters and YouTube metadata
+
+- Colored markers with durations and a marker list panel.
+- Chapters generated from the cut transcript, editable as chapter markers, exported with the MP4/SRT pair as YouTube timestamps.
+- A suggested title, description and tags from the transcript and brief, saved beside the export. Upload stays with the creator.
+
+### 20. Notes for the agent
+
+- Timeline notes with a time or range ("tighten this", "zoom on Save") that the agent reads over MCP (`notes_list`, `note_resolve`) and resolves as undoable edits.
+- A visual diff between two revisions on the timeline, built on `checkpoint_compare`.
+- A command bar in the editor that sends an instruction with the selected range to the agent, without switching to T3 Code.
+
+### 21. Preview and timeline polish
+
+- Preview resolution (full, ½, ¼), a dropped-frame indicator, and full-screen preview on a second monitor.
+- Filmstrip thumbnails from across each clip instead of one repeated thumbnail, and waveforms that keep their detail when zoomed in.
+- A timeline minimap, an undo history panel with named steps, a command palette and right-click menus throughout.
+
+### 22. Caption languages and checks
+
+- Translate captions with the configured provider and export one SRT per language beside the MP4.
+- Caption checks in the export review: characters per second, line length, minimum duration and overlaps.
+- Optionally embed captions in the MP4 as a subtitle track.
+
+### 23. Export options
+
+- Export the in-out range, a still frame, a GIF or audio only.
+- 1440p and 4K export from 1080p recordings with text-aware sharpening, so YouTube serves the video at its higher bitrate.
+- A render queue that renders in the background while editing continues.
+- Archive masters in ProRes or DNxHR through FFmpeg on `splice`.
+- An OpenTimelineIO export of the sequence as a backup, not a Premiere handoff.
+- Collect project: bundle a project with the media it uses for backup or a move to another machine.
+
+### 24. Picture, screen look and pacing review
+
+- Scopes (waveform, vectorscope, histogram) and automatic white balance and exposure.
+- A framed look for screen recordings: the recording inset over a wallpaper or gradient with padding, rounded corners and a shadow; browser and phone frames for Shorts; a spotlight that dims everything except the active window or region.
+- Pacing review in the export review: long stretches with no visual change, drops in speaking rate, a point repeated across sections, and a slow opening.
+- Flag jargon and likely mispronunciations as candidates for a voiceover pickup.
+- A thumbnail helper that suggests frames and overlays text, independent of video delivery.
+
 ### Later
 
 - Gaze-continuity checks after a take swap, and moving-target tracking (needs milestone 9).
 - Editing by deleting transcript text.
 - Proxies, only if laptop playback stutters.
+- Smart rendering: copy unchanged stretches into the export without re-encoding. Spike first; it is hard with WebCodecs.
+- Regenerating one fluffed word with a voice clone, opt-in and with the creator's consent.
+- Need a change to the decisions first: cutting Shorts from a horizontal video, uploading to YouTube, and a Premiere handoff.
 
 ## Known limitations
 
